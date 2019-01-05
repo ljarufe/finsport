@@ -1,0 +1,12 @@
+<nav class="navbar navbar-inverse navbar-fixed-top">
+    <div class="container">
+        <div id="navbar" class="collapse navbar-collapse">
+            <ul class="nav navbar-nav">
+                <li><a href="{% url 'bet:statistics' %}">Resumen</a></li>
+                <li><a href="{% url 'bet:bet-list' %}?state=available">Activas</a></li>
+                <li><a href="{% url 'bet:bet-list' %}?state=paused">Pausadas</a></li>
+                <li><a href="{% url 'bet:bet-list' %}?state=finished">Finalizadas</a></li>
+            </ul>
+        </div><!--/.nav-collapse -->
+    </div>
+</nav>

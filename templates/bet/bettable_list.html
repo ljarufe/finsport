@@ -1,0 +1,125 @@
+{% extends "../base/base.html" %}
+{% load tables %}
+
+{% block content %}
+
+  <style>
+  table, th, td {
+      border: 1px solid black;
+      border-collapse: collapse;
+      padding: 5px 5px;
+  }
+  .summary {
+      width: 500px;
+  }
+  thead {
+      background-color: lightgrey;
+  }
+
+  hr {
+      border: solid 1px black;
+  }
+  table.table-striped > tbody > tr:last-child {
+      background: lightskyblue;
+  }
+  </style>
+  <h2>Resultados Totales</h2>
+  <table class="table summary">
+    <thead>
+      <tr>
+        <th scope="col">Número de tablas</th>
+        <th scope="col">Total de apuesta</th>
+        <th scope="col">Total de ganancia</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ num_tables }}</td>
+        <td>{{ coin }} {{ total_inversion_tables }}</td>
+        <td>{{ coin }} {{ total_profit_tables }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  {% for table in object_list %}
+    <hr>
+    <h3> Tabla - Fecha: {{ table.name|fix_name_table }}</h3>
+    <br>
+      <table class="table summary">
+        <thead>
+          <tr>
+            <th scope="col">Total de apuesta</th>
+            <th scope="col">Total de ganancia</th>
+            <th scope="col">Duración total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{ coin }} {{ table.total_inversion|roundd }}</td>
+            <td>{{ coin }} {{ table.total_profit|roundd }}</td>
+            <td>{{ table.duration }} </td>
+          </tr>
+        </tbody>
+      </table>
+      <h4>Apuestas</h4>
+
+      <table class="table table-striped">
+        <thead>
+          <tr>
+            <th>Iteración</th>
+            <th>Partido</th>
+            <th>Fecha / hora</th>
+            <th>Apuesta</th>
+            <th>Inversión</th>
+            <th>Factor empate</th>
+            <th>Ganancia neta</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          {% for data in table.data_table %}
+            {% if table.state == "Available" %}
+              {% if data.state == 1 %}
+              <tr style="background: lightskyblue;">
+              {% else %}
+              <tr style="background: white;">
+              {% endif %}
+            {% else %}
+              <tr>
+            {% endif %}
+              <td>{{ forloop.counter }}--</td>
+              <td>{{ data.match }}</td>
+              <td>{{ data.match.start_datetime }}</td>
+              <td>{{ data.bet_amount|roundd }}</td>
+              <td>{{ data.inversion_amount|roundd }}</td>
+              {% if time_state == 0 %}
+                <td>{{ data.match.parity_factor }}</td>
+              {% else %}
+                <td>{{ data.match.parity_factor_half_time }}</td>
+              {% endif %}
+              {% if data.state == 2 %}
+                <td>{{ table.total_profit|roundd }}</td>
+              {% else %}
+                <td>{{ data.profit|roundd }}</td>
+              {% endif %}
+              <td>{{ data.state|get_state }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+
+      </table>
+    <br>
+    <br>
+  {% empty %}
+      <li>No tables yet.</li>
+  {% endfor %}
+
+{% endblock %}
+
+
+{% block scripts %}
+  <script type="text/javascript">
+    
+  </script>
+{% endblock %}

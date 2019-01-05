@@ -1,0 +1,56 @@
+{% load staticfiles %}
+{% load bootstrap3 %}
+<style>
+    .information {
+        min-height: 100%;
+        margin-left: 14px;
+    }
+</style>
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <title>{% block title %}Finsport{% endblock %}</title>
+        <meta name="description" content="{% block description %}{% endblock %}"/>
+        <script src="{% bootstrap_jquery_url %}"></script>
+        {% bootstrap_css %}
+        {% bootstrap_javascript %}
+        {% bootstrap_messages %}
+
+        {% block head %}
+        {% endblock %}
+    </head>
+
+    <body>
+        {% include "../base/navtabs.html" %}
+
+        <div  data-spy="scroll" class="container information">
+            {% block content %}{% endblock %}
+        </div>
+        {% include "../base/footer.html" %}
+
+    </body>
+    <script type="text/javascript">
+      function getURLParameter(sParam) {
+        var sPageURL = window.location.search.substring(1);
+        var sURLVariables = sPageURL.split('&');
+        if (!sURLVariables[0]) {
+            return 'summary'
+        }
+        for (var i = 0; i < sURLVariables.length; i++) {
+            var sParameterName = sURLVariables[i].split('=');
+            if (sParameterName[0] == sParam)
+                return sParameterName[1];
+        }
+      }
+    
+      $(document).ready(function(){
+        $("#" + getURLParameter('state')).addClass("active");
+      });
+    </script>
+    {% block scripts %}
+    {% endblock %}
+</html>

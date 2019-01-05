@@ -1,0 +1,183 @@
+{% extends "../base/base.html" %}
+{% load tables %}
+
+{% block content %}
+  <style>
+  table, th, td {
+      border: 1px solid black;
+      border-collapse: collapse;
+      padding: 5px 5px;
+  }
+  .summary {
+      width: 500px;
+  }
+  thead {
+      background-color: lightgrey;
+  }
+
+  hr {
+      border: solid 1px black;
+  }
+  table.table-striped > tbody > tr:last-child {
+      background: lightskyblue;
+  }
+  </style>
+
+  <h2>Resultados Totales</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Tiempo de simulación</th>
+        <th scope="col">Abiertas</th>
+        <th scope="col">Pausadas</th>
+        <th scope="col">Finalizadas</th>
+        <th scope="col">Apuesta Total</th>
+        <th scope="col">Ganancia bruta</th>
+        <th scope="col">Ganancia Neta</th>
+        <th scope="col">Porcentaje de ganancia</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ time_simulation }}</td>
+        <td>{{ open_tables }}</td>
+        <td>{{ paused_tables }}</td>
+        <td>{{ finished_tables }}</td>
+        <td>{{ coin }} {{ total_inversion_amount }}</td>
+        <td>{{ coin }} {{ total_gross_profit }}</td>
+        <td>{{ coin }} {{ total_profit }}</td>
+        <td>{{ profit_percentage }} % </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Resultados por iteraciones</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Iteración</th>
+        <th scope="col">Número de tablas</th>
+        <th scope="col">Ganancia neta / Pérdida</th>
+        <th scope="col">Porcentaje de inversión</th>
+        <th scope="col">Porcentaje de Ganancia / pérdida</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for key, value in data_finished_tables.items %}
+      <tr>
+        <td>{{ key }}</td>
+        <td>{{ value.num_tables }}</td>
+        <td>{{ coin }} {{ value.net_profit }}</td>
+        <td>{{ value.percentage_inversion }} %</td>
+        <td>{{ value.percentage_profit }} %</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Resultados último día</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Tiempo simulación</th>
+        <th scope="col">Abiertas</th>
+        <th scope="col">Pausadas</th>
+        <th scope="col">Finalizadas</th>
+        <th scope="col">Apuesta total</th>
+        <th scope="col">Ganancia bruta</th>
+        <th scope="col">Ganancia neta</th>
+        <th scope="col">Porcentaje ganancia</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ time_simulation_last_day }}</td>
+        <td>{{ open_tables_last_day }}</td>
+        <td>{{ paused_tables_last_day }}</td>
+        <td>{{ finished_tables_last_day }}</td>
+        <td>{{ coin }} {{ total_inversion_amount_last_day }}</td>
+        <td>{{ coin }} {{ total_gross_profit_last_day }}</td>
+        <td>{{ coin }} {{ total_profit_last_day }}</td>
+        <td>{{ profit_percentage_last_day }} % </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Resultados última semana</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Tiempo simulación</th>
+        <th scope="col">Abiertas</th>
+        <th scope="col">Pausadas</th>
+        <th scope="col">Finalizadas</th>
+        <th scope="col">Apuesta total</th>
+        <th scope="col">Ganancia bruta</th>
+        <th scope="col">Ganancia neta</th>
+        <th scope="col">Porcentaje ganancia</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ time_simulation_last_week }}</td>
+        <td>{{ open_tables_last_week }}</td>
+        <td>{{ paused_tables_last_week }}</td>
+        <td>{{ finished_tables_last_week }}</td>
+        <td>{{ coin }} {{ total_inversion_amount_last_week }}</td>
+        <td>{{ coin }} {{ total_gross_profit_last_week }}</td>
+        <td>{{ coin }} {{ total_profit_last_week }}</td>
+        <td>{{ profit_percentage_last_week }} % </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Resultados último mes</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Tiempo simulación</th>
+        <th scope="col">Abiertas</th>
+        <th scope="col">Pausadas</th>
+        <th scope="col">Finalizadas</th>
+        <th scope="col">Apuesta total</th>
+        <th scope="col">Ganancia bruta</th>
+        <th scope="col">Ganancia neta</th>
+        <th scope="col">Porcentaje ganancia</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ time_simulation_last_month }}</td>
+        <td>{{ open_tables_last_month }}</td>
+        <td>{{ paused_tables_last_month }}</td>
+        <td>{{ finished_tables_last_month }}</td>
+        <td>{{ coin }} {{ total_inversion_amount_last_month }}</td>
+        <td>{{ coin }} {{ total_gross_profit_last_month }}</td>
+        <td>{{ coin }} {{ total_profit_last_month }}</td>
+        <td>{{ profit_percentage_last_month }} % </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Factores considerados</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Diferencia de equipos</th>
+        <th scope="col">Mínimo por equipo</th>
+        <th scope="col">Mínimo por empate</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ team_difference }}</td>
+        <td>{{ min_per_team }}</td>
+        <td>{{ min_parity }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <br>
+  <br>
+
+  
+{% endblock %}
