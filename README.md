@@ -4,7 +4,8 @@
 ## Installation
 There is the complete list of packages required by the project
 ```
-$ sudo apt-get install build-essential python-dev python python-virtualenv python-pip libjpeg8 libjpeg62-dev 
+$ sudo apt-get install build-essential python-dev python virtualenv python-pip libjpeg8 libjpeg62-dev 
+$ sudo apt-get install virtualenv python-pip
 ```
 
 ### Postgres
