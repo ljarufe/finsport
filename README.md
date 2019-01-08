@@ -3,9 +3,8 @@
 
 ## Installation
 There is the complete list of packages required by the project
-```
-$ sudo apt-get install build-essential python-dev python virtualenv python-pip libjpeg8 libjpeg62-dev 
-$ sudo apt-get install virtualenv python-pip
+``` 
+$ sudo apt-get install virtualenv python-pip python3-dev build-essential postgresql postgresql-contrib
 ```
 
 ### Postgres
@@ -24,7 +23,7 @@ postgres$ create database finsport owner finsport encoding 'UTF8' LC_COLLATE = '
 postgres$ alter user finsport with superuser;
 ```
 
-Edit the `/etc/postgresql/9.5/main/pg_hba.conf` file as root user:
+Edit the `/etc/postgresql/[xx]/main/pg_hba.conf` file as root user, (replace the xx word with the postgresql version):
 
 ```
 local all postgres trust
@@ -42,12 +41,10 @@ $ /etc/init.d/postgresql restart
 ### Create a virtualenv
 
 ```
-$ mkdir finsport
-$ cd finsport
-$ virtualenv -p python3 env
+$ virtualenv -p python3 finsport
 ```
 
-This command will create a new folder with the name env
+This command will create a new folder with the name finsport
 ### Create a logs, selenium and scrappy directories
 Create logs directory
 ```
@@ -58,14 +55,15 @@ $ cd ..
 $ touch logs/messages.log
 $ mkdir selenium-data
 $ cd ..
-$ mkdir spide-data 
+$ mkdir spider-data 
 ```
 
-### Move a chromedriver
+### Install chrome and get a chromedriver
+Inside this folder you have to put the chromedriver necessary for selenium:
 ```
  $ cd selenium-data
  ```
-Inside this folder you hace to move the chrome driver necesary for selenium
+Follow this guide: `https://tecadmin.net/setup-selenium-chromedriver-on-ubuntu/` to install chrome and get the driver
 ### Clone the project
 
 First verify your SSH Keys on github configuration `https://github.com/settings/keys`

@@ -260,7 +260,6 @@ fabric.properties
 .venv/
 
 # Project
-finsport/backup/*
 spider-data/*
 selenium-data/*
 
