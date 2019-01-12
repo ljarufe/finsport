@@ -120,6 +120,8 @@ def make_bet_selenium(my_match, my_bet=BET[1][0], amount=1):
                     driver.delete_all_cookies()
                     driver.close()
                     driver.quit()
+                    del driver
+
                     return False, 'Error putting amount in field %s' % err, None
 
                 driver.save_screenshot(
@@ -141,6 +143,7 @@ def make_bet_selenium(my_match, my_bet=BET[1][0], amount=1):
                     driver.delete_all_cookies()
                     driver.close()
                     driver.quit()
+                    del driver
                     return True, 'Apuesta Realizada', factors
                 else:
                     error = driver.find_elements_by_class_name(
@@ -149,6 +152,7 @@ def make_bet_selenium(my_match, my_bet=BET[1][0], amount=1):
                     driver.delete_all_cookies()
                     driver.close()
                     driver.quit()
+                    del driver
                     return (
                         False,
                         'Error al realizar la apuesta %s' % error[0].text, None)
@@ -157,12 +161,14 @@ def make_bet_selenium(my_match, my_bet=BET[1][0], amount=1):
                 driver.delete_all_cookies()
                 driver.close()
                 driver.quit()
+                del driver
                 return False, 'Error en la ejecucion: %s' % e, None
-
     print(False, 'Match not Found')
     driver.delete_all_cookies()
     driver.close()
     driver.quit()
+    del driver
+
     return False, 'Match not Found'
 
 
