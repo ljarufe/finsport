@@ -2,7 +2,6 @@ from fernet_fields import EncryptedCharField
 
 from django.db import models
 
-from football.models import Team
 from spider.spider.spiders.inkabet_spider import InkabetSpider
 
 
@@ -44,10 +43,6 @@ class Account(models.Model):
     profit_to_tables = models.FloatField(default=0.0)
     profit_to_tables_index = models.FloatField(default=0.0)
     num_allow_tables = models.IntegerField(default=1)
-    favorite_team = models.ForeignKey(
-        Team, on_delete=models.CASCADE, null=True, blank=True)
-    min_favorite_bet = models.FloatField(default=2)
-    max_favorite_bet = models.FloatField(default=4)
 
     def __str__(self):
         return '%s' % self.username

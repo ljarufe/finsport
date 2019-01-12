@@ -13,7 +13,6 @@ from football.constants import MATCH_STATES
 from accounts.models import Account
 from bet.models import BetTable, DataTable
 from bet.constants import (
-    STATES_DATA_TABLE,
     LAPSE_MATCH_IN_MIN,
     STEP_PARITY_FORMULA,
     MIN_VAL_INIT
@@ -43,10 +42,15 @@ def new_table(match, max_tables):
 
 
 def exist_current(table):
-    current = DataTable.objects.filter(
-        bet_table=table, state=STATES_DATA_TABLE[1][0])
+    """
+    Returns a boolean to indicate if a CURRENT DataTable exists for a BetTable
 
-    return True if current else False
+    :param table: BetTable object
+
+    :return: True if the DataTable exists
+    """
+
+    return DataTable.objects.exists(bet_table=table, state=DataTable.CURRENT)
 
 
 def filter_parity_factor(match, first=False, table=None, current=None):
@@ -82,14 +86,14 @@ class Command(BaseCommand):
             for match in new_matches:
                 available_tables = BetTable.objects.filter(
                     state=BetTable.AVAILABLE).order_by('-created')
-                available_paused_tables = BetTable.objects.filter(
+                available_finished_tables = BetTable.objects.filter(
                     Q(state=BetTable.AVAILABLE) | Q(state=BetTable.FINISHED))
                 if not available_tables:
                     if filter_parity_factor(match, first=True):
                         new_table(match, account.num_allow_tables)
                         continue
                     continue
-                for i, table in enumerate(available_paused_tables, start=1):
+                for i, table in enumerate(available_finished_tables, start=1):
                     data_table = DataTable.objects.filter(
                         bet_table=table).order_by(
                         '-match__start_datetime').first()
@@ -125,13 +129,3 @@ class Command(BaseCommand):
                         if filter_parity_factor(match, first=True):
                             new_table(match, account.num_allow_tables)
                     # (E)TO CREATE NEW TABLES WHEN EXIST LESS THAN MAXIMUM
-
-        new_favorite_matches = Match.objects.filter(
-            match_state=MATCH_STATES[7][0]).order_by('start_datetime')
-        for fav_match in new_favorite_matches:
-            bet_table, found = BetTable.objects.get_or_create(
-                state=BetTable.PAUSED,
-                defaults={'name': str(timezone.now())})
-            DataTable.objects.create(match=fav_match, bet_table=bet_table)
-            fav_match.match_state = MATCH_STATES[1][0]
-            fav_match.save()

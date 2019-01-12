@@ -8,7 +8,6 @@ class MatchAdmin(admin.ModelAdmin):
     list_display = (
         '__str__',
         'match_state',
-        'match_state_half_time',
         'start_datetime',
         'local_factor',
         'parity_factor',

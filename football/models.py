@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 from django.db import models
 
 from django_extensions.db.models import TimeStampedModel
@@ -12,6 +13,7 @@ class League(TimeStampedModel):
         return self.name
 
 
+# TODO: is this models used?
 class LeagueRelatedName(models.Model):
     league = models.ForeignKey(League, on_delete=models.CASCADE)
     related_name = models.CharField(max_length=250)
@@ -30,6 +32,7 @@ class Team(TimeStampedModel):
         return self.name
 
 
+# TODO: change the states
 class Match(TimeStampedModel):
     MATCH_STATES = (
         (0, 'new'),
@@ -47,18 +50,11 @@ class Match(TimeStampedModel):
     visitor_team = models.ForeignKey('football.Team', on_delete=models.CASCADE)
     local_score = models.IntegerField(null=True, blank=True)
     visitor_score = models.IntegerField(null=True, blank=True)
-    local_score_half_time = models.IntegerField(null=True, blank=True)
-    visitor_score_half_time = models.IntegerField(null=True, blank=True)
     match_state = models.IntegerField(
-        choices=MATCH_STATES, default=MATCH_STATES[0][0])
-    match_state_half_time = models.IntegerField(
         choices=MATCH_STATES, default=MATCH_STATES[0][0])
     local_factor = models.FloatField()
     parity_factor = models.FloatField()
     visitor_factor = models.FloatField()
-    local_factor_half_time = models.FloatField(null=True, blank=True)
-    parity_factor_half_time = models.FloatField(null=True, blank=True)
-    visitor_factor_half_time = models.FloatField(null=True, blank=True)
     start_datetime = models.DateTimeField()
     ent_datetime = models.DateTimeField(null=True, blank=True)
 

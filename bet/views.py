@@ -7,14 +7,10 @@ from django.views.generic.list import ListView
 from django.views.generic import TemplateView
 from django.db.models import Sum
 
-from bet.models import BetTable, DataTable
-from bet.constants import (
-    STATES_DATA_TABLE,
-    TEAM_DIFFERENCE,
-    MIN_PER_TEAM,
-    MIN_PARITY,
-)
+from .models import BetTable, DataTable
+from .constants import TEAM_DIFFERENCE, MIN_PER_TEAM, MIN_PARITY
 
+# TODO: move it to the account model
 COIN = 'S/'
 
 
@@ -28,7 +24,7 @@ class BetTableListView(ListView):
 
     # TODO: change the get parameter for the letter in the bettable dictionary
     def dispatch(self, request, *args, **kwargs):
-        self.state = request.GET.get('state', 'finished')
+        self.state = request.GET.get('state', BetTable.FINISHED)
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -59,9 +55,9 @@ class BetTableListView(ListView):
             total_profit_tables = round(
                 total_profit_tables, 2) + table.total_profit
             if not table.total_inversion and data_table.exclude(
-                    state=STATES_DATA_TABLE[0][0]):
+                    state=DataTable.NEW):
                 total_inversion_tables_availables += data_table.exclude(
-                    state=STATES_DATA_TABLE[0][0]).last().inversion_amount
+                    state=DataTable.NEW).last().inversion_amount
             total_inversion_tables += table.total_inversion
         context['total_profit_tables'] = round(total_profit_tables, 2)
         context['total_inversion_tables'] = (
@@ -81,8 +77,6 @@ class StatisticView(TemplateView):
     template_name = "bet/statistics.html"
 
     def dispatch(self, request, *args, **kwargs):
-        self.time_state = request.GET.get('time-state', 'FT')
-
         return super().dispatch(request, *args, **kwargs)
 
     def results_by_time(self, context, time={}):
@@ -110,9 +104,6 @@ class StatisticView(TemplateView):
         kw_state_tables['state'] = BetTable.FINISHED
         context['finished_tables%s' % w] = BetTable.objects.filter(
             **kw_state_tables).count()
-        kw_state_tables['state'] = BetTable.PAUSED
-        context['paused_tables%s' % w] = BetTable.objects.filter(
-            **kw_state_tables).count()
 
         total_inversion_amount = 0.0
         for table in BetTable.objects.filter(**time):
@@ -122,7 +113,7 @@ class StatisticView(TemplateView):
                 'match__visitor_team').order_by('match__start_datetime')
             try:
                 total_inversion_amount += data_table.exclude(
-                    state=STATES_DATA_TABLE[0][0]).last().inversion_amount
+                    state=DataTable.NEW).last().inversion_amount
             except AttributeError:
                 total_inversion_amount = 0
         context['total_inversion_amount%s' % w] = round(
@@ -178,8 +169,11 @@ class StatisticView(TemplateView):
                     'total_inversion_amount']
             except ZeroDivisionError:
                 percentage_inversion = 0
-            percentage_profit = (net_profit * 100) / context[
-                'total_gross_profit'] if net_profit else 0
+            try:
+                percentage_profit = (net_profit * 100) / context[
+                    'total_gross_profit'] if net_profit else 0
+            except ZeroDivisionError:
+                percentage_profit = 0
             data_finished_tables[iteration] = {
                 'num_tables': round(num_tables, 2),
                 'net_profit': round(net_profit, 2),

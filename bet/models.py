@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
 
 from django.db import models
+
 from django_extensions.db.models import TimeStampedModel
 
 
 class BetTable(TimeStampedModel):
+    """
+    Bet table
+    """
+
     AVAILABLE = 'A'
     FINISHED = 'F'
-    PAUSED = 'P'
     STATES = (
         ('A', 'available'),
         ('F', 'finished'),
-        ('P', 'paused'),
     )
     name = models.CharField(max_length=250)
     total_profit = models.FloatField(default=0)
@@ -29,29 +32,33 @@ class MyManager(models.Manager):
             'match__local_team', 'match__visitor_team', 'bet_table')
 
 
+# TODO: It might be the match for an account, relate to it or delete all this
+#   logic
 class DataTable(TimeStampedModel):
+    NEW = 'N'
+    CURRENT = 'C'
+    WON = 'W'
+    LOST = 'L'
+    WAITING = 'T'
     STATES = (
-        (0, 'new'),
-        (1, 'current'),
-        (2, 'won'),
-        (3, 'lost'),
-        (4, 'waiting'),
-        (5, 'paused'),
-        (6, 'current_paused'),
+        ('N', 'new'),
+        ('C', 'current'),
+        ('W', 'won'),
+        ('L', 'lost'),
+        ('T', 'waiting'),
     )
     match = models.ForeignKey('football.Match', on_delete=models.CASCADE)
     bet_table = models.ForeignKey('bet.BetTable', on_delete=models.CASCADE)
     bet_amount = models.FloatField(default=0)
     inversion_amount = models.FloatField(default=0)
     profit = models.FloatField(null=True, default=0)
-    state = models.IntegerField(choices=STATES, default=STATES[0][0])
+    state = models.CharField(max_length=1, choices=STATES, default=NEW)
     previous = models.ForeignKey(
         'bet.DataTable', on_delete=models.CASCADE,
-        related_name='previous_data', null=True, blank=True, default=None)
+        related_name='previous_data', null=True, blank=True)
     objects = MyManager()
 
     def __str__(self):
-
         return '(%s) - %s - %s . BET TABLE: %s' % (
             self.match.start_datetime,
             self.match.local_team.name,

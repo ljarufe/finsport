@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import random
+
 import pytz
 
 from django.core.management.base import BaseCommand
@@ -16,9 +16,7 @@ from bet.utils import (
     check_time_for_attemps,
 )
 from bet.constants import (
-    STATES_DATA_TABLE,
     INIT_AMOUNT,
-    LIMIT_ROWS,
     FIRST_VAL_FORMULA as f_v_f,
     SECOND_VAL_FORMULA as s_v_f,
     THRID_VALUE_FORMULA as t_v_f,
@@ -28,20 +26,8 @@ from football.constants import MATCH_STATES
 
 utc = pytz.UTC
 
-STATES = (
-    (1, 'available'),
-    (2, 'finished'),
-    (3, 'paused'),
-    (4, 'favorite'),
-)
 
-STATES_TIME = (
-    (0, 'FT'),
-    (1, 'HT'),
-)
-
-
-def make_bet(data_table, inkabet, paused=False, data_id=0):
+def make_bet(data_table, inkabet, data_id=0):
 
     if inkabet.funds <= data_table.bet_amount:
         print("You have to deposit more funds to the account")
@@ -91,60 +77,7 @@ def make_bet(data_table, inkabet, paused=False, data_id=0):
             return False
 
 
-def bet_favorite_team(data_table, favorite_team, bets):
-    if favorite_team == data_table.match.local_team:
-        amount = random.randint(bets[0], bets[1])
-        my_bet = 1
-    else:
-        amount = random.randint(bets[0], bets[1])
-        my_bet = 3
-    data_table.bet_amount = amount
-    data_table.inversion_amount = amount
-    match = data_table.match.local_team.name + \
-        ' - ' + data_table.match.visitor_team.name
-
-    res = make_bet_selenium(
-        my_match=match, my_bet=my_bet, amount=data_table.bet_amount)
-    while res[0] is False and res[1] == 'Error en la ejecucion':
-        res = make_bet_selenium(
-            my_match=match, my_bet=my_bet, amount=data_table.bet_amount)
-    if res[0] is True:
-        print(res[1])
-        data_table.match.match_state = MATCH_STATES[2][0]
-        data_table.match.save()
-        data_table.state = STATES_DATA_TABLE[1][0]
-        data_table.save()
-    else:
-        print("Error en ", data_table.match, ": ", res[1])
-
-
-def check_results(data_table):
-    if data_table.match.match_state == MATCH_STATES[2][0]:
-        return STATES_DATA_TABLE[1][0]
-
-    if data_table.match.match_state == MATCH_STATES[4][0]:
-        return STATES_DATA_TABLE[2][0]
-
-    if (data_table.match.match_state == MATCH_STATES[3][0] or
-            data_table.match.match_state >= MATCH_STATES[5][0]):
-        return STATES_DATA_TABLE[3][0]
-
-
-def check_favorite_results(data_table, favorite_team):
-
-    if data_table.match.match_state == MATCH_STATES[2][0]:
-        return STATES_DATA_TABLE[1][0], 0
-
-    if (data_table.match.match_state == MATCH_STATES[3][0] and
-            data_table.match.local_team == favorite_team):
-        return STATES_DATA_TABLE[2][0], data_table.match.local_factor
-    elif (data_table.match.match_state == MATCH_STATES[5][0] and
-            data_table.match.visitor_team == favorite_team):
-        return STATES_DATA_TABLE[2][0], data_table.match.visitor_factor
-    else:
-        return STATES_DATA_TABLE[3][0], 0
-
-
+# TODO: move to BetTable as a method
 def update_table(table, current):
     total_inversion_list = DataTable.objects.filter(
         bet_table=table).values_list('bet_amount', flat=True)
@@ -152,24 +85,13 @@ def update_table(table, current):
     table.total_profit = current.profit - current.inversion_amount
     table.bucle_number = bucle_number
     table.total_inversion = current.inversion_amount
-    table.state = STATES[1][0]
+    table.state = BetTable.FINISHED
     table.save()
 
     send_alert(table)
 
 
-def update_favorite_table(table, current):
-    total_inversion_list = DataTable.objects.filter(
-        bet_table=table).values_list('bet_amount', flat=True)
-    bucle_number = len(total_inversion_list)
-    table.total_profit = current.profit - current.inversion_amount
-    table.bucle_number = bucle_number
-    table.total_inversion = current.inversion_amount
-    table.save()
-
-
 def set_residue_matches(residue):
-
     for r in residue:
         r.match.match_state = MATCH_STATES[0][0]
         r.match.save()
@@ -224,15 +146,16 @@ class Command(BaseCommand):
             else:
                 current = current.first()
 
+            # TODO: Call functions inside every if to modularize this
             # PLAYING THE BED
-            if check_results(current) == STATES_DATA_TABLE[1][0]:
+            if current.match.match_state == MATCH_STATES[2][0]:
                 if suspended_match(current):
                     remove_match_suspended(current)
                     break
                 continue
 
             # WON THE BED OF TABLE
-            if check_results(current) == STATES_DATA_TABLE[2][0]:
+            if current.match.match_state == MATCH_STATES[4][0]:
                 current.state = STATES_DATA_TABLE[2][0]
                 current.profit = (
                     current.bet_amount * current.match.parity_factor)
@@ -245,7 +168,8 @@ class Command(BaseCommand):
                 update_table(table, current)
 
             # LOST THE BED FOR MATCH - DATA_TABLE
-            if check_results(current) == STATES_DATA_TABLE[3][0]:
+            if (current.match.match_state == MATCH_STATES[3][0] or
+                    current.match.match_state >= MATCH_STATES[5][0]):
                 current.state = STATES_DATA_TABLE[3][0]
                 current.profit = current.bet_amount * (-1)
                 current.save()
@@ -266,27 +190,3 @@ class Command(BaseCommand):
                     if state_bet:
                         current.state = STATES_DATA_TABLE[1][0]
                         current.save()
-
-            # (S) IF TABLE HAS A DATATABLE WITH NEW_PAUSED OR CURRENT_PAUSED
-            if current.state == STATES_DATA_TABLE[7][0]:
-                print("\n\ninkabet.profit_to_tables: ",
-                      inkabet.profit_to_tables)
-                print("current.previous.bet_amount * 2:",
-                      current.previous.bet_amount * 2)
-                if inkabet.profit_to_tables <= current.previous.bet_amount * 2:
-                    print(
-                        "You doesn't have enought profit to bet"
-                        " in paused tables")
-                    current.match.match_state = MATCH_STATES[0][0]
-                    current.match.save()
-                    current.delete()
-                    continue
-
-                iteration = count_iteration(table, current)
-                make_bet(current, inkabet, paused=True, data_id=iteration)
-                current.state = STATES_DATA_TABLE[6][0]
-                current.save()
-            # (E) IF TABLE HAS A DATATABLE WITH NEW_PAUSED OR CURRENT_PAUSED
-
-            if current.state == STATES_DATA_TABLE[6][0]:
-                continue
