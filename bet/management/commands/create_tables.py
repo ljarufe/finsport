@@ -15,26 +15,13 @@ from bet.models import BetTable, DataTable
 from bet.constants import (
     STATES_DATA_TABLE,
     LAPSE_MATCH_IN_MIN,
-    STEP_PARITY_FORMULA as s_p_f,
-    MIN_VAL_INIT as m_v_i
+    STEP_PARITY_FORMULA,
+    MIN_VAL_INIT
 )
 from bet.utils import count_iteration
 from bet.rules import Rules
 
-
 utc = pytz.UTC
-
-STATES = (
-    (1, 'available'),
-    (2, 'finished'),
-    (3, 'paused'),
-    (4, 'favorite')
-)
-
-STATES_TIME = (
-    (0, 'FT'),
-    (1, 'HT'),
-)
 
 
 def new_table(match, max_tables):
@@ -47,9 +34,9 @@ def new_table(match, max_tables):
 
     if match.start_datetime > timezone.now():
         if BetTable.objects.filter(
-                state=STATES[0][0]).count() <= max_tables - 1:
+                state=BetTable.AVAILABLE).count() <= max_tables - 1:
             table = BetTable.objects.create(
-                state=STATES[0][0], name=str(timezone.now()))
+                state=BetTable.AVAILABLE, name=str(timezone.now()))
             DataTable.objects.create(match=match, bet_table=table)
             match.match_state = MATCH_STATES[1][0]
             match.save()
@@ -67,12 +54,13 @@ def filter_parity_factor(match, first=False, table=None, current=None):
     if Rules.evaluate(
             match.local_factor, match.parity_factor, match.visitor_factor):
         if first:
-            if match.parity_factor >= m_v_i:
+            if match.parity_factor >= MIN_VAL_INIT:
                 return True
             return False
 
         values_factor = round(
-            ((count_iteration(table, current) * s_p_f) + m_v_i) + s_p_f, 2)
+            ((count_iteration(table, current) *
+              STEP_PARITY_FORMULA) + MIN_VAL_INIT) + STEP_PARITY_FORMULA, 2)
         if match.parity_factor >= values_factor:
             return True
         return False
@@ -93,66 +81,24 @@ class Command(BaseCommand):
 
             for match in new_matches:
                 available_tables = BetTable.objects.filter(
-                    state=STATES[0][0],
-                    state_in_time=STATES_TIME[0][0]).order_by('-created')
-
+                    state=BetTable.AVAILABLE).order_by('-created')
                 available_paused_tables = BetTable.objects.filter(
-                    Q(state=STATES[0][0]) | Q(state=STATES[2][0]),
-                    Q(state_in_time=STATES_TIME[0][0]))
-
+                    Q(state=BetTable.AVAILABLE) | Q(state=BetTable.FINISHED))
                 if not available_tables:
                     if filter_parity_factor(match, first=True):
                         new_table(match, account.num_allow_tables)
                         continue
                     continue
-
                 for i, table in enumerate(available_paused_tables, start=1):
                     data_table = DataTable.objects.filter(
-                        bet_table=table,
-                        state_in_time=STATES_TIME[0][0],
-                    ).order_by('-match__start_datetime').first()
-
-                    # (S) CHECKING IF EXIST PAUSED DATATABLE
-                    if table.state == STATES[2][0]:
-                        # print("TABLE!!!!!!!!!!!!!!: ", table)
-                        paused = DataTable.objects.filter(
-                            bet_table=table,
-                            state=STATES_DATA_TABLE[5][0],
-                            state_in_time=STATES_TIME[0][0]
-                        ).first()
-                        if not paused:
-                            continue
-                        if (account.profit_to_tables >=
-                                (paused.bet_amount * 2) and
-                                paused.bet_amount > 0):
-
-                            paused.state = STATES_DATA_TABLE[3][0]
-                            paused.save()
-                            data_table = paused
-                            difference_matches = (
-                                match.start_datetime -
-                                data_table.match.start_datetime)
-
-                            if difference_matches > timedelta(
-                                    minutes=LAPSE_MATCH_IN_MIN):
-                                DataTable.objects.create(
-                                    match=match,
-                                    bet_table=table,
-                                    state=STATES_DATA_TABLE[7][0],
-                                    state_in_time=STATES_TIME[0][0],
-                                    previous=data_table)
-                                match.match_state = MATCH_STATES[1][0]
-                                match.save()
-                                break
-                        else:
-                            continue
-                    # (E) CHECKING IF EXIST PAUSED DATATABLE
-
+                        bet_table=table).order_by(
+                        '-match__start_datetime').first()
                     print("TABLEEEEEE: ", table)
                     difference_matches = (
                         match.start_datetime - data_table.match.start_datetime)
 
-                    if difference_matches > timedelta(minutes=LAPSE_MATCH_IN_MIN):
+                    if difference_matches > timedelta(
+                            minutes=LAPSE_MATCH_IN_MIN):
                         parity_factor = filter_parity_factor(
                             match, table=table, current=data_table)
                         exist_currentt = exist_current(table)
@@ -160,7 +106,6 @@ class Command(BaseCommand):
                             DataTable.objects.create(
                                 match=match,
                                 bet_table=table,
-                                state_in_time=STATES_TIME[0][0],
                                 previous=data_table)
                             match.match_state = MATCH_STATES[1][0]
                             match.save()
@@ -185,7 +130,7 @@ class Command(BaseCommand):
             match_state=MATCH_STATES[7][0]).order_by('start_datetime')
         for fav_match in new_favorite_matches:
             bet_table, found = BetTable.objects.get_or_create(
-                state=STATES[3][0], state_in_time=STATES_TIME[0][0],
+                state=BetTable.PAUSED,
                 defaults={'name': str(timezone.now())})
             DataTable.objects.create(match=fav_match, bet_table=bet_table)
             fav_match.match_state = MATCH_STATES[1][0]

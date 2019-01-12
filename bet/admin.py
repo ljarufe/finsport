@@ -14,7 +14,6 @@ class BetTableAdmin(admin.ModelAdmin):
     list_display = (
         '__str__',
         'created',
-        'state_in_time',
         'state',
         'total_inversion',
         'total_profit',
@@ -29,7 +28,6 @@ class DataTableAdmin(admin.ModelAdmin):
 
     list_display = (
         '__str__',
-        'state_in_time',
         'state'
     )
 

@@ -198,64 +198,17 @@ class Command(BaseCommand):
     help = 'Make bets based in BetTables'
 
     def handle(self, *args, **options):
-
         print("\n\n---------------------------MAKE BETS------------------")
         inkabet = Account.objects.filter(
             bet_page__name__iexact="inkabet").first()
-        # FAVORITE TABLE
-        favorite_table = BetTable.objects.filter(
-            state=STATES[3][0], state_in_time=STATES_TIME[0][0])
-        if len(favorite_table):
-            favorite_data_table = DataTable.objects.filter(
-                bet_table=favorite_table[0],
-                state=STATES_DATA_TABLE[1][0]
-            ).first()
-            accounts = Account.objects.filter(bet_page__name='Inkabet')
-            favorite_team = accounts[0].favorite_team if len(
-                accounts) else None
-            bets = (accounts[0].min_favorite_bet, accounts[0].max_favorite_bet)
-            if not favorite_data_table:
-                favorite_data_table = DataTable.objects.filter(
-                    bet_table=favorite_table[0],
-                    state=STATES_DATA_TABLE[0][0]).order_by(
-                    'match__start_datetime').first()
-                if favorite_data_table:
-                    bet_favorite_team(favorite_data_table, favorite_team, bets)
-                    favorite_data_table.save()
-            else:
-                res, factor = check_favorite_results(
-                    favorite_data_table, favorite_team)
-                # WIN THE MATCH
-                if res == STATES_DATA_TABLE[2][0]:
-                    favorite_data_table.state = STATES_DATA_TABLE[2][0]
-                    favorite_data_table.profit = (
-                        favorite_data_table.bet_amount * factor)
-                    favorite_data_table.save()
-                    update_favorite_table(
-                        favorite_table[0], favorite_data_table)
-
-                # LOST THE BED FOR MATCH - DATA_TABLE
-                if res == STATES_DATA_TABLE[3][0]:
-                    favorite_data_table.state = STATES_DATA_TABLE[3][0]
-                    favorite_data_table.profit = (
-                        favorite_data_table.bet_amount * (-1))
-                    favorite_data_table.save()
-                    update_favorite_table(
-                        favorite_table[0], favorite_data_table)
-
-        available_paused_tables = BetTable.objects.filter(
-            Q(state=STATES[0][0]) | Q(state=STATES[2][0]),
-            Q(state_in_time=STATES_TIME[0][0]))
-
-        for table in available_paused_tables:
+        available_tables = BetTable.objects.filter(state=BetTable.AVAILABLE)
+        for table in available_tables:
             current = DataTable.objects.filter(
                 Q(bet_table=table),
                 Q(state=STATES_DATA_TABLE[1][0]) | Q(
                     state=STATES_DATA_TABLE[4][0]) | Q(
                     state=STATES_DATA_TABLE[6][0]) | Q(
-                    state=STATES_DATA_TABLE[7][0]),
-            )
-
+                    state=STATES_DATA_TABLE[7][0]))
             if not current:
                 current = DataTable.objects.filter(
                     bet_table=table, state=STATES_DATA_TABLE[0][0]).order_by(
@@ -293,27 +246,6 @@ class Command(BaseCommand):
 
             # LOST THE BED FOR MATCH - DATA_TABLE
             if check_results(current) == STATES_DATA_TABLE[3][0]:
-
-                datas_table = DataTable.objects.filter(
-                    bet_table=table, state=STATES_DATA_TABLE[3][0])
-
-                # (S)SETTING THE DATATABLE IF IS NECESARY TO PAUSED
-                if(len(datas_table) >= LIMIT_ROWS - 1):
-                    print("CURRENT THAT IS GOING TO BE PAUSED: ", current)
-                    current.state = STATES_DATA_TABLE[5][0]
-                    current.profit = current.bet_amount * (-1)
-                    current.save()
-                    residue = DataTable.objects.filter(
-                        bet_table=table,
-                        state=STATES_DATA_TABLE[0][0]).order_by(
-                            'match__start_datetime')
-                    set_residue_matches(residue)
-                    residue.delete()
-                    table.state = STATES[2][0]
-                    table.save()
-                    continue
-                # (E)SETTING THE DATATABLE IF IS NECESARY TO PAUSED
-
                 current.state = STATES_DATA_TABLE[3][0]
                 current.profit = current.bet_amount * (-1)
                 current.save()
@@ -321,7 +253,6 @@ class Command(BaseCommand):
                 currents = DataTable.objects.filter(
                     bet_table=table, state=STATES_DATA_TABLE[0][0]).order_by(
                     'match__start_datetime')
-
                 if not currents:
                     current.state = STATES_DATA_TABLE[4][0]
                     current.save()
