@@ -98,7 +98,7 @@
               {% else %}
                 <td>{{ data.profit|roundd }}</td>
               {% endif %}
-              <td>{{ data.state|get_state }}</td>
+              <td>{{ data.get_state_display }}</td>
             </tr>
           {% endfor %}
         </tbody>

@@ -1,16 +1,12 @@
 # -*- coding: utf-8 -*-
-from django import template
 
-from bet.constants import DICT_STATES_DATA_TABLE as states_datatable
+from django import template
 
 register = template.Library()
 
 
-@register.filter
-def get_state(value):
-    return states_datatable.get(value, '')
-
-
+# TODO: this filter is not longer necessary, delete it and change it for the
+#  standard round with options
 @register.filter
 def roundd(value):
     return round(value, 2)

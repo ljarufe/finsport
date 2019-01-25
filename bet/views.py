@@ -142,7 +142,8 @@ class StatisticView(TemplateView):
 
         return context
 
-    # TODO: change everything, don't use while statement, use a query to fill the tables
+    # TODO: change everything, don't use while statement, use a query to fill
+    #  the tables
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context = self.results_by_time(context)

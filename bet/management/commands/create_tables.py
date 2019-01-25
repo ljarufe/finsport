@@ -9,7 +9,6 @@ from django.db.models import Q
 from django.utils import timezone
 
 from football.models import Match
-from football.constants import MATCH_STATES
 from accounts.models import Account
 from bet.models import BetTable, DataTable
 from bet.constants import (
@@ -37,7 +36,7 @@ def new_table(match, max_tables):
             table = BetTable.objects.create(
                 state=BetTable.AVAILABLE, name=str(timezone.now()))
             DataTable.objects.create(match=match, bet_table=table)
-            match.match_state = MATCH_STATES[1][0]
+            match.state = Match.USED
             match.save()
 
 
@@ -81,8 +80,7 @@ class Command(BaseCommand):
         accounts = Account.objects.all()
         for account in accounts:
             new_matches = Match.objects.filter(
-                match_state=MATCH_STATES[0][0]).order_by('start_datetime')
-
+                state=Match.NEW).order_by('start_datetime')
             for match in new_matches:
                 available_tables = BetTable.objects.filter(
                     state=BetTable.AVAILABLE).order_by('-created')
@@ -111,21 +109,17 @@ class Command(BaseCommand):
                                 match=match,
                                 bet_table=table,
                                 previous=data_table)
-                            match.match_state = MATCH_STATES[1][0]
+                            match.state = Match.USED
                             match.save()
                             break
                     else:
-                        match.match_state = MATCH_STATES[8][0]
+                        match.state = Match.NOT_USED
                         match.save()
 
-                    # (S)Setting state to used if was not considered for the table
                     if match.start_datetime < timezone.now():
-                        match.match_state = MATCH_STATES[8][0]
+                        match.state = Match.NOT_USED
                         match.save()
-                    # (E)Setting state to used if was not considered for the table
 
-                    # (S)TO CREATE NEW TABLES WHEN EXIST LESS THAN MAXIMUM
-                    if len(available_tables) < account.num_allow_tables:
+                    if available_tables.count() < account.num_allow_tables:
                         if filter_parity_factor(match, first=True):
                             new_table(match, account.num_allow_tables)
-                    # (E)TO CREATE NEW TABLES WHEN EXIST LESS THAN MAXIMUM

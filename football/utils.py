@@ -6,7 +6,6 @@ from django.core.exceptions import ObjectDoesNotExist
 
 from bet.rules import Rules
 from .models import Match, Team
-from .constants import MATCH_STATES
 from .models import League, LeagueRelatedName
 
 
@@ -25,7 +24,7 @@ def save_match(data):
             local_team=local_team,
             visitor_team=visitor_team,
             start_datetime=start_datetime,
-            match_state=MATCH_STATES[0][0],
+            state=Match.NEW,
             defaults={
                 'local_factor': factors[0],
                 'parity_factor': factors[1],
@@ -81,19 +80,21 @@ def save_result(match, data):
             score = data.get('score')
             state = data.get('state')
 
+            # TODO: Use if state in (xxx)
             if(state == 'Finalizado' or state == 'Full-time' or
                     state == 'Final'):
                 match.local_score = score[0]
                 match.visitor_score = score[1]
                 if score[0] > score[1]:
-                    match.match_state = 3
+                    match.state = Match.LOCAL
                 elif score[0] < score[1]:
-                    match.match_state = 5
+                    match.state = Match.VISITOR
                 else:
-                    match.match_state = 4
+                    match.state = Match.PARITY
         elif data['score'][0] == 'vs.':
-            match.match_state = 2
+            match.state = Match.PLAYING
+    # TODO: Check which exception is used here
     except:
-        match.match_state = 2
+        match.state = Match.PLAYING
 
     match.save()

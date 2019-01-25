@@ -13,6 +13,7 @@ from football.utils import save_result
 from football.models import Match
 
 
+# TODO: Google results is not working, fix the scraper
 def obtain_url(match, urls_dic):
     visitor = match.visitor_team.name.replace(" ", "+")
     local = match.local_team.name.replace(" ", "+")
@@ -35,8 +36,8 @@ class Command(BaseCommand):
         })
         urls = ''
         urls_dic = {}
-        for i in Match.objects.filter(match_state=2):
-            urls += ',' + obtain_url(i, urls_dic)
+        for match in Match.objects.filter(state=Match.PLAYING):
+            urls += ',' + obtain_url(match, urls_dic)
 
         if urls:
             process.crawl(ResultsSpider, urls=urls[1:])

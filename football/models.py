@@ -32,26 +32,31 @@ class Team(TimeStampedModel):
         return self.name
 
 
-# TODO: change the states
 class Match(TimeStampedModel):
-    MATCH_STATES = (
-        (0, 'new'),
-        (1, 'used'),
-        (2, 'playing'),
-        (3, 'local'),
-        (4, 'parity'),
-        (5, 'visitor'),
-        (6, 'unknow'),
-        (7, 'favorite'),
-        (8, 'not used'),
+    NEW = 'N'
+    USED = 'U'
+    PLAYING = 'P'
+    LOCAL = 'L'
+    PARITY = 'R'
+    VISITOR = 'V'
+    UNKNOW = 'U'
+    NOT_USED = 'T'
+    STATES = (
+        ('N', 'new'),
+        ('U', 'used'),
+        ('P', 'playing'),
+        ('L', 'local'),
+        ('R', 'parity'),
+        ('V', 'visitor'),
+        ('U', 'unknow'),
+        ('T', 'not used'),
     )
     local_team = models.ForeignKey(
         'football.Team', on_delete=models.CASCADE, related_name='local_team')
     visitor_team = models.ForeignKey('football.Team', on_delete=models.CASCADE)
     local_score = models.IntegerField(null=True, blank=True)
     visitor_score = models.IntegerField(null=True, blank=True)
-    match_state = models.IntegerField(
-        choices=MATCH_STATES, default=MATCH_STATES[0][0])
+    state = models.CharField(max_length=1, choices=STATES, default=NEW)
     local_factor = models.FloatField()
     parity_factor = models.FloatField()
     visitor_factor = models.FloatField()
@@ -60,3 +65,7 @@ class Match(TimeStampedModel):
 
     def __str__(self):
         return '%s - %s' % (self.local_team.name, self.visitor_team.name)
+
+    class Meta:
+        verbose_name = "match"
+        verbose_name_plural = "matches"

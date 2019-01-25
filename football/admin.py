@@ -7,7 +7,7 @@ class MatchAdmin(admin.ModelAdmin):
 
     list_display = (
         '__str__',
-        'match_state',
+        'state',
         'start_datetime',
         'local_factor',
         'parity_factor',
@@ -15,7 +15,7 @@ class MatchAdmin(admin.ModelAdmin):
     )
 
     list_filter = (
-        'match_state',
+        'state',
         'parity_factor',
         'start_datetime',
     )

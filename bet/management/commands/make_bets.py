@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+# TODO: Delete all the utc logic
 import pytz
 
 from django.core.management.base import BaseCommand
@@ -15,6 +16,7 @@ from bet.utils import (
     send_alert,
     check_time_for_attemps,
 )
+# TODO: Use the complete name
 from bet.constants import (
     INIT_AMOUNT,
     FIRST_VAL_FORMULA as f_v_f,
@@ -22,7 +24,7 @@ from bet.constants import (
     THRID_VALUE_FORMULA as t_v_f,
     MATCH_SUSPENDED_HOURS as m_s_h
 )
-from football.constants import MATCH_STATES
+from football.models import Match
 
 utc = pytz.UTC
 
@@ -51,7 +53,7 @@ def make_bet(data_table, inkabet, data_id=0):
         print("amount: ", data_table.bet_amount)
 
     if not settings.EXEC_SELENIUM:
-        data_table.match.match_state = MATCH_STATES[2][0]
+        data_table.match.state = Match.PLAYING
         data_table.match.save()
         return True
     else:
@@ -66,7 +68,7 @@ def make_bet(data_table, inkabet, data_id=0):
                 my_match=match, amount=data_table.bet_amount)
         if res[0] is True:
             print("Bet made: ", res[1])
-            data_table.match.match_state = MATCH_STATES[2][0]
+            data_table.match.state = Match.PLAYING
             data_table.match.local_factor = float(res[2][0])
             data_table.match.parity_factor = float(res[2][1])
             data_table.match.visitor_factor = float(res[2][2])
@@ -93,7 +95,7 @@ def update_table(table, current):
 
 def set_residue_matches(residue):
     for r in residue:
-        r.match.match_state = MATCH_STATES[0][0]
+        r.match.state = Match.NEW
         r.match.save()
 
 
@@ -106,10 +108,10 @@ def suspended_match(current):
 
 
 def remove_match_suspended(current):
-    current.match.match_state = MATCH_STATES[1][0]
+    current.match.state = Match.USED
     current.match.save()
     if current.previous:
-        current.previous.state = STATES_DATA_TABLE[4][0]
+        current.previous.state = DataTable.WAITING
         current.previous.save()
         current.delete()
     else:
@@ -127,66 +129,69 @@ class Command(BaseCommand):
         for table in available_tables:
             current = DataTable.objects.filter(
                 Q(bet_table=table),
-                Q(state=STATES_DATA_TABLE[1][0]) | Q(
-                    state=STATES_DATA_TABLE[4][0]) | Q(
-                    state=STATES_DATA_TABLE[6][0]) | Q(
-                    state=STATES_DATA_TABLE[7][0]))
+                Q(state=DataTable.CURRENT) | Q(state=DataTable.WAITING))
             if not current:
                 current = DataTable.objects.filter(
-                    bet_table=table, state=STATES_DATA_TABLE[0][0]).order_by(
+                    bet_table=table, state=DataTable.NEW).order_by(
                     'match__start_datetime').first()
                 if not current:
                     continue
                 iteration = count_iteration(table, current)
                 state_bet = make_bet(current, inkabet, data_id=iteration)
                 if state_bet:
-                    current.state = STATES_DATA_TABLE[1][0]
+                    current.state = DataTable.CURRENT
                     current.save()
                 continue
             else:
+                # TODO: Verify if this match is the next one in time to pick
+                #  the nearest one
                 current = current.first()
 
             # TODO: Call functions inside every if to modularize this
             # PLAYING THE BED
-            if current.match.match_state == MATCH_STATES[2][0]:
+            if current.match.state == Match.PLAYING:
                 if suspended_match(current):
                     remove_match_suspended(current)
                     break
                 continue
 
             # WON THE BED OF TABLE
-            if current.match.match_state == MATCH_STATES[4][0]:
-                current.state = STATES_DATA_TABLE[2][0]
+            if current.match.state == Match.PARITY:
+                current.state = DataTable.WON
                 current.profit = (
                     current.bet_amount * current.match.parity_factor)
                 current.save()
                 residue = DataTable.objects.filter(
-                    bet_table=table, state=STATES_DATA_TABLE[0][0]).order_by(
+                    bet_table=table, state=DataTable.NEW).order_by(
                     'match__start_datetime')
                 set_residue_matches(residue)
                 residue.delete()
                 update_table(table, current)
 
             # LOST THE BED FOR MATCH - DATA_TABLE
-            if (current.match.match_state == MATCH_STATES[3][0] or
-                    current.match.match_state >= MATCH_STATES[5][0]):
-                current.state = STATES_DATA_TABLE[3][0]
+            # TODO: Move this logic to a function on Match
+            if (current.match.state == Match.LOCAL or
+                    current.match.state == Match.VISITOR or
+                    current.match.state == Match.UNKNOW or
+                    current.match.state == Match.NOT_USED):
+                current.state = DataTable.LOST
                 current.profit = current.bet_amount * (-1)
                 current.save()
 
                 currents = DataTable.objects.filter(
-                    bet_table=table, state=STATES_DATA_TABLE[0][0]).order_by(
+                    bet_table=table, state=DataTable.NEW).order_by(
                     'match__start_datetime')
                 if not currents:
-                    current.state = STATES_DATA_TABLE[4][0]
+                    current.state = DataTable.WAITING
                     current.save()
                     print("MAKE_BET after WAITING")
                 else:
                     print("make beet")
                     print("currents: ", currents)
+                    # TODO: Select the nearest match in time, not the first one
                     current = currents.first()
                     iteration = count_iteration(table, current)
                     state_bet = make_bet(current, inkabet, data_id=iteration)
                     if state_bet:
-                        current.state = STATES_DATA_TABLE[1][0]
+                        current.state = DataTable.CURRENT
                         current.save()
