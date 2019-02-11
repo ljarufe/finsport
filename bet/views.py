@@ -7,8 +7,8 @@ from django.views.generic.list import ListView
 from django.views.generic import TemplateView
 from django.db.models import Sum
 
+from football.models import Match
 from .models import BetTable, DataTable
-from .constants import TEAM_DIFFERENCE, MIN_PER_TEAM, MIN_PARITY
 
 # TODO: move it to the account model
 COIN = 'S/'
@@ -197,9 +197,9 @@ class StatisticView(TemplateView):
         context = self.results_by_time(
             context,
             time={'word': 'last_month', 'created__gt': from_date})
-        context['team_difference'] = TEAM_DIFFERENCE
-        context['min_per_team'] = MIN_PER_TEAM
-        context['min_parity'] = MIN_PARITY
+        context['team_difference'] = Match.TEAM_DIFFERENCE
+        context['min_per_team'] = Match.MIN_PER_TEAM
+        context['min_parity'] = Match.MIN_PARITY
         context['git_tag'] = git.tag
 
         return context

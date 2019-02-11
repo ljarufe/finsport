@@ -17,7 +17,6 @@ from bet.constants import (
     MIN_VAL_INIT
 )
 from bet.utils import count_iteration
-from bet.rules import Rules
 
 utc = pytz.UTC
 
@@ -54,7 +53,7 @@ def exist_current(table):
 
 def filter_parity_factor(match, first=False, table=None, current=None):
 
-    if Rules.evaluate(
+    if Match.check_rules(
             match.local_factor, match.parity_factor, match.visitor_factor):
         if first:
             if match.parity_factor >= MIN_VAL_INIT:

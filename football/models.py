@@ -13,7 +13,6 @@ class League(TimeStampedModel):
         return self.name
 
 
-# TODO: is this models used?
 class LeagueRelatedName(models.Model):
     league = models.ForeignKey(League, on_delete=models.CASCADE)
     related_name = models.CharField(max_length=250)
@@ -26,13 +25,16 @@ class Team(TimeStampedModel):
     name = models.CharField(max_length=250)
     league = models.ForeignKey(
         'football.League', on_delete=models.CASCADE, null=True, blank=True)
-    factor = models.FloatField(null=True, blank=True)
 
     def __str__(self):
-        return self.name
+        return "{name}: {league}".format(name=self.name, league=self.league)
 
 
 class Match(TimeStampedModel):
+    TEAM_DIFFERENCE = 4
+    MIN_PER_TEAM = 1.5
+    MIN_PARITY = 3
+
     NEW = 'N'
     USED = 'U'
     PLAYING = 'P'
@@ -61,10 +63,23 @@ class Match(TimeStampedModel):
     parity_factor = models.FloatField()
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
-    ent_datetime = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return '%s - %s' % (self.local_team.name, self.visitor_team.name)
+        return "{local} - {visitor}: {league}".format(
+            local=self.local_team.name,
+            visitor=self.visitor_team.name,
+            league=self.local_team.league)
+
+    @classmethod
+    def check_rules(cls, local, parity, visitor):
+        if not abs(local - visitor) <= cls.TEAM_DIFFERENCE:
+            return False
+        if not (local >= cls.MIN_PER_TEAM) or not (visitor >= cls.MIN_PER_TEAM):
+            return False
+        if not parity >= cls.MIN_PARITY:
+            return False
+
+        return True
 
     class Meta:
         verbose_name = "match"

@@ -54,8 +54,6 @@ $ mkdir db_backup
 $ cd ..
 $ touch logs/messages.log
 $ mkdir selenium-data
-$ cd ..
-$ mkdir spider-data 
 ```
 
 ### Install chrome and get a chromedriver

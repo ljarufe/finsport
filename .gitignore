@@ -260,7 +260,6 @@ fabric.properties
 .venv/
 
 # Project
-spider-data/*
 selenium-data/*
 
 # End of https://www.gitignore.io/api/python,django,pycharm

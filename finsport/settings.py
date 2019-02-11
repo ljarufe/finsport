@@ -55,7 +55,6 @@ INSTALLED_APPS = [
     # local apps
     'football',
     'bet',
-    'spider',
     'accounts',
     # third parties
     'debug_toolbar',
@@ -136,10 +135,6 @@ MEDIA_ROOT = '%s/media/' % str(root - 1)
 MEDIA_URL = '/media/'
 STATIC_ROOT = '%s/static/' % str(root - 1)
 STATIC_URL = '/static/'
-try:
-    SPIDER_DATA_PATH = env('SPIDER_DATA_PATH')
-except Exception as err:
-    SPIDER_DATA_PATH = '%s/spider-data' % (SITE_ROOT)
 
 SELENIUM_DATA = env('SELENIUM_DATA')
 ENV_FOLDER = env('ENV_FOLDER')

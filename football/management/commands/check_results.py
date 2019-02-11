@@ -4,7 +4,7 @@ import json
 import os
 
 from scrapy.crawler import CrawlerProcess
-from spider.spider.spiders.results_spider import ResultsSpider
+from bet_scraper.bet_scraper.spiders.results_spider import ResultsSpider
 
 from django.core.management.base import BaseCommand
 from django.conf import settings

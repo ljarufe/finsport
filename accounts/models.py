@@ -2,7 +2,7 @@ from fernet_fields import EncryptedCharField
 
 from django.db import models
 
-from spider.spider.spiders.inkabet_spider import InkabetSpider
+from bet_scraper.bet_scraper.spiders.inkabet_spider import InkabetSpider
 
 
 class BetPage(models.Model):
@@ -10,14 +10,14 @@ class BetPage(models.Model):
     Bet page
     """
 
+    BET_PAGE_SPIDERS = {
+        'inkabet': InkabetSpider,
+    }
+
     name = models.CharField(max_length=250)
     domain = models.URLField()
     match_list_url = models.URLField()
     active = models.BooleanField()
-
-    BET_PAGE_SPIDERS = {
-        'inkabet': InkabetSpider,
-    }
 
     def __str__(self):
         return '{name}'.format(name=self.name)
