@@ -8,7 +8,7 @@ from django.views.generic import TemplateView
 from django.db.models import Sum
 
 from football.models import Match
-from .models import BetTable, DataTable
+from .models import BetTable, BetRow
 
 # TODO: move it to the account model
 COIN = 'S/'
@@ -41,7 +41,7 @@ class BetTableListView(ListView):
 
         for i, table in enumerate(context['bettable_list'], start=1):
             table.state = table.get_state_display()
-            data_table = DataTable.objects.filter(
+            data_table = BetRow.objects.filter(
                 bet_table=table).select_related(
                 'match__local_team',
                 'match__visitor_team').order_by('match__start_datetime')
@@ -55,9 +55,9 @@ class BetTableListView(ListView):
             total_profit_tables = round(
                 total_profit_tables, 2) + table.total_profit
             if not table.total_inversion and data_table.exclude(
-                    state=DataTable.NEW):
+                    state=BetRow.NEW):
                 total_inversion_tables_availables += data_table.exclude(
-                    state=DataTable.NEW).last().inversion_amount
+                    state=BetRow.NEW).last().inversion_amount
             total_inversion_tables += table.total_inversion
         context['total_profit_tables'] = round(total_profit_tables, 2)
         context['total_inversion_tables'] = (
@@ -107,13 +107,13 @@ class StatisticView(TemplateView):
 
         total_inversion_amount = 0.0
         for table in BetTable.objects.filter(**time):
-            data_table = DataTable.objects.filter(
+            data_table = BetRow.objects.filter(
                 bet_table=table).select_related(
                 'match__local_team',
                 'match__visitor_team').order_by('match__start_datetime')
             try:
                 total_inversion_amount += data_table.exclude(
-                    state=DataTable.NEW).last().inversion_amount
+                    state=BetRow.NEW).last().inversion_amount
             except AttributeError:
                 total_inversion_amount = 0
         context['total_inversion_amount%s' % w] = round(
@@ -155,10 +155,10 @@ class StatisticView(TemplateView):
             inversion = 0.0
             tables = BetTable.objects.filter(state=BetTable.FINISHED)
             for table in tables:
-                num_datatables = DataTable.objects.filter(
+                num_datatables = BetRow.objects.filter(
                     bet_table=table).count()
                 if iteration == num_datatables:
-                    won_datatable = DataTable.objects.filter(
+                    won_datatable = BetRow.objects.filter(
                         bet_table=table).order_by(
                         'match__start_datetime').last()
                     net_profit += (

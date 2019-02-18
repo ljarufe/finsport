@@ -20,7 +20,7 @@ class InkabetSpider(Spider):
             factors = []
             for td in tr.css('td'):
                 if 'outcome' in td.xpath("@class").extract()[0]:
-                    factors.append(float(td.css('a::text').extract_first()))
+                    factors.append(td.css('a::text').extract_first())
                 if 'event' in td.xpath("@class").extract()[0]:
                     match = td.css('a::text').extract_first().strip()
                 if 'date_time' in td.xpath("@class").extract()[0]:
@@ -29,6 +29,7 @@ class InkabetSpider(Spider):
                         '%d-%m-%y %H:%M')
             if not len(factors) > 3:
                 continue
+            factors = list(map(lambda x: float(x), factors[:3]))
 
             yield MatchItem(
                 local_team=match.split(' - ')[0],

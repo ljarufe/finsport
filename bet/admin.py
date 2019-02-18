@@ -1,11 +1,11 @@
 from django.contrib import admin
 
-from .models import BetTable, DataTable
+from .models import BetTable, BetRow
 
 
 class DataTableInline(admin.TabularInline):
 
-    model = DataTable
+    model = BetRow
     extra = 0
     ordering = ("created", )
 
@@ -33,4 +33,4 @@ class DataTableAdmin(admin.ModelAdmin):
 
 
 admin.site.register(BetTable, BetTableAdmin)
-admin.site.register(DataTable, DataTableAdmin)
+admin.site.register(BetRow, DataTableAdmin)

@@ -21,17 +21,10 @@ environ.Env.read_env('%s/.env' % str(root - 1))
 
 SITE_ROOT = root()
 
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/2.1/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = env('SECRET_KEY')
 
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG')
 
 try:
@@ -95,9 +88,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'finsport.wsgi.application'
 
-# Password validation
-# https://docs.djangoproject.com/en/2.1/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -113,23 +103,9 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
-# Internationalization
-# https://docs.djangoproject.com/en/2.1/topics/i18n/
-
-LANGUAGE_CODE = 'en'
+LANGUAGE_CODE = 'es-pe'
 
 TIME_ZONE = 'America/Lima'
-
-USE_I18N = True
-
-USE_L10N = True
-
-USE_TZ = True
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/2.1/howto/static-files/
 
 MEDIA_ROOT = '%s/media/' % str(root - 1)
 MEDIA_URL = '/media/'
@@ -137,13 +113,13 @@ STATIC_ROOT = '%s/static/' % str(root - 1)
 STATIC_URL = '/static/'
 
 SELENIUM_DATA = env('SELENIUM_DATA')
+
 ENV_FOLDER = env('ENV_FOLDER')
-USERR = env('USER')
-PACON = env('PACON')
 
 EXEC_SELENIUM = env('EXEC_SELENIUM')
 
 ENVIRONMENTS = json.loads(env('ENVIRONMENTS'))
+
 DB_BACKUP_DIR = os.path.join(BASE_DIR, '../backups/')
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -154,3 +130,5 @@ EMAIL_PORT = 587
 EMAIL_HOST_USER = 'luisjarufe@gmail.com'
 EMAIL_HOST_PASSWORD = 'Elchocloamarillo7'
 INSTANCE_DOMAIN = env('INSTANCE_DOMAIN')
+
+DATE_FORMAT = "%d de %B del %Y, %H:%M"

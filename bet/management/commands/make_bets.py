@@ -9,7 +9,7 @@ from django.conf import settings
 from datetime import timedelta, datetime
 
 from accounts.models import Account
-from bet.models import BetTable, DataTable
+from bet.models import BetTable, BetRow
 from bet.utils import (
     make_bet_selenium,
     count_iteration,
@@ -81,7 +81,7 @@ def make_bet(data_table, inkabet, data_id=0):
 
 # TODO: move to BetTable as a method
 def update_table(table, current):
-    total_inversion_list = DataTable.objects.filter(
+    total_inversion_list = BetRow.objects.filter(
         bet_table=table).values_list('bet_amount', flat=True)
     bucle_number = len(total_inversion_list)
     table.total_profit = current.profit - current.inversion_amount
@@ -93,6 +93,8 @@ def update_table(table, current):
     send_alert(table)
 
 
+# TODO: All the not used matches for today must be set them to new if they are
+#  not in the past
 def set_residue_matches(residue):
     for r in residue:
         r.match.state = Match.NEW
@@ -111,7 +113,7 @@ def remove_match_suspended(current):
     current.match.state = Match.USED
     current.match.save()
     if current.previous:
-        current.previous.state = DataTable.WAITING
+        current.previous.state = BetRow.WAITING
         current.previous.save()
         current.delete()
     else:
@@ -127,19 +129,19 @@ class Command(BaseCommand):
             bet_page__name__iexact="inkabet").first()
         available_tables = BetTable.objects.filter(state=BetTable.AVAILABLE)
         for table in available_tables:
-            current = DataTable.objects.filter(
+            current = BetRow.objects.filter(
                 Q(bet_table=table),
-                Q(state=DataTable.CURRENT) | Q(state=DataTable.WAITING))
+                Q(state=BetRow.CURRENT) | Q(state=BetRow.WAITING))
             if not current:
-                current = DataTable.objects.filter(
-                    bet_table=table, state=DataTable.NEW).order_by(
+                current = BetRow.objects.filter(
+                    bet_table=table, state=BetRow.NEW).order_by(
                     'match__start_datetime').first()
                 if not current:
                     continue
                 iteration = count_iteration(table, current)
                 state_bet = make_bet(current, inkabet, data_id=iteration)
                 if state_bet:
-                    current.state = DataTable.CURRENT
+                    current.state = BetRow.CURRENT
                     current.save()
                 continue
             else:
@@ -157,12 +159,12 @@ class Command(BaseCommand):
 
             # WON THE BED OF TABLE
             if current.match.state == Match.PARITY:
-                current.state = DataTable.WON
+                current.state = BetRow.WON
                 current.profit = (
                     current.bet_amount * current.match.parity_factor)
                 current.save()
-                residue = DataTable.objects.filter(
-                    bet_table=table, state=DataTable.NEW).order_by(
+                residue = BetRow.objects.filter(
+                    bet_table=table, state=BetRow.NEW).order_by(
                     'match__start_datetime')
                 set_residue_matches(residue)
                 residue.delete()
@@ -174,15 +176,15 @@ class Command(BaseCommand):
                     current.match.state == Match.VISITOR or
                     current.match.state == Match.UNKNOW or
                     current.match.state == Match.NOT_USED):
-                current.state = DataTable.LOST
+                current.state = BetRow.LOST
                 current.profit = current.bet_amount * (-1)
                 current.save()
 
-                currents = DataTable.objects.filter(
-                    bet_table=table, state=DataTable.NEW).order_by(
+                currents = BetRow.objects.filter(
+                    bet_table=table, state=BetRow.NEW).order_by(
                     'match__start_datetime')
                 if not currents:
-                    current.state = DataTable.WAITING
+                    current.state = BetRow.WAITING
                     current.save()
                     print("MAKE_BET after WAITING")
                 else:
@@ -193,5 +195,5 @@ class Command(BaseCommand):
                     iteration = count_iteration(table, current)
                     state_bet = make_bet(current, inkabet, data_id=iteration)
                     if state_bet:
-                        current.state = DataTable.CURRENT
+                        current.state = BetRow.CURRENT
                         current.save()
