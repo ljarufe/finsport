@@ -6,11 +6,12 @@ from scrapy import Spider
 from bet_scraper.bet_scraper.items import MatchItem
 
 
-class InkabetSpider(Spider):
+class InkabetMatchSpider(Spider):
     name = "inkabet"
     start_urls = ['https://www.inkabet.pe/es-ES/sportsbook/eventpaths/240']
 
     def parse(self, response):
+        # TODO: cambiar todo esto
         table = response.css(
             'div.today_weekend_coupon_container table tbody tr')
         for i, tr in enumerate(table, start=10):

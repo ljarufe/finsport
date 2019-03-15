@@ -1,29 +1,35 @@
-from fernet_fields import EncryptedCharField
-
+from django.conf import settings
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.utils.safestring import mark_safe
 from django.db import models
 
-from bet_scraper.bet_scraper.spiders.inkabet_spider import InkabetSpider
+from fernet_fields import EncryptedCharField
+
+from bet.selenium_bots.inkabet_selenium_bot import InkabetSeleniumBot
+from bet_scraper.bet_scraper.spiders.inkabet_spider import InkabetMatchSpider
 
 
 class BetPage(models.Model):
-    """
-    Bet page
-    """
-
-    BET_PAGE_SPIDERS = {
-        'inkabet': InkabetSpider,
-    }
-
     name = models.CharField(max_length=250)
     domain = models.URLField()
     match_list_url = models.URLField()
     active = models.BooleanField()
 
+    BET_PAGE_BOTS = {
+        'inkabet': {
+            'match_spider': InkabetMatchSpider,
+            'selenium_bot': InkabetSeleniumBot},
+    }
+
     def __str__(self):
         return '{name}'.format(name=self.name)
 
-    def get_spider(self):
-        return self.BET_PAGE_SPIDERS[self.name.lower()]
+    def get_match_spider(self):
+        return self.BET_PAGE_BOTS[self.name.lower()]['match_spider']
+
+    def get_selenium_bot(self):
+        return self.BET_PAGE_BOTS[self.name.lower()]['selenium_bot']
 
     class Meta:
         verbose_name = 'Bet Page'
@@ -31,25 +37,28 @@ class BetPage(models.Model):
 
 
 class Account(models.Model):
-    """
-    Bet page account
-    """
-
     username = models.CharField(max_length=64)
     password = EncryptedCharField(max_length=32)
-    minimum_bet = models.IntegerField()
+    email = models.EmailField()
     bet_page = models.ForeignKey(BetPage, on_delete=models.CASCADE)
     funds = models.FloatField(default=0.0)
-    profit_to_tables = models.FloatField(default=0.0)
-    profit_to_tables_index = models.FloatField(default=0.0)
     num_allow_tables = models.IntegerField(default=1)
+    start_bet = models.IntegerField()
 
     def __str__(self):
         return '%s' % self.username
 
+    def send_finished_table(self, table):
+        context = dict(
+            table=table,
+            link="{}{}".format(settings.INSTANCE_DOMAIN, 'bet/tables/?state=F'))
+        send_mail(
+            subject='Tabla finalizada',
+            message=mark_safe(render_to_string(
+                'mails/finished_table.html', context)),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[self.email])
+
     class Meta:
         verbose_name = 'Account'
         verbose_name_plural = 'Accounts'
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)

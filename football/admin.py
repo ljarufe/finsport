@@ -6,19 +6,10 @@ from .models import Match, Team, League, LeagueRelatedName
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
     list_display = (
-        '__str__',
-        'state',
-        'start_datetime',
-        'local_factor',
-        'parity_factor',
-        'visitor_factor',
-    )
-    list_filter = (
-        'state',
-        'parity_factor',
-        'start_datetime',
-    )
-    search_fields = ('local_team__name', 'visitor_team__name')
+        '__str__', 'state', 'start_datetime', 'local_factor', 'parity_factor',
+        'visitor_factor',)
+    list_filter = ('state', 'start_datetime',)
+    search_fields = ('local_team__name', 'visitor_team__name',)
 
 
 @admin.register(Team)

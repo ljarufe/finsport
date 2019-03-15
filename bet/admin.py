@@ -4,33 +4,18 @@ from .models import BetTable, BetRow
 
 
 class DataTableInline(admin.TabularInline):
-
     model = BetRow
     extra = 0
-    ordering = ("created", )
+    ordering = ("created",)
 
 
+@admin.register(BetTable)
 class BetTableAdmin(admin.ModelAdmin):
-    list_display = (
-        '__str__',
-        'created',
-        'state',
-        'total_inversion',
-        'total_profit',
-    )
-
+    list_display = ('created', 'state', 'total_inversion', 'total_profit')
     list_filter = ('created', 'state')
-
-    inlines = [DataTableInline, ]
-
-
-class DataTableAdmin(admin.ModelAdmin):
-
-    list_display = (
-        '__str__',
-        'state'
-    )
+    inlines = [DataTableInline]
 
 
-admin.site.register(BetTable, BetTableAdmin)
-admin.site.register(BetRow, DataTableAdmin)
+@admin.register(BetRow)
+class BetRowAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'state')

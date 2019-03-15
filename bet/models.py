@@ -11,6 +11,7 @@ from football.models import Match
 
 
 class BetTable(TimeStampedModel):
+    # TODO: Aumentar la cuenta como campo
     AVAILABLE = 'A'
     FINISHED = 'F'
     STATES = (
@@ -28,7 +29,7 @@ class BetTable(TimeStampedModel):
         matches = Match.objects.filter(
             state=Match.NEW).order_by('start_datetime')
         available_tables = list(BetTable.objects.filter(
-            state=BetTable.AVAILABLE).order_by('-created'))
+            state=BetTable.AVAILABLE).order_by('created'))
         for match in matches:
             if len(available_tables) < max_tables:
                 if match.is_usable():
@@ -36,10 +37,12 @@ class BetTable(TimeStampedModel):
             else:
                 for table in available_tables:
                     bet_row = BetRow.objects.filter(bet_table=table).first()
-                    if match.is_usable(table.betrow_set.count()):
+                    iteration = table.betrow_set.count()
+                    if match.is_usable(iteration):
                         if match.has_bet_time(bet_row):
                             BetRow.objects.create(
-                                match=match, bet_table=table, previous=bet_row)
+                                match=match, bet_table=table, previous=bet_row,
+                                iteration=iteration)
                             match.set_used()
                             break
                     else:
@@ -59,6 +62,27 @@ class BetTable(TimeStampedModel):
 
     def __str__(self):
         return "{id} - {name}".format(id=self.id, name=self.name)
+
+    def set_finished(self, account, bet_row):
+        bet_row.set_won()
+        residual_rows = BetRow.objects.filter(bet_table=self, state=BetRow.NEW)
+        map(lambda row: row.match.set_new(), residual_rows)
+        residual_rows.delete()
+        self.total_profit = bet_row.profit - bet_row.inversion_amount
+        self.bucle_number = BetRow.objects.filter(bet_table=self).count()
+        self.total_inversion = bet_row.inversion_amount
+        self.state = BetTable.FINISHED
+        self.save()
+        account.send_finished_table(self)
+
+    def make_bet(self, account, bet_selenium):
+        bet_rows = BetRow.objects.filter(
+            bet_table=self, state=BetRow.NEW
+        ).order_by('match__start_datetime')
+        if bet_rows.exists():
+            bet_row = bet_rows.first()
+            if bet_row.make_bet(account, bet_selenium):
+                bet_row.set_current()
 
 
 class MatchManager(models.Manager):
@@ -89,7 +113,13 @@ class BetRow(TimeStampedModel):
     previous = models.ForeignKey(
         'bet.BetRow', on_delete=models.CASCADE,
         related_name='previous_data', null=True, blank=True)
+    iteration = models.PositiveSmallIntegerField(default=0)
+
     objects = MatchManager()
+
+    # TODO: change when the new formula will be running
+    FIRST_EARN = 44
+    DEVIATION = 0.54
 
     def __str__(self):
         return "{local} - {visitor} BET TABLE: {bet}".format(
@@ -97,3 +127,56 @@ class BetRow(TimeStampedModel):
             visitor=self.match.visitor_team.name,
             bet=self.bet_table
         )
+
+    def set_current(self):
+        self.state = BetRow.CURRENT
+        self.save()
+
+    def set_won(self):
+        self.state = BetRow.WON
+        self.profit = self.bet_amount * self.match.parity_factor
+        self.save()
+
+    def set_lost(self):
+        self.state = BetRow.LOST
+        self.profit = self.bet_amount * (-1)
+        self.save()
+
+    def set_waiting(self):
+        self.state = BetRow.WAITING
+        self.profit = self.bet_amount * (-1)
+        self.save()
+
+    def make_bet(self, account, bet_selenium):
+        self.bet_amount = self.get_bet_amount(account)
+        self.inversion_amount = self.get_inversion_amount(account)
+        have_bet = bet_selenium.make_bet(self)
+        if have_bet:
+            self.save()
+            self.match.set_playing()
+            return True
+
+        return False
+
+    def get_bet_amount(self, account):
+        if self.previous:
+            amount = BetRow.FIRST_EARN * (BetRow.DEVIATION**self.iteration) + (
+                self.previous.inversion_amount) / self.match.parity_factor - 1
+        else:
+            amount = account.start_bet
+
+        return round(amount, 2)
+
+    def get_inversion_amount(self, account):
+        if self.previous:
+            return self.previous.inversion_amount + self.bet_amount
+        else:
+            return account.start_bet
+
+    def remove_match(self):
+        self.match.set_used()
+        if self.previous:
+            self.previous.set_waiting()
+            self.delete()
+        else:
+            self.bet_table.delete()

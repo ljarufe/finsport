@@ -1,5 +1,5 @@
 # Finsport
-(Tested on 16.04.1-Ubuntu or greater)
+(Tested on 18.04 Ubuntu or greater)
 
 ## Installation
 There is the complete list of packages required by the project

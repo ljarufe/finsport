@@ -46,6 +46,7 @@ class Match(TimeStampedModel):
         ('U', 'used'),
         ('P', 'playing'),
         ('L', 'local'),
+        # TODO: cambiar parity por draw en todo el código
         ('R', 'parity'),
         ('V', 'visitor'),
         ('K', 'unknow'),
@@ -62,11 +63,13 @@ class Match(TimeStampedModel):
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
 
+    # TODO: Cambiar todas las reglas
     TEAM_DIFFERENCE = 4
     MIN_PER_TEAM = 1.5
     MIN_PARITY = 3.2
     STEP_PARITY_FORMULA = 0.04
     LAPSE = timedelta(minutes=130)
+    TRIAL_LAPSE = 180
 
     def __str__(self):
         return "{local} - {visitor} ({league}), {date}".format(
@@ -75,20 +78,30 @@ class Match(TimeStampedModel):
             league=self.local_team.league,
             date=self.start_datetime)
 
+    def set_new(self):
+        self.state = Match.NEW
+        self.save()
+
     def set_used(self):
         self.state = Match.USED
+        self.save()
+
+    def set_playing(self):
+        self.state = Match.PLAYING
         self.save()
 
     def set_not_used(self):
         self.state = Match.NOT_USED
         self.save()
 
-    def is_usable(self, iteration=1):
-        is_usable = self.start_datetime > datetime.now() and Match.check_rules(
+    def is_usable(self, iteration=0):
+        is_usable = Match.check_rules(
+            self.start_datetime,
             self.local_factor,
             self.parity_factor,
             self.visitor_factor,
-            iteration)
+            iteration
+        )
         if not is_usable:
             self.set_not_used()
 
@@ -97,13 +110,20 @@ class Match(TimeStampedModel):
     def has_bet_time(self, bet_row):
         return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
 
+    def is_suspended(self):
+        difference = (datetime.now() - self.start_datetime).total_seconds() / 60
+
+        return Match.TRIAL_LAPSE < difference
+
     @classmethod
-    def check_rules(cls, local, parity, visitor, iteration=0):
-        if not abs(local - visitor) <= cls.TEAM_DIFFERENCE:
+    def check_rules(cls, start_datetime, local, parity, visitor, iteration=0):
+        if start_datetime <= datetime.now():
             return False
-        if not (local >= cls.MIN_PER_TEAM) or not (visitor >= cls.MIN_PER_TEAM):
+        if abs(local - visitor) > cls.TEAM_DIFFERENCE:
             return False
-        if not parity >= cls.MIN_PARITY + cls.STEP_PARITY_FORMULA * iteration:
+        if parity < cls.MIN_PARITY + cls.STEP_PARITY_FORMULA * iteration:
+            return False
+        if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
             return False
 
         return True

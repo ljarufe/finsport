@@ -8,16 +8,16 @@ class AccountAdminForm(ModelForm):
     class Meta:
         model = Account
         fields = '__all__'
-        widgets = {'password': PasswordInput(render_value=True),}
+        widgets = {'password': PasswordInput(render_value=True)}
 
 
 class AccountAdmin(admin.ModelAdmin):
     form = AccountAdminForm
-    list_display = ('username', 'bet_page', 'funds', 'profit_to_tables',)
+    list_display = ('username', 'bet_page', 'email', 'funds')
 
 
 class BetPageAdmin(admin.ModelAdmin):
-    list_display = ('name', 'domain', 'match_list_url', 'active',)
+    list_display = ('name', 'domain', 'active',)
 
 
 admin.site.register(BetPage, BetPageAdmin)

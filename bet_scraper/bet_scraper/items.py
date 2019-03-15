@@ -11,3 +11,10 @@ class MatchItem(scrapy.Item):
     parity_factor = scrapy.Field()
     visitor_factor = scrapy.Field()
     start_datetime = scrapy.Field()
+
+
+class MatchResultItem(scrapy.Item):
+    local_team = scrapy.Field()
+    visitor_team = scrapy.Field()
+    local_score = scrapy.Field()
+    visitor_score = scrapy.Field()
