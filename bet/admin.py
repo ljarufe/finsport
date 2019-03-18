@@ -11,11 +11,15 @@ class DataTableInline(admin.TabularInline):
 
 @admin.register(BetTable)
 class BetTableAdmin(admin.ModelAdmin):
-    list_display = ('created', 'state', 'total_inversion', 'total_profit')
-    list_filter = ('created', 'state')
+    list_display = (
+        'created', 'state', 'bucle_number', 'total_inversion', 'total_profit',)
+    list_filter = ('created', 'state', 'bucle_number',)
     inlines = [DataTableInline]
 
 
 @admin.register(BetRow)
 class BetRowAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'state')
+    list_display = (
+        'match', 'bet_table', 'state', 'bet_amount', 'profit',)
+    list_filter = ('state', 'iteration',)
+    search_fields = ('match__local_team', 'match__visitor_team',)

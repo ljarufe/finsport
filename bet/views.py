@@ -22,7 +22,6 @@ class BetTableListView(ListView):
         self.state = BetTable.FINISHED
         super(BetTableListView, self).__init__(**kwargs)
 
-    # TODO: change the get parameter for the letter in the bettable dictionary
     def dispatch(self, request, *args, **kwargs):
         self.state = request.GET.get('state', BetTable.FINISHED)
 

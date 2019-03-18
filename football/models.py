@@ -4,15 +4,16 @@ from datetime import timedelta, datetime
 
 from django.db import models
 
+from django_countries.fields import CountryField
 from django_extensions.db.models import TimeStampedModel
 
 
 class League(TimeStampedModel):
     name = models.CharField(max_length=250)
-    country = models.CharField(max_length=128, blank=True)
+    country = CountryField(blank_label='(select country)')
 
     def __str__(self):
-        return self.name
+        return "{country} {name}".format(country=self.country, name=self.name)
 
 
 class LeagueRelatedName(models.Model):
@@ -63,9 +64,10 @@ class Match(TimeStampedModel):
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
 
-    TEAM_DIFFERENCE = 3
+    TEAM_DIFFERENCE = 2.5
     MIN_PER_TEAM = 1.5
     MIN_PARITY = 2.5
+    MAX_PARITY = 4.5
     LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 180
 
@@ -129,7 +131,7 @@ class Match(TimeStampedModel):
             return False
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
             return False
-        if parity < cls.MIN_PARITY:
+        if cls.MIN_PARITY < parity < cls.MAX_PARITY:
             return False
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
             return False

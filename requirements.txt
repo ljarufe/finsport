@@ -1,7 +1,6 @@
 Django==2.1.5
 django-bootstrap3==11.0.0
 django-debug==0.1.1
-django-debug-toolbar==1.9.1
 django-environ==0.4.5
 django-fernet-fields==0.5
 django-extensions==2.1.0
