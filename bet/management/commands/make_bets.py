@@ -21,3 +21,4 @@ class Command(BaseCommand):
                 for table in available_tables:
                     table.make_bet(account, bet_selenium)
                 bet_selenium.clean_driver()
+        print("... Commands finished!")
