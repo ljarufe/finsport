@@ -18,3 +18,9 @@ class MatchResultItem(scrapy.Item):
     visitor_team = scrapy.Field()
     local_score = scrapy.Field()
     visitor_score = scrapy.Field()
+
+
+class ResultMatchItem(scrapy.Item):
+    local_team = scrapy.Field()
+    visitor_team = scrapy.Field()
+    result = scrapy.Field()

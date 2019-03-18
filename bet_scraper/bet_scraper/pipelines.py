@@ -3,6 +3,7 @@ from datetime import datetime
 from django.db.models import Q
 from scrapy.exceptions import DropItem
 
+from bet.models import BetRow
 from football.models import Match, Team, LeagueRelatedName
 
 
@@ -60,16 +61,31 @@ class LivescorePipeline:
         if item['local_score'] != "?" and item['visitor_score'] != "?":
             local_query = Q()
             for word in item['local_team'].split():
-                local_query |= Q(local_team__name__icontains=word)
+                local_query |= Q(local_team__name__unaccent__icontains=word)
             visitor_query = Q()
             for word in item['visitor_team'].split():
-                visitor_query |= Q(visitor_team__name__icontains=word)
+                visitor_query |= Q(visitor_team__name__unaccent__icontains=word)
             matches = Match.objects.filter(local_query & visitor_query).filter(
                 start_datetime__date=datetime.today())
             if matches.exists():
+                # TODO: buscar los FT y poner quién ganó
                 matches.update(
                     local_score=int(item['local_score']),
                     visitor_score=int(item['visitor_score'])
                 )
 
-        raise DropItem("Match is not listed: %s" % item)
+        raise DropItem("This match is not finished yet: %s" % item)
+
+
+class ResultsPipeline:
+    def process_item(self, item, spider):
+        bet_rows = BetRow.objects.filter(
+            match__local_team__name__icontains=item['local_team'],
+            match__visitor_team__name__icontains=item['visitor_team'],
+            state=BetRow.CURRENT)
+        if bet_rows.exists():
+            bet_row = bet_rows.first()
+            if item['result'] is BetRow.WON:
+                bet_row.bet_table.set_finished(spider.account, bet_row)
+            else:
+                bet_row.set_lost()

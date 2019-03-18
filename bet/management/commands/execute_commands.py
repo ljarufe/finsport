@@ -15,6 +15,10 @@ class Command(BaseCommand):
             python=python,
             site_root=settings.SITE_ROOT,
             command='/manage.py check_results')
+        check_results_inkabet = '{python} {site_root}{command}'.format(
+            python=python,
+            site_root=settings.SITE_ROOT,
+            command='/manage.py check_results_inkabet')
         get_matches = '{python} {site_root}{command}'.format(
             python=python,
             site_root=settings.SITE_ROOT,
@@ -27,11 +31,13 @@ class Command(BaseCommand):
             site_root=settings.SITE_ROOT, command='/manage.py make_bets')
         commands = (
             "{check_results}; "
+            "{check_results_inkabet}; "            
             "{get_matches}; "
             "{fill_tables}; "
             "{make_bets}; "
         ).format(
             check_results=check_results,
+            check_results_inkabet=check_results_inkabet,
             get_matches=get_matches,
             fill_tables=fill_tables,
             make_bets=make_bets,

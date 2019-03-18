@@ -64,10 +64,9 @@ class Match(TimeStampedModel):
     start_datetime = models.DateTimeField()
 
     # TODO: Cambiar todas las reglas
-    TEAM_DIFFERENCE = 4
+    TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_PARITY = 3.2
-    STEP_PARITY_FORMULA = 0.04
+    MIN_PARITY = 3
     LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 180
 
@@ -94,13 +93,23 @@ class Match(TimeStampedModel):
         self.state = Match.NOT_USED
         self.save()
 
-    def is_usable(self, iteration=0):
+    def get_match_name(self):
+        return "{local} - {visitor}".format(
+            local=self.local_team.name, visitor=self.visitor_team.name)
+
+    def get_score(self):
+        if self.local_score is not None:
+            return "{local_score} - {visitor_score}".format(
+                local_score=self.local_score, visitor_score=self.visitor_score)
+        else:
+            return "-"
+
+    def is_usable(self):
         is_usable = Match.check_rules(
             self.start_datetime,
             self.local_factor,
             self.parity_factor,
             self.visitor_factor,
-            iteration
         )
         if not is_usable:
             self.set_not_used()
@@ -116,12 +125,12 @@ class Match(TimeStampedModel):
         return Match.TRIAL_LAPSE < difference
 
     @classmethod
-    def check_rules(cls, start_datetime, local, parity, visitor, iteration=0):
-        if start_datetime <= datetime.now():
+    def check_rules(cls, start_datetime, local, parity, visitor):
+        if start_datetime < datetime.now() + timedelta(minutes=5):
             return False
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
             return False
-        if parity < cls.MIN_PARITY + cls.STEP_PARITY_FORMULA * iteration:
+        if parity < cls.MIN_PARITY:
             return False
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
             return False

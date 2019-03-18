@@ -7,7 +7,7 @@ from django.db import models
 from fernet_fields import EncryptedCharField
 
 from bet.selenium_bots.inkabet_selenium_bot import InkabetSeleniumBot
-from bet_scraper.bet_scraper.spiders.inkabet_spider import InkabetMatchSpider
+from bet_scraper.bet_scraper.spiders.inkabet_match_spider import InkabetMatchSpider
 
 
 class BetPage(models.Model):

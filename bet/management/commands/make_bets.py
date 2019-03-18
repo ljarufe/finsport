@@ -11,10 +11,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         for account in Account.objects.filter(bet_page__active=True):
-            current_bets = BetRow.objects.filter(
-                state__in=(BetRow.CURRENT, BetRow.WAITING)).count()
-            available_tables = BetTable.objects.filter(state=BetTable.AVAILABLE)
-            if current_bets is not available_tables:
+            current_tables = BetRow.objects.filter(
+                state=BetRow.CURRENT).values_list('bet_table_id', flat=True)
+            available_tables = BetTable.objects.filter(
+                state=BetTable.AVAILABLE).exclude(id__in=current_tables)
+            if available_tables:
                 bet_selenium = account.bet_page.get_selenium_bot()(account)
                 bet_selenium.login()
                 for table in available_tables:

@@ -2,17 +2,19 @@
 
 import time
 
+from datetime import datetime, timedelta
+
 from selenium.webdriver.common.keys import Keys
 from scrapy.selector import Selector
 from selenium.webdriver.common.by import By
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
-from football.models import Match
 
 
 class InkabetSeleniumBot(SeleniumBot):
     LONG_SLEEP = 10
     SHORT_SLEEP = 5
+    RETRY_TIME = 3
 
     def __init__(self, account):
         self.account = account
@@ -28,7 +30,7 @@ class InkabetSeleniumBot(SeleniumBot):
         username.send_keys(self.account.username)
         password.send_keys(self.account.password)
         submit.click()
-        time.sleep(InkabetSeleniumBot.LONG_SLEEP)
+        time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
 
     def make_bet(self, bet_row):
         self.driver.get(self.account.bet_page.match_list_url)
@@ -57,26 +59,37 @@ class InkabetSeleniumBot(SeleniumBot):
 
     def bet(self, bet, amount):
         try:
-            bets = self.driver.find_elements_by_class_name(
-                'osg-betslip__content--empty')
-            if not len(bets):
-                print('Error, se encontro una apuesta seleccionada')
-                return False
-            bet[2].click()
-            time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
-            combined = self.driver.find_elements_by_class_name(
-                'osg-betslip__selection--multiple')
-            if len(combined):
-                print('Error, se encontro una apuesta combinada')
-                return False
-            amount_css = self.driver.find_elements_by_xpath(
-                "//div[@class='osg-betslip__input-field-container']//input"
-                "[@type='text']")
-            try:
-                amount_css[0].send_keys(str(amount))
-            except Exception as err:
-                print('Error, poniendo el monto en %s' % err)
-                return False
+            self.fill_bet(bet, amount)
+        except Exception as e:
+            print('Error en la ejecucion: %s' % e)
+            return False
+
+        return self.confirm_bet(datetime.now())
+
+    def fill_bet(self, bet, amount):
+        empty = len(self.driver.find_elements_by_class_name(
+            'osg-betslip__content--empty'))
+        if not empty:
+            print('Error, se encontro una apuesta seleccionada')
+            return False
+        bet[2].click()
+        time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
+        combined = self.driver.find_elements_by_class_name(
+            'osg-betslip__selection--multiple')
+        if len(combined):
+            print('Error, se encontro una apuesta combinada')
+            return False
+        amount_css = self.driver.find_elements_by_xpath(
+            "//div[@class='osg-betslip__input-field-container']//input"
+            "[@type='text']")
+        try:
+            amount_css[0].send_keys(str(amount))
+        except Exception as err:
+            print('Error, poniendo el monto en %s' % err)
+            return False
+
+    def confirm_bet(self, init):
+        try:
             bet_button = self.driver.find_element_by_class_name(
                 'osg-betslip__actions-place-bet-button')
             bet_button.send_keys(Keys.RETURN)
@@ -92,32 +105,11 @@ class InkabetSeleniumBot(SeleniumBot):
                 print('Error al realizar la apuesta %s' % error)
                 return False
         except Exception as e:
-            print('Error en la ejecucion: %s' % e)
-            # TODO: testear si es necesario y ponerle timer
+            if init + timedelta(minutes=InkabetSeleniumBot.RETRY_TIME) < (
+                    datetime.now()):
+                print('Error en la ejecucion: %s' % e)
+                return False
             self.driver.refresh()
             time.sleep(InkabetSeleniumBot.LONG_SLEEP)
-            self.bet(bet, amount)
-            return False
 
-    def get_results(self):
-        self.driver.find_element_by_xpath(
-            "//*[@id='user_balance']/span").click()
-        time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
-        table = Selector(text=self.driver.page_source).xpath(
-            "//*[@id='history_table']/tbody/tr")
-        for match in Match.objects.filter(state=Match.PLAYING):
-            for i in range(1, len(table)):
-                if 'lost' in table[i].xpath("@class").extract()[0]:
-                    state = Match.LOCAL
-                elif 'won' in table[i].xpath("@class").extract()[0]:
-                    state = Match.PARITY
-                elif 'void ' in table[i].xpath("@class").extract()[0]:
-                    state = Match.UNKNOW
-                else:
-                    continue
-                teams = table[i].xpath(
-                    'td[6]/span/span/text()').extract()[1].split(' - ')
-                if (teams[2] == match.local_team.name and
-                        match.visitor_team.name == teams[3]):
-                    match.state = state
-                    match.save()
+            return self.confirm_bet(init)
