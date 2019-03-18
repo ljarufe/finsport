@@ -16,7 +16,7 @@ class MatchAdmin(admin.ModelAdmin):
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
     list_display = ('name', 'league',)
-    search_fields = ('name', 'league')
+    search_fields = ('name', 'league__name')
     list_filter = ('league',)
 
 

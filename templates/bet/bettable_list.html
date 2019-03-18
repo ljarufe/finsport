@@ -78,8 +78,8 @@
         </thead>
         <tbody>
           {% for row in table.data_table %}
-            {% if table.state == "Available" %}
-              {% if row.state == 'C' %}
+            {% if table.get_state_display == "available" %}
+              {% if row.get_state_display == 'current' %}
               <tr style="background: lightskyblue;">
               {% else %}
               <tr style="background: white;">

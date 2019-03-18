@@ -13,7 +13,8 @@ class League(TimeStampedModel):
     country = CountryField(blank_label='(select country)')
 
     def __str__(self):
-        return "{country} {name}".format(country=self.country, name=self.name)
+        return "{country} {name}".format(
+            country=self.country.name, name=self.name)
 
 
 class LeagueRelatedName(models.Model):
@@ -64,7 +65,7 @@ class Match(TimeStampedModel):
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
 
-    TEAM_DIFFERENCE = 2.5
+    TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
     MIN_PARITY = 2.5
     MAX_PARITY = 4.5
@@ -128,12 +129,16 @@ class Match(TimeStampedModel):
     @classmethod
     def check_rules(cls, start_datetime, local, parity, visitor):
         if start_datetime < datetime.now() + timedelta(minutes=5):
+            print("datetime")
             return False
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
+            print("team dif")
             return False
-        if cls.MIN_PARITY < parity < cls.MAX_PARITY:
+        if not cls.MIN_PARITY < parity < cls.MAX_PARITY:
+            print("parity")
             return False
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
+            print("min per team")
             return False
 
         return True

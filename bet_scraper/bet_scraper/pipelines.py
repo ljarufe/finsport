@@ -18,6 +18,11 @@ class MatchPipeline:
         )
         checked_league = LeagueRelatedName.objects.filter(
             related_name__icontains=item['league'])
+        print("#########################################################")
+        print("item", item['league'])
+        print("league", checked_league)
+        print("league?", checked_league.exists())
+        print("#########################################################")
         if checked_league.exists():
             league = checked_league.first().league
             local_team, _ = Team.objects.update_or_create(
