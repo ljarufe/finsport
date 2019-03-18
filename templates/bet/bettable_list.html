@@ -1,8 +1,6 @@
 {% extends "../base/base.html" %}
-{% load tables %}
 
 {% block content %}
-
   <style>
   table, th, td {
       border: 1px solid black;
@@ -35,15 +33,15 @@
     <tbody>
       <tr>
         <td>{{ num_tables }}</td>
-        <td>{{ coin }} {{ total_inversion_tables }}</td>
-        <td>{{ coin }} {{ total_profit_tables }}</td>
+        <td>{{ coin }} {{ total_inversion_tables|floatformat:2 }}</td>
+        <td>{{ coin }} {{ total_profit_tables|floatformat:2 }}</td>
       </tr>
     </tbody>
   </table>
 
   {% for table in object_list %}
     <hr>
-    <h3> Tabla - Fecha: {{ table.name|fix_name_table }}</h3>
+    <h3> Tabla - Fecha: {{ table.name }}</h3>
     <br>
       <table class="table summary">
         <thead>
@@ -55,8 +53,8 @@
         </thead>
         <tbody>
           <tr>
-            <td>{{ coin }} {{ table.total_inversion|roundd }}</td>
-            <td>{{ coin }} {{ table.total_profit|roundd }}</td>
+            <td>{{ coin }} {{ table.total_inversion|floatformat:2 }}</td>
+            <td>{{ coin }} {{ table.total_profit|floatformat:2 }}</td>
             <td>{{ table.duration }} </td>
           </tr>
         </tbody>
@@ -66,21 +64,22 @@
       <table class="table table-striped">
         <thead>
           <tr>
-            <th>Iteración</th>
+            <th>Iter</th>
             <th>Partido</th>
             <th>Fecha / hora</th>
+            <th>Liga</th>
             <th>Apuesta</th>
             <th>Inversión</th>
-            <th>Factor empate</th>
-            <th>Ganancia neta</th>
+            <th>Factor</th>
+            <th>Ganancia</th>
             <th>Estado</th>
+            <th>Score</th>
           </tr>
         </thead>
         <tbody>
-
-          {% for data in table.data_table %}
+          {% for row in table.data_table %}
             {% if table.state == "Available" %}
-              {% if data.state == 1 %}
+              {% if row.state == 'C' %}
               <tr style="background: lightskyblue;">
               {% else %}
               <tr style="background: white;">
@@ -88,38 +87,27 @@
             {% else %}
               <tr>
             {% endif %}
-              <td>{{ forloop.counter }}--</td>
-              <td>{{ data.match }}</td>
-              <td>{{ data.match.start_datetime }}</td>
-              <td>{{ data.bet_amount|roundd }}</td>
-              <td>{{ data.inversion_amount|roundd }}</td>
-              {% if time_state == 0 %}
-                <td>{{ data.match.parity_factor }}</td>
+              <td>{{ forloop.counter }}</td>
+              <td>{{ row.match.get_match_name }}</td>
+              <td>{{ row.match.start_datetime }}</td>
+              <td>{{ row.match.local_team.league }}</td>
+              <td>{{ row.bet_amount|floatformat:2 }}</td>
+              <td>{{ row.inversion_amount|floatformat:2 }}</td>
+              <td>{{ row.match.parity_factor }}</td>
+              {% if row.state == 2 %}
+                <td>{{ table.total_profit|floatformat:2 }}</td>
               {% else %}
-                <td>{{ data.match.parity_factor_half_time }}</td>
+                <td>{{ row.profit|floatformat:2 }}</td>
               {% endif %}
-              {% if data.state == 2 %}
-                <td>{{ table.total_profit|roundd }}</td>
-              {% else %}
-                <td>{{ data.profit|roundd }}</td>
-              {% endif %}
-              <td>{{ data.state|get_state }}</td>
+              <td>{{ row.get_state_display }}</td>
+              <td>{{ row.match.get_score }}</td>
             </tr>
           {% endfor %}
         </tbody>
-
       </table>
     <br>
     <br>
   {% empty %}
-      <li>No tables yet.</li>
+      <p>No tables yet.</p>
   {% endfor %}
-
-{% endblock %}
-
-
-{% block scripts %}
-  <script type="text/javascript">
-    
-  </script>
 {% endblock %}

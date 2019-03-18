@@ -27,7 +27,7 @@ urlpatterns = [
         pattern_name='bet:statistics', permanent=False)),
 ]
 
-
+# TODO: se usa?
 if settings.DEBUG:
     import debug_toolbar
     urlpatterns = [

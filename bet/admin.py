@@ -1,38 +1,21 @@
 from django.contrib import admin
 
-from .models import BetTable, DataTable
+from .models import BetTable, BetRow
 
 
 class DataTableInline(admin.TabularInline):
-
-    model = DataTable
+    model = BetRow
     extra = 0
-    ordering = ("created", )
+    ordering = ("created",)
 
 
+@admin.register(BetTable)
 class BetTableAdmin(admin.ModelAdmin):
-    list_display = (
-        '__str__',
-        'created',
-        'state_in_time',
-        'state',
-        'total_inversion',
-        'total_profit',
-    )
-
+    list_display = ('created', 'state', 'total_inversion', 'total_profit')
     list_filter = ('created', 'state')
-
-    inlines = [DataTableInline, ]
-
-
-class DataTableAdmin(admin.ModelAdmin):
-
-    list_display = (
-        '__str__',
-        'state_in_time',
-        'state'
-    )
+    inlines = [DataTableInline]
 
 
-admin.site.register(BetTable, BetTableAdmin)
-admin.site.register(DataTable, DataTableAdmin)
+@admin.register(BetRow)
+class BetRowAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'state')

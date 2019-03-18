@@ -1,0 +1,11 @@
+<html>
+<body>
+<p>La tabla creada el {{ table.created }} ha sido cerrada con el siguiente balance:</p>
+<ul>
+    <li>Inversión: S/ {{ table.total_inversion|floatformat:2 }}</li>
+    <li>Ganancia neta: S/ {{ table.total_profit|floatformat:2 }}</li>
+    <li>Iteraciones: {{ table.bucle_number }}</li>
+</ul>
+<p>Revisa la tabla en {{ link }}</p>
+</body>
+</html>
