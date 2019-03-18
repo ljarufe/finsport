@@ -29,7 +29,7 @@ class SeleniumBot:
     def _set_driver():
         chrome_options = Options()
         # TODO: agregar un setting para esto
-        # chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless")
         # TODO: cambiar a firefox
         driver = webdriver.Chrome(
             '%s/chromedriver' % settings.SELENIUM_DATA,

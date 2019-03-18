@@ -63,10 +63,9 @@ class Match(TimeStampedModel):
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
 
-    # TODO: Cambiar todas las reglas
     TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_PARITY = 3
+    MIN_PARITY = 2.5
     LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 180
 
