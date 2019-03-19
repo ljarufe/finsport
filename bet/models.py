@@ -115,7 +115,7 @@ class BetRow(TimeStampedModel):
 
     objects = MatchManager()
 
-    DEVIATION = 0.565
+    DEVIATION = 0.65
 
     def first_earn(self):
         first_row = BetRow.objects.get(bet_table=self.bet_table, iteration=0)

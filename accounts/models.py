@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 from django.utils.safestring import mark_safe
 from django.db import models
 
@@ -51,11 +52,13 @@ class Account(models.Model):
     def send_finished_table(self, table):
         context = dict(
             table=table,
-            link="{}{}".format(settings.INSTANCE_DOMAIN, 'bet/tables/?state=F'))
+            link="{}{}".format(
+                settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
+        msg = mark_safe(render_to_string('mails/finished_table.html', context))
         send_mail(
             subject='Tabla finalizada',
-            message=mark_safe(render_to_string(
-                'mails/finished_table.html', context)),
+            message=strip_tags(msg),
+            html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[self.email])
 
