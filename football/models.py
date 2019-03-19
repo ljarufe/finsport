@@ -129,16 +129,12 @@ class Match(TimeStampedModel):
     @classmethod
     def check_rules(cls, start_datetime, local, parity, visitor):
         if start_datetime < datetime.now() + timedelta(minutes=5):
-            print("datetime")
             return False
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
-            print("team dif")
             return False
         if not cls.MIN_PARITY < parity < cls.MAX_PARITY:
-            print("parity")
             return False
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
-            print("min per team")
             return False
 
         return True
