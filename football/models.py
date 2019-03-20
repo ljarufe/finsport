@@ -70,7 +70,7 @@ class Match(TimeStampedModel):
     MIN_PARITY = 2.5
     MAX_PARITY = 4.5
     LAPSE = timedelta(minutes=130)
-    TRIAL_LAPSE = 180
+    TRIAL_LAPSE = 300
 
     def __str__(self):
         return "{local} - {visitor} ({league}), {date}".format(
