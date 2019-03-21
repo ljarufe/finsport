@@ -137,7 +137,8 @@ class BetRow(TimeStampedModel):
 
     def set_won(self):
         self.state = BetRow.WON
-        self.profit = self.bet_amount * self.match.parity_factor
+        self.profit = (self.bet_amount * self.match.parity_factor -
+                       self.inversion_amount)
         self.save()
 
     def set_lost(self):
