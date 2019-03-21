@@ -91,6 +91,10 @@ class Match(TimeStampedModel):
         self.state = Match.PLAYING
         self.save()
 
+    def set_parity(self):
+        self.state = Match.PARITY
+        self.save()
+
     def set_not_used(self):
         self.state = Match.NOT_USED
         self.save()
@@ -106,6 +110,14 @@ class Match(TimeStampedModel):
         else:
             return "-"
 
+    def has_bet_time(self, bet_row):
+        return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
+
+    def is_suspended(self):
+        difference = (datetime.now() - self.start_datetime).total_seconds() / 60
+
+        return Match.TRIAL_LAPSE < difference
+
     def is_usable(self):
         is_usable = Match.check_rules(
             self.start_datetime,
@@ -117,14 +129,6 @@ class Match(TimeStampedModel):
             self.set_not_used()
 
         return is_usable
-
-    def has_bet_time(self, bet_row):
-        return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
-
-    def is_suspended(self):
-        difference = (datetime.now() - self.start_datetime).total_seconds() / 60
-
-        return Match.TRIAL_LAPSE < difference
 
     @classmethod
     def check_rules(cls, start_datetime, local, parity, visitor):

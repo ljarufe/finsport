@@ -22,4 +22,4 @@ class BetRowAdmin(admin.ModelAdmin):
     list_display = (
         'match', 'bet_table', 'state', 'bet_amount', 'profit',)
     list_filter = ('state', 'iteration',)
-    search_fields = ('match__local_team', 'match__visitor_team',)
+    search_fields = ('match__local_team__name', 'match__visitor_team__name',)

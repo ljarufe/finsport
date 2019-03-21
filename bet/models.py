@@ -83,8 +83,7 @@ class BetTable(TimeStampedModel):
         ).order_by('match__start_datetime')
         if bet_rows.exists():
             bet_row = bet_rows.first()
-            if bet_row.make_bet(account, bet_selenium):
-                bet_row.set_current()
+            bet_row.make_bet(account, bet_selenium)
 
 
 class MatchManager(models.Manager):
@@ -132,16 +131,20 @@ class BetRow(TimeStampedModel):
         )
 
     def set_current(self):
+        self.match.set_playing()
         self.state = BetRow.CURRENT
         self.save()
 
     def set_won(self):
+        self.match.set_parity()
         self.state = BetRow.WON
         self.profit = (self.bet_amount * self.match.parity_factor -
                        self.inversion_amount)
         self.save()
 
     def set_lost(self):
+        # TODO: quitar esto cuando siempre se saque el resultado del partido
+        self.match.set_used()
         self.state = BetRow.LOST
         self.profit = self.bet_amount * (-1)
         self.save()
@@ -149,13 +152,8 @@ class BetRow(TimeStampedModel):
     def make_bet(self, account, bet_selenium):
         self.bet_amount = self.get_bet_amount(account)
         self.inversion_amount = self.get_inversion_amount(account)
-        have_bet = bet_selenium.make_bet(self)
-        if have_bet:
-            self.save()
-            self.match.set_playing()
-            return True
-
-        return False
+        if bet_selenium.make_bet(self):
+            self.set_current()
 
     def get_bet_amount(self, account):
         if self.previous:
