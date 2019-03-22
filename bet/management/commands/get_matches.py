@@ -13,6 +13,8 @@ class Command(BaseCommand):
                 'USER_AGENT':
                     'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
                 'ITEM_PIPELINES': {
-                    'bet_scraper.bet_scraper.pipelines.MatchPipeline': 300}})
+                    'bet_scraper.bet_scraper.pipelines.MatchPipeline': 300},
+                'LOG_ENABLED': False,
+            })
             process.crawl(bet_page.get_match_spider())
             process.start()

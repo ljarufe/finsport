@@ -22,8 +22,9 @@ class Command(BaseCommand):
                     'USER_AGENT':
                         'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
                     'ITEM_PIPELINES': {
-                        'bet_scraper.bet_scraper.pipelines.ResultsPipeline':
-                            300}})
+                        'bet_scraper.bet_scraper.pipelines.ResultsPipeline': 300},
+                    'LOG_ENABLED': False,
+                })
                 process.crawl(InkabetResultSpider, account)
                 process.start()
                 for bet_row in bet_rows:

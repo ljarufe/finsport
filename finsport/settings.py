@@ -128,3 +128,19 @@ INSTANCE_DOMAIN = env('INSTANCE_DOMAIN')
 DATE_FORMAT = "%d de %B del %Y, %H:%M"
 
 DEFAULT_FROM_EMAIL = 'luisjarufe@gmail.com'
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'bet_scraper.bet_scraper.pipelines': {
+            'handlers': ['console'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+    },
+}

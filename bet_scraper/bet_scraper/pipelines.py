@@ -1,3 +1,5 @@
+import logging
+
 from datetime import datetime
 
 from django.db.models import Q
@@ -5,6 +7,8 @@ from scrapy.exceptions import DropItem
 
 from bet.models import BetRow
 from football.models import Match, Team, LeagueRelatedName
+
+logger = logging.getLogger(__name__)
 
 
 class MatchPipeline:
@@ -25,8 +29,7 @@ class MatchPipeline:
             visitor_team, _ = Team.objects.update_or_create(
                 name=item['visitor_team'], defaults={'league': league})
             if checked_rules:
-                # TODO: log this created match, date and number
-                match, _ = Match.objects.filter(
+                match, created = Match.objects.filter(
                     start_datetime__date=datetime.today()
                 ).update_or_create(
                     local_team=local_team,
@@ -36,29 +39,42 @@ class MatchPipeline:
                         'local_factor': item['local_factor'],
                         'parity_factor': item['parity_factor'],
                         'visitor_factor': item['visitor_factor']})
-                if match.state is Match.NOT_USED:
-                    match.set_new()
+                if created:
+                    logger.info("Created match: %s" % match.get_logger_info())
+                else:
+                    if match.state is Match.NOT_USED:
+                        match.set_new()
+                        logger.info(
+                            "Match set as new: %s" % match.get_logger_info())
+                    else:
+                        logger.info(
+                            "Updated match: %s" % match.get_logger_info())
                 return item
             else:
-                # TODO: log this discard match
-                Match.objects.filter(
+                matches = Match.objects.filter(
                     start_datetime__date=datetime.today(),
                     local_team=local_team,
                     visitor_team=visitor_team,
                     state=Match.NEW
-                ).update(
+                )
+                matches.update(
                     state=Match.NOT_USED,
                     start_datetime=item['start_datetime'],
                     local_factor=item['local_factor'],
                     parity_factor=item['parity_factor'],
                     visitor_factor=item['visitor_factor'])
+                if matches.exists():
+                    logger.info(
+                        "Notused match: %s" % matches.first().get_logger_info())
 
         raise DropItem("Match is not usable: %s" % item)
 
 
 class LivescorePipeline:
     def process_item(self, item, spider):
+        logger.error("Notused match")
         if item['local_score'] != "?" and item['visitor_score'] != "?":
+            # TODO: Agregar al filtro la fecha y hora del partido
             local_query = Q()
             for word in item['local_team'].split():
                 local_query |= Q(local_team__name__unaccent__icontains=word)

@@ -110,6 +110,13 @@ class Match(TimeStampedModel):
         else:
             return "-"
 
+    def get_logger_info(self):
+        return "{id}: {local} - {visitor}, {start}".format(
+            id=self.id,
+            local=self.local_team,
+            visitor=self.visitor_team,
+            start=self.start_datetime)
+
     def has_bet_time(self, bet_row):
         return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
 
