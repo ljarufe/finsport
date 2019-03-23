@@ -107,10 +107,6 @@ SELENIUM_DATA = env('SELENIUM_DATA')
 
 ENV_FOLDER = env('ENV_FOLDER')
 
-ENVIRONMENTS = json.loads(env('ENVIRONMENTS'))
-
-DB_BACKUP_DIR = os.path.join(BASE_DIR, '../backups/')
-
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 EMAIL_USE_TLS = True
