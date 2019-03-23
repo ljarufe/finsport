@@ -8,7 +8,7 @@ from scrapy.exceptions import DropItem
 from bet.models import BetRow
 from football.models import Match, Team, LeagueRelatedName
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('get_matches')
 
 
 class MatchPipeline:

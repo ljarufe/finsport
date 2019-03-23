@@ -132,14 +132,35 @@ DEFAULT_FROM_EMAIL = 'luisjarufe@gmail.com'
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'console': {
+            'format': '%(levelname)s %(asctime).16s: %(message)s',
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+        'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'filters': ['require_debug_true'],
+            'formatter': 'console',
+        },
+        'file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': '../logs/file.log',
         },
     },
     'loggers': {
-        'bet_scraper.bet_scraper.pipelines': {
-            'handlers': ['console'],
+        'get_matches': {
+            'handlers': ['console', 'file'],
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },
