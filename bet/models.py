@@ -49,14 +49,17 @@ class BetTable(TimeStampedModel):
             else:
                 for table in available_tables:
                     bet_row = BetRow.objects.filter(bet_table=table).first()
-                    if match.has_bet_time(bet_row):
-                        BetRow.objects.create(
-                            match=match, bet_table=table, previous=bet_row,
-                            iteration=table.betrow_set.count())
-                        match.set_used()
-                        logger.info(
-                            "Match to table: %s, table: %s" %
-                            (match.get_logger_info(), table.id))
+                    if match.is_usable():
+                        if match.has_bet_time(bet_row):
+                            BetRow.objects.create(
+                                match=match, bet_table=table, previous=bet_row,
+                                iteration=table.betrow_set.count())
+                            match.set_used()
+                            logger.info(
+                                "Match to table: %s, table: %s" %
+                                (match.get_logger_info(), table.id))
+                            break
+                    else:
                         break
                 else:
                     logger.info(

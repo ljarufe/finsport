@@ -75,7 +75,6 @@ class MatchPipeline:
 
 class LivescorePipeline:
     def process_item(self, item, spider):
-        logger_get_matches.error("Notused match")
         if item['local_score'] != "?" and item['visitor_score'] != "?":
             # TODO: Agregar al filtro la fecha y hora del partido
             local_query = Q()
@@ -112,7 +111,3 @@ class ResultsPipeline:
                 bet_row.set_lost()
                 logger_inkabet_results.info(
                     "Lost match: %s" % bet_row.match.get_logger_info())
-        else:
-            logger_inkabet_results.info(
-                "Not current match: %s - %s" %
-                (item['local_team'], item['visitor_team']))
