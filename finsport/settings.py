@@ -128,7 +128,7 @@ LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
-        'console': {
+        'all': {
             'format': '%(levelname)s %(asctime).16s: %(message)s',
         },
     },
@@ -144,31 +144,35 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
             'filters': ['require_debug_true'],
-            'formatter': 'console',
+            'formatter': 'all',
         },
         'get_matches_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filters': ['require_debug_false'],
             'filename': '../logs/get_matches.log',
+            'formatter': 'all',
         },
         'fill_tables_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filters': ['require_debug_false'],
             'filename': '../logs/fill_tables.log',
+            'formatter': 'all',
         },
         'make_bets_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filters': ['require_debug_false'],
             'filename': '../logs/make_bets.log',
+            'formatter': 'all',
         },
         'inkabet_results_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filters': ['require_debug_false'],
             'filename': '../logs/inkabet_results.log',
+            'formatter': 'all',
         },
     },
     'loggers': {
