@@ -8,13 +8,14 @@ from scrapy.exceptions import DropItem
 from bet.models import BetRow
 from football.models import Match, Team, LeagueRelatedName
 
-logger = logging.getLogger('get_matches')
+logger_get_matches = logging.getLogger('get_matches')
+logger_inkabet_results = logging.getLogger('inkabet_results')
 
 
 class MatchPipeline:
     def process_item(self, item, spider):
         # TODO: lleva esta lógica a match en varias funciones
-        checked_rules = Match.check_rules(
+        checked_rules, msg = Match.check_rules(
             item['start_datetime'],
             item['local_factor'],
             item['parity_factor'],
@@ -40,14 +41,15 @@ class MatchPipeline:
                         'parity_factor': item['parity_factor'],
                         'visitor_factor': item['visitor_factor']})
                 if created:
-                    logger.info("Created match: %s" % match.get_logger_info())
+                    logger_get_matches.info(
+                        "Created match: %s" % match.get_logger_info())
                 else:
                     if match.state is Match.NOT_USED:
                         match.set_new()
-                        logger.info(
+                        logger_get_matches.info(
                             "Match set as new: %s" % match.get_logger_info())
                     else:
-                        logger.info(
+                        logger_get_matches.info(
                             "Updated match: %s" % match.get_logger_info())
                 return item
             else:
@@ -64,15 +66,16 @@ class MatchPipeline:
                     parity_factor=item['parity_factor'],
                     visitor_factor=item['visitor_factor'])
                 if matches.exists():
-                    logger.info(
-                        "Notused match: %s" % matches.first().get_logger_info())
+                    logger_get_matches.info(
+                        "Not used match: %s because: %s" %
+                        (matches.first().get_logger_info(), msg))
 
         raise DropItem("Match is not usable: %s" % item)
 
 
 class LivescorePipeline:
     def process_item(self, item, spider):
-        logger.error("Notused match")
+        logger_get_matches.error("Notused match")
         if item['local_score'] != "?" and item['visitor_score'] != "?":
             # TODO: Agregar al filtro la fecha y hora del partido
             local_query = Q()
@@ -103,5 +106,13 @@ class ResultsPipeline:
             bet_row = bet_rows.first()
             if item['result'] is BetRow.WON:
                 bet_row.bet_table.set_finished(spider.account, bet_row)
+                logger_inkabet_results.info(
+                    "Won match: %s" % bet_row.match.get_logger_info())
             else:
                 bet_row.set_lost()
+                logger_inkabet_results.info(
+                    "Lost match: %s" % bet_row.match.get_logger_info())
+        else:
+            logger_inkabet_results.info(
+                "Not current match: %s - %s" %
+                (item['local_team'], item['visitor_team']))

@@ -113,9 +113,10 @@ class Match(TimeStampedModel):
     def get_logger_info(self):
         return "{id}: {local} - {visitor}, {start}".format(
             id=self.id,
-            local=self.local_team,
-            visitor=self.visitor_team,
-            start=self.start_datetime)
+            local=self.local_team.name,
+            visitor=self.visitor_team.name,
+            start=self.start_datetime
+        )
 
     def has_bet_time(self, bet_row):
         return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
@@ -140,15 +141,15 @@ class Match(TimeStampedModel):
     @classmethod
     def check_rules(cls, start_datetime, local, parity, visitor):
         if start_datetime < datetime.now() + timedelta(minutes=5):
-            return False
+            return False, "There is no time"
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
-            return False
+            return False, "Too much difference in teams"
         if not cls.MIN_PARITY < parity < cls.MAX_PARITY:
-            return False
+            return False, "Parity beyond limits"
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
-            return False
+            return False, "Teams are too secure to win"
 
-        return True
+        return True, ""
 
     class Meta:
         verbose_name = "match"

@@ -8,7 +8,9 @@ from django.db import models
 from fernet_fields import EncryptedCharField
 
 from bet.selenium_bots.inkabet_selenium_bot import InkabetSeleniumBot
-from bet_scraper.bet_scraper.spiders.inkabet_match_spider import InkabetMatchSpider
+from bet_scraper.bet_scraper.spiders.inkabet_match_spider import (
+    InkabetMatchSpider
+)
 
 
 class BetPage(models.Model):
@@ -56,7 +58,7 @@ class Account(models.Model):
                 settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
         msg = mark_safe(render_to_string('mails/finished_table.html', context))
         send_mail(
-            subject='Tabla finalizada',
+            subject='Ganaste!',
             message=strip_tags(msg),
             html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,

@@ -1,7 +1,6 @@
 import os
 import environ
 import socket
-import json
 
 root = environ.Path(__file__) - 2
 env = environ.Env()
@@ -147,16 +146,46 @@ LOGGING = {
             'filters': ['require_debug_true'],
             'formatter': 'console',
         },
-        'file': {
+        'get_matches_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filters': ['require_debug_false'],
-            'filename': '../logs/file.log',
+            'filename': '../logs/get_matches.log',
+        },
+        'fill_tables_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': '../logs/fill_tables.log',
+        },
+        'make_bets_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': '../logs/make_bets.log',
+        },
+        'inkabet_results_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': '../logs/inkabet_results.log',
         },
     },
     'loggers': {
         'get_matches': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console', 'get_matches_file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+        'fill_tables': {
+            'handlers': ['console', 'fill_tables_file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+        'make_bets': {
+            'handlers': ['console', 'make_bets_file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+        'inkabet_results': {
+            'handlers': ['console', 'inkabet_results_file'],
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },

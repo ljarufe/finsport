@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import math
+import logging
 
 from datetime import datetime
 
@@ -10,6 +11,8 @@ from django.db import models
 from django_extensions.db.models import TimeStampedModel
 
 from football.models import Match
+
+logger = logging.getLogger('fill_tables')
 
 
 class BetTable(TimeStampedModel):
@@ -34,21 +37,31 @@ class BetTable(TimeStampedModel):
             state=BetTable.AVAILABLE).order_by('created'))
         for match in matches:
             if len(available_tables) < max_tables:
-                if match.is_usable():
+                is_usable, msg = match.is_usable()
+                if is_usable:
+                    logger.info(
+                        "Match in a new table: %s" % match.get_logger_info())
                     available_tables.append(BetTable.new_table(match))
+                else:
+                    logger.info(
+                        "Match not usable: %s because: %s" %
+                        (match.get_logger_info(), msg))
             else:
                 for table in available_tables:
                     bet_row = BetRow.objects.filter(bet_table=table).first()
-                    if match.is_usable():
-                        if match.has_bet_time(bet_row):
-                            BetRow.objects.create(
-                                match=match, bet_table=table, previous=bet_row,
-                                iteration=table.betrow_set.count())
-                            match.set_used()
-                            break
-                    else:
+                    if match.has_bet_time(bet_row):
+                        BetRow.objects.create(
+                            match=match, bet_table=table, previous=bet_row,
+                            iteration=table.betrow_set.count())
+                        match.set_used()
+                        logger.info(
+                            "Match to table: %s, table: %s" %
+                            (match.get_logger_info(), table.id))
                         break
                 else:
+                    logger.info(
+                        "Match not usable: %s because: There is not time" %
+                        match.get_logger_info())
                     match.set_not_used()
 
     @classmethod
@@ -76,14 +89,6 @@ class BetTable(TimeStampedModel):
         self.state = BetTable.FINISHED
         self.save()
         account.send_finished_table(self)
-
-    def make_bet(self, account, bet_selenium):
-        bet_rows = BetRow.objects.filter(
-            bet_table=self, state=BetRow.NEW
-        ).order_by('match__start_datetime')
-        if bet_rows.exists():
-            bet_row = bet_rows.first()
-            bet_row.make_bet(account, bet_selenium)
 
 
 class MatchManager(models.Manager):
@@ -148,12 +153,6 @@ class BetRow(TimeStampedModel):
         self.profit = self.bet_amount * (-1)
         self.save()
 
-    def make_bet(self, account, bet_selenium):
-        self.bet_amount = self.get_bet_amount(account)
-        self.inversion_amount = self.get_inversion_amount(account)
-        if bet_selenium.make_bet(self):
-            self.set_current()
-
     def get_bet_amount(self, account):
         if self.previous:
             amount = (
@@ -177,3 +176,9 @@ class BetRow(TimeStampedModel):
             self.delete()
         else:
             self.bet_table.delete()
+
+    def make_bet(self, account, bet_selenium):
+        self.bet_amount = self.get_bet_amount(account)
+        self.inversion_amount = self.get_inversion_amount(account)
+        if bet_selenium.make_bet(self):
+            self.set_current()
