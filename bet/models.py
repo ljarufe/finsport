@@ -39,33 +39,31 @@ class BetTable(TimeStampedModel):
             if len(available_tables) < max_tables:
                 is_usable, msg = match.is_usable()
                 if is_usable:
+                    available_tables.append(BetTable.new_table(match))
                     logger.info(
                         "Match in a new table: %s" % match.get_logger_info())
-                    available_tables.append(BetTable.new_table(match))
-                else:
-                    logger.info(
-                        "Match not usable: %s because: %s" %
-                        (match.get_logger_info(), msg))
-            else:
-                for table in available_tables:
-                    bet_row = BetRow.objects.filter(bet_table=table).first()
-                    if match.is_usable():
-                        if match.has_bet_time(bet_row):
-                            BetRow.objects.create(
-                                match=match, bet_table=table, previous=bet_row,
-                                iteration=table.betrow_set.count())
-                            match.set_used()
-                            logger.info(
-                                "Match to table: %s, table: %s" %
-                                (match.get_logger_info(), table.id))
-                            break
-                    else:
-                        break
+                    continue
                 else:
                     logger.info(
                         "Match not usable: %s because: There is not time" %
                         match.get_logger_info())
-                    match.set_not_used()
+            for table in available_tables:
+                bet_row = BetRow.objects.filter(bet_table=table).first()
+                if match.is_usable()[0]:
+                    if match.has_bet_time(bet_row):
+                        BetRow.objects.create(
+                            match=match, bet_table=table, previous=bet_row,
+                            iteration=table.betrow_set.count())
+                        match.set_used()
+                        logger.info(
+                            "Match to table: %s, table: %s" %
+                            (match.get_logger_info(), table.id))
+                        break
+            else:
+                logger.info(
+                    "Match not usable: %s because: There is not time" %
+                    match.get_logger_info())
+                match.set_not_used()
 
     @classmethod
     def new_table(cls, match):
@@ -176,6 +174,11 @@ class BetRow(TimeStampedModel):
     def remove_match(self):
         self.match.set_used()
         if self.previous:
+            bet_rows = BetRow.objects.filter(
+                bet_table=self.bet_table, state=BetRow.NEW)
+            for bet_row in bet_rows:
+                bet_row.match.set_new()
+            bet_rows.delete()
             self.delete()
         else:
             self.bet_table.delete()
