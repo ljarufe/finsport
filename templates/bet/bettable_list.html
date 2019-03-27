@@ -100,7 +100,7 @@
                 <td>{{ row.profit|floatformat:2 }}</td>
               {% endif %}
               <td>{{ row.get_state_display }}</td>
-              <td>{{ row.match.get_score }}</td>
+              <td>{{ row.match.get_match_score }}</td>
             </tr>
           {% endfor %}
         </tbody>

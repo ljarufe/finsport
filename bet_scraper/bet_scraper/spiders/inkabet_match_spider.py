@@ -30,6 +30,8 @@ class InkabetMatchSpider(Spider):
                         '%d-%m-%y %H:%M')
             if not len(factors) > 3:
                 continue
+            if len(match.split(' - ')) < 2:
+                continue
             factors = list(map(lambda x: float(x), factors[:3]))
 
             yield MatchItem(

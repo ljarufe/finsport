@@ -31,59 +31,43 @@ class BetTable(TimeStampedModel):
 
     @classmethod
     def fill_tables(cls, max_tables):
-        matches = Match.objects.filter(
-            state=Match.NEW).order_by('start_datetime')
-        available_tables = list(BetTable.objects.filter(
-            state=BetTable.AVAILABLE).order_by('created'))
-        for match in matches:
-            if len(available_tables) < max_tables:
-                is_usable, msg = match.is_usable()
-                if is_usable:
-                    available_tables.append(BetTable.new_table(match))
-                    logger.info(
-                        "Match in a new table: %s" % match.get_logger_info())
-                    continue
-                else:
-                    logger.info(
-                        "Match not usable: %s because: There is not time" %
-                        match.get_logger_info())
-            for table in available_tables:
-                bet_row = BetRow.objects.filter(bet_table=table).first()
-                if match.is_usable()[0]:
-                    if match.has_bet_time(bet_row):
-                        BetRow.objects.create(
-                            match=match, bet_table=table, previous=bet_row,
-                            iteration=table.betrow_set.count())
-                        match.set_used()
-                        logger.info(
-                            "Match to table: %s, table: %s" %
-                            (match.get_logger_info(), table.id))
-                        break
-            else:
-                logger.info(
-                    "Match not usable: %s because: There is not time" %
-                    match.get_logger_info())
-                match.set_not_used()
-
-    @classmethod
-    def new_table(cls, match):
-        table = cls.objects.create(
-            state=cls.AVAILABLE,
-            name=datetime.now().strftime(settings.DATE_FORMAT))
-        BetRow.objects.create(match=match, bet_table=table)
-        match.set_used()
-
-        return table
+        available_tables = BetTable.objects.filter(
+            state=BetTable.AVAILABLE)
+        for i in range(0, max_tables - available_tables.count()):
+            match = Match.get_best_match()
+            if match:
+                table = BetTable.objects.create(
+                    name=datetime.now().strftime(settings.DATE_FORMAT))
+                logger.info("New table: %s" % table)
+                table.add_row(match)
+        current_rows = BetRow.objects.filter(
+            state__in=(BetRow.CURRENT, BetRow.NEW)
+        ).values_list('bet_table_id', flat=True)
+        available_tables = available_tables.exclude(id__in=current_rows)
+        for table in available_tables:
+            match = Match.get_best_match()
+            if match:
+                table.add_row(match)
 
     def __str__(self):
         return "{id} - {name}".format(id=self.id, name=self.name)
 
+    def add_row(self, match):
+        previous_rows = self.betrow_set.all()
+        if previous_rows.exists():
+            previous_row = previous_rows.first()
+            BetRow.objects.create(
+                match=match, bet_table=self, previous=previous_row,
+                iteration=previous_rows.count())
+        else:
+            BetRow.objects.create(match=match, bet_table=self)
+        match.set_used()
+        logger.info(
+            "Match to table: %s, table: %s" %
+            (match.get_logger_info(), self.id))
+
     def set_finished(self, account, bet_row):
         bet_row.set_won()
-        residual_rows = BetRow.objects.filter(bet_table=self, state=BetRow.NEW)
-        for row in residual_rows:
-            row.match.set_new()
-        residual_rows.delete()
         self.total_profit = bet_row.profit - bet_row.inversion_amount
         self.bucle_number = BetRow.objects.filter(bet_table=self).count()
         self.total_inversion = bet_row.inversion_amount
@@ -122,7 +106,7 @@ class BetRow(TimeStampedModel):
 
     objects = MatchManager()
 
-    DEVIATION = 0.65
+    DEVIATION = 0.565
 
     def first_earn(self):
         first_row = BetRow.objects.get(bet_table=self.bet_table, iteration=0)

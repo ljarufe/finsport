@@ -43,7 +43,7 @@ class BetTableListView(ListView):
             data_table = BetRow.objects.filter(
                 bet_table=table).select_related(
                 'match__local_team',
-                'match__visitor_team').order_by('match__start_datetime')
+                'match__visitor_team').order_by('iteration')
             start = data_table.first().match.start_datetime
             end = data_table.last().match.start_datetime
             duration = (end - start)

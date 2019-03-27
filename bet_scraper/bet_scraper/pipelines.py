@@ -15,12 +15,6 @@ logger_inkabet_results = logging.getLogger('inkabet_results')
 class MatchPipeline:
     def process_item(self, item, spider):
         # TODO: lleva esta lógica a match en varias funciones
-        checked_rules, msg = Match.check_rules(
-            item['start_datetime'],
-            item['local_factor'],
-            item['parity_factor'],
-            item['visitor_factor']
-        )
         checked_league = LeagueRelatedName.objects.filter(
             related_name__icontains=item['league'])
         if checked_league.exists():
@@ -29,6 +23,12 @@ class MatchPipeline:
                 name=item['local_team'], defaults={'league': league})
             visitor_team, _ = Team.objects.update_or_create(
                 name=item['visitor_team'], defaults={'league': league})
+            checked_rules, msg = Match.check_rules(
+                item['start_datetime'],
+                item['local_factor'],
+                item['parity_factor'],
+                item['visitor_factor']
+            )
             if checked_rules:
                 match, created = Match.objects.filter(
                     start_datetime__date=datetime.today()
@@ -53,22 +53,23 @@ class MatchPipeline:
                             "Updated match: %s" % match.get_logger_info())
                 return item
             else:
-                matches = Match.objects.filter(
-                    start_datetime__date=datetime.today(),
-                    local_team=local_team,
-                    visitor_team=visitor_team,
-                    state=Match.NEW
-                )
-                matches.update(
-                    state=Match.NOT_USED,
-                    start_datetime=item['start_datetime'],
-                    local_factor=item['local_factor'],
-                    parity_factor=item['parity_factor'],
-                    visitor_factor=item['visitor_factor'])
-                if matches.exists():
+                try:
+                    match = Match.objects.get(
+                        start_datetime__date=datetime.today(),
+                        local_team=local_team,
+                        visitor_team=visitor_team,
+                        state=Match.NEW
+                    )
+                    match.start_datetime = item['start_datetime']
+                    match.local_factor = item['local_factor']
+                    match.parity_factor = item['parity_factor']
+                    match.visitor_factor = item['visitor_factor']
+                    match.set_not_used()
                     logger_get_matches.info(
                         "Not used match: %s because: %s" %
-                        (matches.first().get_logger_info(), msg))
+                        (match.get_logger_info(), msg))
+                except Match.DoesNotExist:
+                    pass
 
         raise DropItem("Match is not usable: %s" % item)
 

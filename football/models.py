@@ -19,7 +19,7 @@ class League(TimeStampedModel):
 
 class LeagueRelatedName(models.Model):
     league = models.ForeignKey(League, on_delete=models.CASCADE)
-    related_name = models.CharField(max_length=250)
+    related_name = models.CharField(max_length=250, unique=True)
 
     def __str__(self):
         return self.related_name
@@ -41,7 +41,6 @@ class Match(TimeStampedModel):
     LOCAL = 'L'
     PARITY = 'R'
     VISITOR = 'V'
-    UNKNOW = 'K'
     NOT_USED = 'T'
     STATES = (
         ('N', 'new'),
@@ -51,7 +50,6 @@ class Match(TimeStampedModel):
         # TODO: cambiar parity por draw en todo el código
         ('R', 'parity'),
         ('V', 'visitor'),
-        ('K', 'unknow'),
         ('T', 'not used'),
     )
     local_team = models.ForeignKey(
@@ -64,11 +62,16 @@ class Match(TimeStampedModel):
     parity_factor = models.FloatField()
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
+    score = models.FloatField(default=0)
 
     TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_PARITY = 2.5
-    MAX_PARITY = 4.5
+    MIN_PARITY = 3
+    MAX_PARITY = 4
+
+    MAX_SCORE_DIFFERENCE = 5
+    MAX_SCORE_PARITY = 3
+
     LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 300
 
@@ -78,6 +81,10 @@ class Match(TimeStampedModel):
             visitor=self.visitor_team.name,
             league=self.local_team.league,
             date=self.start_datetime)
+
+    def save(self, **kwargs):
+        self.score = self.get_team_difference_score() + self.get_parity_score()
+        super().save(**kwargs)
 
     def set_new(self):
         self.state = Match.NEW
@@ -99,11 +106,19 @@ class Match(TimeStampedModel):
         self.state = Match.NOT_USED
         self.save()
 
+    def get_team_difference_score(self):
+        return (Match.MAX_SCORE_DIFFERENCE * (
+                1 - abs(self.local_factor - self.visitor_factor) /
+                Match.TEAM_DIFFERENCE))
+
+    def get_parity_score(self):
+        return Match.MAX_SCORE_PARITY * self.parity_factor - 9
+
     def get_match_name(self):
         return "{local} - {visitor}".format(
             local=self.local_team.name, visitor=self.visitor_team.name)
 
-    def get_score(self):
+    def get_match_score(self):
         if self.local_score is not None:
             return "{local_score} - {visitor_score}".format(
                 local_score=self.local_score, visitor_score=self.visitor_score)
@@ -118,25 +133,10 @@ class Match(TimeStampedModel):
             start=self.start_datetime
         )
 
-    def has_bet_time(self, bet_row):
-        return self.start_datetime - bet_row.match.start_datetime > Match.LAPSE
-
     def is_suspended(self):
         difference = (datetime.now() - self.start_datetime).total_seconds() / 60
 
         return Match.TRIAL_LAPSE < difference
-
-    def is_usable(self):
-        is_usable = Match.check_rules(
-            self.start_datetime,
-            self.local_factor,
-            self.parity_factor,
-            self.visitor_factor,
-        )
-        if not is_usable:
-            self.set_not_used()
-
-        return is_usable
 
     @classmethod
     def check_rules(cls, start_datetime, local, parity, visitor):
@@ -150,6 +150,14 @@ class Match(TimeStampedModel):
             return False, "Teams are too secure to win"
 
         return True, ""
+
+    @classmethod
+    def get_best_match(cls):
+        return cls.objects.filter(
+            state=Match.NEW,
+            start_datetime__gte=datetime.now() + timedelta(minutes=5),
+            start_datetime__lte=datetime.now() + Match.LAPSE
+        ).order_by('score').last()
 
     class Meta:
         verbose_name = "match"
