@@ -36,7 +36,7 @@ class InkabetResultSpider(Spider):
             InkabetResultSpider.RESULT_TYPE[result_type])
         for tr in rows:
             result = tr.xpath('td[6]/span/span/text()').extract()[1]
-            teams = [y.strip().split("  ")[0] for y in result.split("-")]
+            teams = [r.strip().split("  ")[0] for r in result.split(" - ")]
 
             yield ResultMatchItem(
                 local_team=teams[2],
