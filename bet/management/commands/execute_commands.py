@@ -8,7 +8,6 @@ class Command(BaseCommand):
     help = 'Execute commands sequentially'
 
     def handle(self, *args, **options):
-        # TODO: ejecutar con fabric
         python = '{env}{python_path}'.format(
             env=settings.ENV_FOLDER, python_path='bin/python3')
         check_results = '{python} {site_root}{command}'.format(

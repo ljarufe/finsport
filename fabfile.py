@@ -2,14 +2,19 @@ from fabric import Connection, Config, task
 
 from common.print_color import ColorPrint as _
 
+import environ
 
-# TODO: Credentials will be saved on the .env file
+root = environ.Path(__file__) - 2
+env = environ.Env()
+environ.Env.read_env('%s/.env' % str(root))
+
+
 def get_connection():
-    sudo_pass = 'Chuchupe7'
+    sudo_pass = env('HOST_PASS')
     config = Config(overrides={'sudo': {'password': sudo_pass}})
     return Connection(
-        host='51.77.156.101',
-        user='ljarufe',
+        host=env('HOST_IP'),
+        user=env('HOST_USER'),
         connect_kwargs={'key_filename': '/home/luis/.ssh/id_rsa'},
         config=config,
     )

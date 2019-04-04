@@ -93,7 +93,7 @@
               <td>{{ row.match.local_team.league }}</td>
               <td>{{ row.bet_amount|floatformat:2 }}</td>
               <td>{{ row.inversion_amount|floatformat:2 }}</td>
-              <td>{{ row.match.parity_factor }}</td>
+              <td>{{ row.match.draw_factor }}</td>
               {% if row.state == 2 %}
                 <td>{{ table.total_profit|floatformat:2 }}</td>
               {% else %}

@@ -39,7 +39,7 @@ class InkabetMatchSpider(Spider):
                 visitor_team=match.split(' - ')[1],
                 league=league,
                 local_factor=factors[0],
-                parity_factor=factors[1],
+                draw_factor=factors[1],
                 visitor_factor=factors[2],
                 start_datetime=start_datetime
             )

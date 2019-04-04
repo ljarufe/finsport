@@ -111,7 +111,7 @@ class BetRow(TimeStampedModel):
     def first_earn(self):
         first_row = BetRow.objects.get(bet_table=self.bet_table, iteration=0)
 
-        return first_row.bet_amount * (first_row.match.parity_factor - 1)
+        return first_row.bet_amount * (first_row.match.draw_factor - 1)
 
     def __str__(self):
         return "{local} - {visitor} BET TABLE: {bet}".format(
@@ -126,9 +126,9 @@ class BetRow(TimeStampedModel):
         self.save()
 
     def set_won(self):
-        self.match.set_parity()
+        self.match.set_draw()
         self.state = BetRow.WON
-        self.profit = self.bet_amount * self.match.parity_factor
+        self.profit = self.bet_amount * self.match.draw_factor
         self.save()
 
     def set_lost(self):
@@ -143,7 +143,7 @@ class BetRow(TimeStampedModel):
             amount = (
                     (self.first_earn()*BetRow.DEVIATION**self.iteration +
                      self.previous.inversion_amount) /
-                    (self.match.parity_factor - 1))
+                    (self.match.draw_factor - 1))
         else:
             amount = account.start_bet
 
@@ -172,3 +172,4 @@ class BetRow(TimeStampedModel):
         self.inversion_amount = self.get_inversion_amount(account)
         if bet_selenium.make_bet(self):
             self.set_current()
+            account.funds -= self.bet_amount

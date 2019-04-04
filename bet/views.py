@@ -198,7 +198,7 @@ class StatisticView(TemplateView):
             time={'word': 'last_month', 'created__gt': from_date})
         context['team_difference'] = Match.TEAM_DIFFERENCE
         context['min_per_team'] = Match.MIN_PER_TEAM
-        context['min_parity'] = Match.MIN_PARITY
+        context['min_draw'] = Match.MIN_DRAW
         context['git_tag'] = git.tag
 
         return context

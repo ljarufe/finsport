@@ -8,7 +8,7 @@ from .models import Match, Team, League, LeagueRelatedName
 class MatchAdmin(admin.ModelAdmin):
     list_display = (
         'get_match_name', 'state', 'start_datetime', 'local_factor',
-        'parity_factor', 'visitor_factor',)
+        'draw_factor', 'visitor_factor',)
     list_filter = ('state', 'start_datetime',)
     search_fields = ('local_team__name', 'visitor_team__name',)
 

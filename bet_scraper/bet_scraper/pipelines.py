@@ -26,7 +26,7 @@ class MatchPipeline:
             checked_rules, msg = Match.check_rules(
                 item['start_datetime'],
                 item['local_factor'],
-                item['parity_factor'],
+                item['draw_factor'],
                 item['visitor_factor']
             )
             if checked_rules:
@@ -38,7 +38,7 @@ class MatchPipeline:
                     defaults={
                         'start_datetime': item['start_datetime'],
                         'local_factor': item['local_factor'],
-                        'parity_factor': item['parity_factor'],
+                        'draw_factor': item['draw_factor'],
                         'visitor_factor': item['visitor_factor']})
                 if created:
                     logger_get_matches.info(
@@ -62,7 +62,7 @@ class MatchPipeline:
                     )
                     match.start_datetime = item['start_datetime']
                     match.local_factor = item['local_factor']
-                    match.parity_factor = item['parity_factor']
+                    match.draw_factor = item['draw_factor']
                     match.visitor_factor = item['visitor_factor']
                     match.set_not_used()
                     logger_get_matches.info(
@@ -77,13 +77,12 @@ class MatchPipeline:
 class LivescorePipeline:
     def process_item(self, item, spider):
         if item['local_score'] != "?" and item['visitor_score'] != "?":
-            # TODO: Agregar al filtro la fecha y hora del partido
             local_query = Q()
-            for word in item['local_team'].split():
-                local_query |= Q(local_team__name__unaccent__icontains=word)
+            for w in filter(lambda x: len(x) > 2, item['local_team'].split()):
+                local_query |= Q(local_team__name__unaccent__icontains=w)
             visitor_query = Q()
-            for word in item['visitor_team'].split():
-                visitor_query |= Q(visitor_team__name__unaccent__icontains=word)
+            for w in filter(lambda x: len(x) > 2, item['visitor_team'].split()):
+                visitor_query |= Q(visitor_team__name__unaccent__icontains=w)
             matches = Match.objects.filter(local_query & visitor_query).filter(
                 start_datetime__date=datetime.today())
             if matches.exists():

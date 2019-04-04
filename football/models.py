@@ -39,7 +39,7 @@ class Match(TimeStampedModel):
     USED = 'U'
     PLAYING = 'P'
     LOCAL = 'L'
-    PARITY = 'R'
+    DRAW = 'R'
     VISITOR = 'V'
     NOT_USED = 'T'
     STATES = (
@@ -47,8 +47,7 @@ class Match(TimeStampedModel):
         ('U', 'used'),
         ('P', 'playing'),
         ('L', 'local'),
-        # TODO: cambiar parity por draw en todo el código
-        ('R', 'parity'),
+        ('R', 'draw'),
         ('V', 'visitor'),
         ('T', 'not used'),
     )
@@ -59,18 +58,18 @@ class Match(TimeStampedModel):
     visitor_score = models.IntegerField(null=True, blank=True)
     state = models.CharField(max_length=1, choices=STATES, default=NEW)
     local_factor = models.FloatField()
-    parity_factor = models.FloatField()
+    draw_factor = models.FloatField()
     visitor_factor = models.FloatField()
     start_datetime = models.DateTimeField()
     score = models.FloatField(default=0)
 
     TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_PARITY = 3
-    MAX_PARITY = 4
+    MIN_DRAW = 3
+    MAX_DRAW = 4.5
 
     MAX_SCORE_DIFFERENCE = 5
-    MAX_SCORE_PARITY = 3
+    MAX_SCORE_DRAW = 3
 
     LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 300
@@ -83,7 +82,7 @@ class Match(TimeStampedModel):
             date=self.start_datetime)
 
     def save(self, **kwargs):
-        self.score = self.get_team_difference_score() + self.get_parity_score()
+        self.score = self.get_team_difference_score() + self.get_draw_score()
         super().save(**kwargs)
 
     def set_new(self):
@@ -98,8 +97,8 @@ class Match(TimeStampedModel):
         self.state = Match.PLAYING
         self.save()
 
-    def set_parity(self):
-        self.state = Match.PARITY
+    def set_draw(self):
+        self.state = Match.DRAW
         self.save()
 
     def set_not_used(self):
@@ -111,8 +110,8 @@ class Match(TimeStampedModel):
                 1 - abs(self.local_factor - self.visitor_factor) /
                 Match.TEAM_DIFFERENCE))
 
-    def get_parity_score(self):
-        return Match.MAX_SCORE_PARITY * self.parity_factor - 9
+    def get_draw_score(self):
+        return 2 * self.draw_factor - 6
 
     def get_match_name(self):
         return "{local} - {visitor}".format(
@@ -139,13 +138,13 @@ class Match(TimeStampedModel):
         return Match.TRIAL_LAPSE < difference
 
     @classmethod
-    def check_rules(cls, start_datetime, local, parity, visitor):
+    def check_rules(cls, start_datetime, local, draw, visitor):
         if start_datetime < datetime.now() + timedelta(minutes=5):
             return False, "There is no time"
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
             return False, "Too much difference in teams"
-        if not cls.MIN_PARITY < parity < cls.MAX_PARITY:
-            return False, "Parity beyond limits"
+        if not cls.MIN_DRAW < draw < cls.MAX_DRAW:
+            return False, "Draw beyond limits"
         if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
             return False, "Teams are too secure to win"
 

@@ -52,6 +52,7 @@ class Account(models.Model):
         return '%s' % self.username
 
     def send_finished_table(self, table):
+        self.funds += table.total_profit
         context = dict(
             table=table,
             link="{}{}".format(
