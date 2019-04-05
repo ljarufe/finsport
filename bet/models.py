@@ -73,7 +73,7 @@ class BetTable(TimeStampedModel):
         self.total_inversion = bet_row.inversion_amount
         self.state = BetTable.FINISHED
         self.save()
-        account.send_finished_table(self)
+        account.send_finished_table(self, bet_row)
 
 
 class MatchManager(models.Manager):

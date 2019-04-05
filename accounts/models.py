@@ -51,10 +51,15 @@ class Account(models.Model):
     def __str__(self):
         return '%s' % self.username
 
-    def send_finished_table(self, table):
-        self.funds += table.total_profit
+    def update_profit(self, profit):
+        self.funds += profit
+        self.save()
+
+    def send_finished_table(self, table, bet_row):
+        self.update_profit(table.total_profit)
         context = dict(
             table=table,
+            bet_row=bet_row,
             link="{}{}".format(
                 settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
         msg = mark_safe(render_to_string('mails/finished_table.html', context))
