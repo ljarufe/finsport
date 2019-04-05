@@ -65,6 +65,7 @@ class InkabetSeleniumBot(SeleniumBot):
             empty = len(self.driver.find_elements_by_class_name(
                 'osg-betslip__content--empty'))
             if not empty:
+                # TODO: limpiar las apuestas seleccionadas
                 logger.info("Error, a bet is already selected")
                 return False
             bet[2].click()

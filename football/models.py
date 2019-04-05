@@ -71,7 +71,6 @@ class Match(TimeStampedModel):
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
 
-    LAPSE = timedelta(minutes=130)
     TRIAL_LAPSE = 300
 
     def __str__(self):
@@ -138,9 +137,7 @@ class Match(TimeStampedModel):
         return Match.TRIAL_LAPSE < difference
 
     @classmethod
-    def check_rules(cls, start_datetime, local, draw, visitor):
-        if start_datetime < datetime.now() + timedelta(minutes=5):
-            return False, "There is no time"
+    def check_rules(cls, local, draw, visitor):
         if abs(local - visitor) > cls.TEAM_DIFFERENCE:
             return False, "Too much difference in teams"
         if not cls.MIN_DRAW < draw < cls.MAX_DRAW:
@@ -155,7 +152,7 @@ class Match(TimeStampedModel):
         return cls.objects.filter(
             state=Match.NEW,
             start_datetime__gte=datetime.now() + timedelta(minutes=5),
-            start_datetime__lte=datetime.now() + Match.LAPSE
+            start_datetime__lte=datetime.now() + timedelta(minutes=45)
         ).order_by('score').last()
 
     class Meta:

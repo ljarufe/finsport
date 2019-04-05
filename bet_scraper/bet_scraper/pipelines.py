@@ -24,7 +24,6 @@ class MatchPipeline:
             visitor_team, _ = Team.objects.update_or_create(
                 name=item['visitor_team'], defaults={'league': league})
             checked_rules, msg = Match.check_rules(
-                item['start_datetime'],
                 item['local_factor'],
                 item['draw_factor'],
                 item['visitor_factor']
