@@ -1,0 +1,67 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2019-04-13 13:00-0500\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: finsport/settings.py:140
+msgid "England"
+msgstr "Inglaterra"
+
+#: finsport/settings.py:141
+msgid "Scotland"
+msgstr "Escocia"
+
+#: finsport/settings.py:142
+msgid "Wales"
+msgstr "Gales"
+
+#: finsport/settings.py:143
+msgid "Northern Ireland"
+msgstr "Irlanda del Norte"
+
+#: finsport/settings.py:144
+msgid "USA"
+msgstr "Estados Unidos de America"
+
+#: finsport/settings.py:145
+msgid "Czech Rep."
+msgstr "Rep. Checa"
+
+#: finsport/settings.py:146
+msgid "Korea"
+msgstr "Korea Rep"
+
+#: finsport/settings.py:147
+msgid "Bosnia-Herzegovina"
+msgstr "Bosnia y Herzegovina"
+
+#: finsport/settings.py:148
+msgid "Saudi Arabia"
+msgstr "Arabia Saudí"
+
+#: finsport/settings.py:149
+msgid "Cyprus"
+msgstr "Chipre"
+
+#: finsport/settings.py:150
+msgid "Netherlands"
+msgstr "Holanda"
+
+#: finsport/settings.py:151
+msgid "Macedonia"
+msgstr "Republic of Macedonia"

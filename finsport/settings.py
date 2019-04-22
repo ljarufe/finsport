@@ -2,6 +2,8 @@ import os
 import environ
 import socket
 
+from django.utils.translation import ugettext_lazy as _
+
 root = environ.Path(__file__) - 2
 env = environ.Env()
 environ.Env.read_env('%s/.env' % str(root - 1))
@@ -51,6 +53,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'debug_toolbar.middleware.DebugToolbarMiddleware',
+    'django.middleware.locale.LocaleMiddleware',
 ]
 
 ROOT_URLCONF = 'finsport.urls'
@@ -90,7 +93,16 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-LANGUAGE_CODE = 'es-pe'
+LANGUAGES = (
+    ('en-us', 'English'),
+    ('es-pe', 'Spanish'),
+)
+
+LANGUAGE_CODE = 'en-us'
+
+LOCALE_PATHS = (
+    os.path.join(BASE_DIR, 'locale'),
+)
 
 TIME_ZONE = 'America/Lima'
 
@@ -123,6 +135,21 @@ INSTANCE_DOMAIN = env('INSTANCE_DOMAIN')
 DATE_FORMAT = "%d de %B del %Y, %H:%M"
 
 DEFAULT_FROM_EMAIL = 'luisjarufe@gmail.com'
+
+COUNTRIES_OVERRIDE = {
+    'EN': _('England'),
+    'CT': _('Scotland'),
+    'WA': _('Wales'),
+    'ND': _('Northern Ireland'),
+    'US': _('USA'),
+    'CZ': _('Czech Rep.'),
+    'KR': _('Korea'),
+    'BA': _('Bosnia-Herzegovina'),
+    'SA': _('Saudi Arabia'),
+    'CY': _('Cyprus'),
+    'NL': _('Netherlands'),
+    'MK': _('Macedonia'),
+}
 
 LOGGING = {
     'version': 1,
@@ -174,6 +201,13 @@ LOGGING = {
             'filename': os.path.join(BASE_DIR, '../logs/inkabet_results.log'),
             'formatter': 'all',
         },
+        'leagues_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': os.path.join(BASE_DIR, '../logs/leagues.log'),
+            'formatter': 'all',
+        },
     },
     'loggers': {
         'get_matches': {
@@ -190,6 +224,10 @@ LOGGING = {
         },
         'inkabet_results': {
             'handlers': ['console', 'inkabet_results_file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+        'leagues': {
+            'handlers': ['console', 'leagues_file'],
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },

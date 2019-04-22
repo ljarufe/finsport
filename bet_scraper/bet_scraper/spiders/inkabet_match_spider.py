@@ -10,13 +10,18 @@ class InkabetMatchSpider(Spider):
     name = "inkabet"
     start_urls = ['https://www.inkabet.pe/es-ES/sportsbook/eventpaths/240']
 
+    def __init__(self, bet_page):
+        self.bet_page = bet_page
+        super().__init__()
+
     def parse(self, response):
         # TODO: cambiar todo esto
         table = response.css(
             'div.today_weekend_coupon_container table tbody tr')
         for i, tr in enumerate(table, start=10):
             if 'event' not in tr.xpath("@class").extract()[0]:
-                league = tr.css('th div span::text').extract_first()
+                country, league = tr.css(
+                    'th div span::text').extract_first().split(" - ", 1)
                 continue
             factors = []
             for td in tr.css('td'):
@@ -38,6 +43,7 @@ class InkabetMatchSpider(Spider):
                 local_team=match.split(' - ')[0],
                 visitor_team=match.split(' - ')[1],
                 league=league,
+                country=country,
                 local_factor=factors[0],
                 draw_factor=factors[1],
                 visitor_factor=factors[2],

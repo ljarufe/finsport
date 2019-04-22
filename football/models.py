@@ -1,28 +1,70 @@
 # -*- coding: utf-8 -*-
 
+import logging
+
 from datetime import timedelta, datetime
 
 from django.db import models
+from django.db.models import Max
 
+from django_countries import countries
 from django_countries.fields import CountryField
 from django_extensions.db.models import TimeStampedModel
+
+
+logger_leagues = logging.getLogger('leagues')
 
 
 class League(TimeStampedModel):
     name = models.CharField(max_length=250)
     country = CountryField(blank_label='(select country)')
+    draw_percentage = models.FloatField(blank=True, null=True)
 
     def __str__(self):
         return "{country} {name}".format(
             country=self.country.name, name=self.name)
 
+    @classmethod
+    def get_league(cls, league_name, country):
+        # TODO: El preprocesarmiento antes de la consulta depende de la casa
+        #  de apuestas
+        country = countries.by_name(country, language="es")
+        if country:
+            league = League.objects.filter(
+                country=country, name__unaccent__trigram_similar=league_name)
+            if league.exists():
+                return league.first()
+
+        return None
+
 
 class LeagueRelatedName(models.Model):
-    league = models.ForeignKey(League, on_delete=models.CASCADE)
-    related_name = models.CharField(max_length=250, unique=True)
+    league = models.ForeignKey('football.League', on_delete=models.CASCADE)
+    bet_page = models.ForeignKey('accounts.BetPage', on_delete=models.CASCADE)
+    name = models.CharField(max_length=250)
 
     def __str__(self):
-        return self.related_name
+        return "{bet_page}: {name}".format(
+            bet_page=self.bet_page, name=self.name)
+
+    @classmethod
+    def get_league(cls, league_name, country, bet_page):
+        related_league = cls.objects.filter(
+            name__unaccent__icontains=league_name, bet_page=bet_page)
+        if related_league.exists():
+            return related_league.first().league
+        league = League.get_league(league_name, country)
+        if league:
+            related_league, created = cls.objects.update_or_create(
+                league=league,
+                bet_page=bet_page,
+                defaults={'name': league_name})
+            if created:
+                logger_leagues.info(
+                    "Related league created: %s (%s)" % (league, bet_page))
+            return league
+
+        return None
 
 
 class Team(TimeStampedModel):
@@ -54,8 +96,8 @@ class Match(TimeStampedModel):
     local_team = models.ForeignKey(
         'football.Team', on_delete=models.CASCADE, related_name='local_team')
     visitor_team = models.ForeignKey('football.Team', on_delete=models.CASCADE)
-    local_score = models.IntegerField(null=True, blank=True)
-    visitor_score = models.IntegerField(null=True, blank=True)
+    local_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    visitor_score = models.PositiveSmallIntegerField(null=True, blank=True)
     state = models.CharField(max_length=1, choices=STATES, default=NEW)
     local_factor = models.FloatField()
     draw_factor = models.FloatField()
@@ -70,18 +112,26 @@ class Match(TimeStampedModel):
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
+    MIN_SCORE_LEAGUE = 25
 
     TRIAL_LAPSE = 300
+
+    @property
+    def league(self):
+        return self.local_team.league
 
     def __str__(self):
         return "{local} - {visitor} ({league}), {date}".format(
             local=self.local_team.name,
             visitor=self.visitor_team.name,
-            league=self.local_team.league,
+            league=self.league,
             date=self.start_datetime)
 
     def save(self, **kwargs):
-        self.score = self.get_team_difference_score() + self.get_draw_score()
+        self.score = (
+                self.get_team_difference_score() +
+                self.get_draw_score() +
+                self.get_league_score())
         super().save(**kwargs)
 
     def set_new(self):
@@ -112,6 +162,12 @@ class Match(TimeStampedModel):
     def get_draw_score(self):
         return 2 * self.draw_factor - 6
 
+    def get_league_score(self):
+        limit = League.objects.aggregate(Max('draw_percentage'))
+
+        return 2 * (self.league.draw_percentage - Match.MIN_SCORE_LEAGUE) / (
+                limit['draw_percentage__max'] - Match.MIN_SCORE_LEAGUE)
+
     def get_match_name(self):
         return "{local} - {visitor}".format(
             local=self.local_team.name, visitor=self.visitor_team.name)
@@ -136,13 +192,15 @@ class Match(TimeStampedModel):
 
         return Match.TRIAL_LAPSE < difference
 
-    @classmethod
-    def check_rules(cls, local, draw, visitor):
-        if abs(local - visitor) > cls.TEAM_DIFFERENCE:
+    def check_rules(self):
+        if abs(self.local_factor - self.visitor_factor) > Match.TEAM_DIFFERENCE:
             return False, "Too much difference in teams"
-        if not cls.MIN_DRAW < draw < cls.MAX_DRAW:
+        if not Match.MIN_DRAW <= self.draw_factor <= Match.MAX_DRAW:
             return False, "Draw beyond limits"
-        if local < cls.MIN_PER_TEAM or visitor < cls.MIN_PER_TEAM:
+        if self.league.draw_percentage < Match.MIN_SCORE_LEAGUE:
+            return False, "League draw percentage is too low"
+        if (self.local_factor < Match.MIN_PER_TEAM or
+                self.visitor_factor < Match.MIN_PER_TEAM):
             return False, "Teams are too secure to win"
 
         return True, ""
@@ -152,7 +210,7 @@ class Match(TimeStampedModel):
         return cls.objects.filter(
             state=Match.NEW,
             start_datetime__gte=datetime.now() + timedelta(minutes=5),
-            start_datetime__lte=datetime.now() + timedelta(minutes=45)
+            start_datetime__lte=datetime.now() + timedelta(minutes=35)
         ).order_by('score').last()
 
     class Meta:

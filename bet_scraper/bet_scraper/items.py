@@ -7,6 +7,7 @@ class MatchItem(scrapy.Item):
     local_team = scrapy.Field()
     visitor_team = scrapy.Field()
     league = scrapy.Field()
+    country = scrapy.Field()
     local_factor = scrapy.Field()
     draw_factor = scrapy.Field()
     visitor_factor = scrapy.Field()
@@ -24,3 +25,9 @@ class ResultMatchItem(scrapy.Item):
     local_team = scrapy.Field()
     visitor_team = scrapy.Field()
     result = scrapy.Field()
+
+
+class LeagueItem(scrapy.Item):
+    name = scrapy.Field()
+    country = scrapy.Field()
+    percentage = scrapy.Field()

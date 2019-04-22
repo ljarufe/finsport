@@ -7,7 +7,7 @@ from .models import Match, Team, League, LeagueRelatedName
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
     list_display = (
-        'get_match_name', 'state', 'start_datetime', 'local_factor',
+        'get_match_name', 'state', 'start_datetime', 'score', 'local_factor',
         'draw_factor', 'visitor_factor',)
     list_filter = ('state', 'start_datetime',)
     search_fields = ('local_team__name', 'visitor_team__name',)
@@ -22,13 +22,14 @@ class TeamAdmin(admin.ModelAdmin):
 
 class LeagueRelatedNameAdminInline(admin.TabularInline):
     model = LeagueRelatedName
+    extra = 1
 
 
 @admin.register(League)
 class LeagueAdmin(admin.ModelAdmin):
-    list_display = ('name', 'country',)
+    list_display = ('name', 'country', 'draw_percentage')
     list_filter = ('country',)
-    ordering = ('country',)
+    ordering = ('-draw_percentage',)
     search_fields = ('name',)
     form = LeagueForm
     inlines = (LeagueRelatedNameAdminInline,)

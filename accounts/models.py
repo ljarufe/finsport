@@ -51,12 +51,16 @@ class Account(models.Model):
     def __str__(self):
         return '%s' % self.username
 
-    def update_profit(self, profit):
+    def increase_profit(self, profit):
         self.funds += profit
         self.save()
 
+    def decrease_profit(self, profit):
+        self.funds -= profit
+        self.save()
+
     def send_finished_table(self, table, bet_row):
-        self.update_profit(table.total_profit)
+        self.increase_profit(table.total_profit)
         context = dict(
             table=table,
             bet_row=bet_row,

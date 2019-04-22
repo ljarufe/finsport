@@ -16,7 +16,6 @@ logger = logging.getLogger('fill_tables')
 
 
 class BetTable(TimeStampedModel):
-    # TODO: Aumentar la cuenta como campo
     AVAILABLE = 'A'
     FINISHED = 'F'
     STATES = (
@@ -156,6 +155,8 @@ class BetRow(TimeStampedModel):
             return account.start_bet
 
     def remove_match(self):
+        # TODO: Ya no es necesario revisar toda la tabla, sólo hay un partido
+        #  en new
         self.match.set_used()
         if self.previous:
             bet_rows = BetRow.objects.filter(
@@ -172,4 +173,4 @@ class BetRow(TimeStampedModel):
         self.inversion_amount = self.get_inversion_amount(account)
         if bet_selenium.make_bet(self):
             self.set_current()
-            account.funds -= self.bet_amount
+            account.decrease_profit(self.bet_amount)
