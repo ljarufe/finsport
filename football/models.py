@@ -50,7 +50,7 @@ class LeagueRelatedName(models.Model):
     @classmethod
     def get_league(cls, league_name, country, bet_page):
         related_league = cls.objects.filter(
-            name__unaccent__icontains=league_name, bet_page=bet_page)
+            name__unaccent__iexact=league_name, bet_page=bet_page)
         if related_league.exists():
             return related_league.first().league
         league = League.get_league(league_name, country)
@@ -112,7 +112,7 @@ class Match(TimeStampedModel):
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
-    MIN_SCORE_LEAGUE = 20
+    MIN_SCORE_LEAGUE = 21
 
     TRIAL_LAPSE = 300
 
