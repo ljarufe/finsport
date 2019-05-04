@@ -106,3 +106,13 @@ In order to check that everything is ok. Run this command:
 ($project_name$) $ ./manage.py check
 ```
 
+### Share a database
+To make a backup
+```
+pg_dump -U <user> <database> > nombre_db.sql
+```
+
+To load the backup
+```
+psql -U <user> <database> < nombre_db.sql
+```

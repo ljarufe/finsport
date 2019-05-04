@@ -11,6 +11,7 @@ class MatchAdmin(admin.ModelAdmin):
         'draw_factor', 'visitor_factor',)
     list_filter = ('state', 'start_datetime',)
     search_fields = ('local_team__name', 'visitor_team__name',)
+    raw_id_fields = ("local_team", "visitor_team",)
 
 
 @admin.register(Team)
