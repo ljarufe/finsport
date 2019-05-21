@@ -31,7 +31,8 @@ class League(TimeStampedModel):
         country = countries.by_name(country, language="es")
         if country:
             league = League.objects.filter(
-                country=country, name__unaccent__trigram_similar=league_name)
+                country=country, name__unaccent__trigram_similar=league_name,
+                leaguerelatedname=None)
             if league.exists():
                 return league.first()
 
