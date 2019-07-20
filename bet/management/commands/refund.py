@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
 
-import logging
-
 from django.core.management.base import BaseCommand
 
 from accounts.models import Account
 from bet.models import BetRow
-
-logger = logging.getLogger('make_bets')
 
 
 class Command(BaseCommand):
@@ -15,13 +11,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         for account in Account.objects.filter(bet_page__active=True):
-            bet_rows = BetRow.objects.filter(state=BetRow.NEW)
+            bet_rows = BetRow.objects.filter(state=BetRow.CURRENT)
             if bet_rows.exists():
                 bet_selenium = account.bet_page.get_selenium_bot()(account)
                 bet_selenium.login()
                 for bet_row in bet_rows:
-                    logger.info(
-                        "Making the bet for: %s" %
-                        bet_row.match.get_logger_info())
-                    bet_row.make_bet(account, bet_selenium)
+                    bet_row.refund(bet_selenium)
                 bet_selenium.clean_driver()

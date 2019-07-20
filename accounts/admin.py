@@ -13,7 +13,7 @@ class AccountAdminForm(ModelForm):
 
 class AccountAdmin(admin.ModelAdmin):
     form = AccountAdminForm
-    list_display = ('username', 'bet_page', 'email', 'funds')
+    list_display = ('username', 'bet_page', 'email',)
 
 
 class BetPageAdmin(admin.ModelAdmin):

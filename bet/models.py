@@ -173,4 +173,10 @@ class BetRow(TimeStampedModel):
         self.inversion_amount = self.get_inversion_amount(account)
         if bet_selenium.make_bet(self):
             self.set_current()
-            account.decrease_profit(self.bet_amount)
+
+    def refund(self, bet_selenium):
+        if self.iteration >= 7:
+            bet_selenium.emergency_refund(self)
+        if self.match.visitor_score and (
+                abs(self.match.visitor_score - self.match.local_score) > 1):
+            bet_selenium.stop_refund(self)

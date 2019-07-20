@@ -5,6 +5,7 @@ import logging
 
 from datetime import datetime, timedelta
 
+from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.keys import Keys
 from scrapy.selector import Selector
 from selenium.webdriver.common.by import By
@@ -110,3 +111,44 @@ class InkabetSeleniumBot(SeleniumBot):
             time.sleep(InkabetSeleniumBot.LONG_SLEEP)
 
             return self.confirm_bet(init)
+
+    def emergency_refund(self, bet_row):
+        self.driver.find_element_by_css_selector(
+            "div.osg-my-bets__opener").click()
+        items = self.driver.find_elements_by_css_selector(
+            "div.osg-my-bets__panel")
+        for item in items:
+            local_team = item.find_element_by_css_selector(
+                "div.osg-my-bets__selection-info-outcome-event-description"
+            ).text.split(" - ")[0]
+            if local_team == bet_row.match.local_team.name:
+                try:
+                    button = item.find_element_by_css_selector(
+                        "button.osg-my-bets__cashout--button")
+                    if float(button.text.split()[-1]) <= bet_row.bet_amount * 1.5:
+                        button.click()
+                        print("hola")
+                        # self.driver.find_element_by_css_selector(
+                        #     "button.osg-my-bets__cashout--confirmation-yes").click()
+                        self.driver.find_element_by_css_selector(
+                            "button.osg-my-bets__cashout--confirmation-no").click()
+                        time.sleep(5)
+                except NoSuchElementException:
+                    print("chau")
+
+        return
+
+    def stop_refund(self, bet_row):
+        self.driver.find_element_by_css_selector(
+            "div.osg-my-bets__opener").click()
+        time.sleep(5)
+        items = self.driver.find_elements_by_css_selector(
+            "button.osg-my-bets__cashout--button")
+        for item in items:
+            print(item.text.split()[-1])
+            item.click()
+            # self.driver.find_element_by_css_selector(
+            #     "button.osg-my-bets__cashout--confirmation-yes").click()
+            self.driver.find_element_by_css_selector(
+                "button.osg-my-bets__cashout--confirmation-no").click()
+        return

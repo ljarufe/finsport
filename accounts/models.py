@@ -44,23 +44,13 @@ class Account(models.Model):
     password = EncryptedCharField(max_length=32)
     email = models.EmailField()
     bet_page = models.ForeignKey(BetPage, on_delete=models.CASCADE)
-    funds = models.FloatField(default=0.0)
     num_allow_tables = models.IntegerField(default=1)
     start_bet = models.IntegerField()
 
     def __str__(self):
         return '%s' % self.username
 
-    def increase_profit(self, profit):
-        self.funds += profit
-        self.save()
-
-    def decrease_profit(self, profit):
-        self.funds -= profit
-        self.save()
-
     def send_finished_table(self, table, bet_row):
-        self.increase_profit(table.total_profit)
         context = dict(
             table=table,
             bet_row=bet_row,
