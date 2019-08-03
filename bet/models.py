@@ -66,9 +66,8 @@ class BetTable(TimeStampedModel):
             (match.get_logger_info(), self.id))
 
     def set_finished(self, account, bet_row):
-        bet_row.set_won()
         self.total_profit = bet_row.profit - bet_row.inversion_amount
-        self.bucle_number = BetRow.objects.filter(bet_table=self).count()
+        self.bucle_number = bet_row.iteration + 1
         self.total_inversion = bet_row.inversion_amount
         self.state = BetTable.FINISHED
         self.save()
@@ -105,7 +104,7 @@ class BetRow(TimeStampedModel):
 
     objects = MatchManager()
 
-    DEVIATION = 0.565
+    DEVIATION = 1
 
     def first_earn(self):
         first_row = BetRow.objects.get(bet_table=self.bet_table, iteration=0)
@@ -131,7 +130,7 @@ class BetRow(TimeStampedModel):
         self.save()
 
     def set_lost(self):
-        # TODO: quitar esto cuando siempre se saque el resultado del partido
+        # TODO: cambiar esto cuando siempre se saque el resultado del partido
         self.match.set_used()
         self.state = BetRow.LOST
         self.profit = self.bet_amount * (-1)

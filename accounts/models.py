@@ -68,7 +68,7 @@ class Account(models.Model):
                 settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
         msg = mark_safe(render_to_string('mails/finished_table.html', context))
         send_mail(
-            subject='Ganaste!',
+            subject='Tabla cerrada',
             message=strip_tags(msg),
             html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,

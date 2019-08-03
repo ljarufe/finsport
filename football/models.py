@@ -113,7 +113,7 @@ class Match(TimeStampedModel):
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
-    MIN_SCORE_LEAGUE = 21
+    MIN_SCORE_LEAGUE = 25
 
     TRIAL_LAPSE = 300
 
