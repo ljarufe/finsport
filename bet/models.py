@@ -31,7 +31,7 @@ class BetTable(TimeStampedModel):
     @classmethod
     def fill_tables(cls, max_tables):
         available_tables = BetTable.objects.filter(
-            state=BetTable.AVAILABLE)
+            state=BetTable.AVAILABLE).order_by("id")
         for i in range(0, max_tables - available_tables.count()):
             match = Match.get_best_match()
             if match:
