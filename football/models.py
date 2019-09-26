@@ -210,8 +210,8 @@ class Match(TimeStampedModel):
     def get_best_match(cls):
         return cls.objects.filter(
             state=Match.NEW,
-            start_datetime__gte=datetime.now() + timedelta(minutes=5),
-            start_datetime__lte=datetime.now() + timedelta(minutes=35)
+            # start_datetime__gte=datetime.now() + timedelta(minutes=5),
+            # start_datetime__lte=datetime.now() + timedelta(minutes=35)
         ).order_by('score').last()
 
     class Meta:
