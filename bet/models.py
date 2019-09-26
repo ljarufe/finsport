@@ -30,22 +30,22 @@ class BetTable(TimeStampedModel):
 
     @classmethod
     def fill_tables(cls, max_tables):
-        available_tables = BetTable.objects.filter(
-            state=BetTable.AVAILABLE)
+        available_tables = BetTable.objects.filter(state=BetTable.AVAILABLE)
+        current_rows = BetRow.objects.filter(
+            state__in=(BetRow.CURRENT, BetRow.NEW)
+        ).values_list('bet_table_id', flat=True)
+        current_tables = available_tables.exclude(
+            id__in=current_rows).order_by("id")
+        for table in current_tables:
+            match = Match.get_best_match()
+            if match:
+                table.add_row(match)
         for i in range(0, max_tables - available_tables.count()):
             match = Match.get_best_match()
             if match:
                 table = BetTable.objects.create(
                     name=datetime.now().strftime(settings.DATE_FORMAT))
                 logger.info("New table: %s" % table)
-                table.add_row(match)
-        current_rows = BetRow.objects.filter(
-            state__in=(BetRow.CURRENT, BetRow.NEW)
-        ).values_list('bet_table_id', flat=True)
-        available_tables = available_tables.exclude(id__in=current_rows)
-        for table in available_tables:
-            match = Match.get_best_match()
-            if match:
                 table.add_row(match)
 
     def __str__(self):
