@@ -31,7 +31,7 @@ def deploy(c):
         c.run('git pull')
         with c.prefix('source ../bin/activate'):
             _.print_info("Instalando paquetes")
-            c.run('pip install -I -r requirements.txt')
+            c.run('pip install -r requirements.txt')
             _.print_info("Corriendo migraciones")
             c.run('python manage.py migrate --noinput')
             _.print_info("Colectando archivos estaticos")

@@ -87,13 +87,15 @@ class ResultsPipeline:
             bet_row = bet_rows.first()
             if item['result'] is BetRow.WON:
                 bet_row.set_won()
-                bet_row.bet_table.set_finished(spider.account, bet_row)
+                bet_row.bet_table.set_finished()
+                spider.account.send_finished_table(bet_row.bet_table)
                 logger_inkabet_results.info(
                     "Won match: %s" % bet_row.match.get_logger_info())
             else:
                 bet_row.set_lost()
                 if bet_row.iteration > 5:
-                    bet_row.bet_table.set_finished(spider.account, bet_row)
+                    bet_row.bet_table.set_finished()
+                    spider.account.send_finished_table(bet_row.bet_table)
                 logger_inkabet_results.info(
                     "Lost match: %s" % bet_row.match.get_logger_info())
             return item

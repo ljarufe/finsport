@@ -1,0 +1,27 @@
+from rest_framework.serializers import ModelSerializer
+
+from .models import Match, Team
+
+
+class TeamSerializer(ModelSerializer):
+    class Meta:
+        model = Team
+        fields = ('name',)
+
+
+class MatchSerializer(ModelSerializer):
+    local_team = TeamSerializer()
+    visitor_team = TeamSerializer()
+
+    class Meta:
+        model = Match
+        fields = (
+            'local_team',
+            'visitor_team',
+            'start_datetime',
+            'local_score',
+            'visitor_score',
+            'local_factor',
+            'visitor_factor',
+            'draw_factor',
+        )

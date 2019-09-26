@@ -38,10 +38,9 @@ INSTALLED_APPS = [
     'bet',
     'accounts',
     # third parties
-    'debug_toolbar',
-    'bootstrap3',
     'django_extensions',
     'django_countries',
+    'rest_framework',
 ]
 
 MIDDLEWARE = [
@@ -231,4 +230,10 @@ LOGGING = {
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
+    ]
 }
