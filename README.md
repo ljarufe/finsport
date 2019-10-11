@@ -116,3 +116,8 @@ To load the backup
 ```
 psql -U <user> <database> < nombre_db.sql
 ```
+
+### Serve REST for Reactjs
+```
+./manage.py runserver 0.0.0.0:8000
+```

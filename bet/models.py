@@ -52,7 +52,7 @@ class BetTable(TimeStampedModel):
         return "{id} - {name}".format(id=self.id, name=self.name)
 
     def add_row(self, match):
-        previous_rows = self.betrow_set.all()
+        previous_rows = self.bet_rows.all()
         if previous_rows.exists():
             previous_row = previous_rows.first()
             BetRow.objects.create(

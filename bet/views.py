@@ -9,7 +9,10 @@ class BetTableView(viewsets.ModelViewSet):
 
     def get_queryset(self):
         state = self.request.query_params.get("state", None)
+        bet_tables = BetTable.objects.all()
         if state:
-            return BetTable.objects.filter(state=state)
+            bet_tables = bet_tables.filter(state=state)
+            if state == 'A':
+                bet_tables = bet_tables.order_by('id')
 
-        return BetTable.objects.all()
+        return bet_tables

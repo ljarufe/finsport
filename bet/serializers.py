@@ -11,6 +11,7 @@ class BetRowSerializer(serializers.ModelSerializer):
     class Meta:
         model = BetRow
         fields = (
+            'id',
             'bet_amount',
             'inversion_amount',
             'profit',
@@ -21,7 +22,7 @@ class BetRowSerializer(serializers.ModelSerializer):
 
 
 class BetTableSerializer(serializers.ModelSerializer):
-    bet_rows = BetRowSerializer(many=True)
+    bet_rows = serializers.SerializerMethodField()
 
     class Meta:
         model = BetTable
@@ -32,3 +33,8 @@ class BetTableSerializer(serializers.ModelSerializer):
             'total_inversion',
             'bet_rows',
         )
+
+    def get_bet_rows(self, instance):
+        bet_rows = instance.bet_rows.all().order_by('id')
+
+        return BetRowSerializer(bet_rows, many=True).data

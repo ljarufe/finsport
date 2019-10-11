@@ -1,12 +1,23 @@
 from rest_framework.serializers import ModelSerializer
+from django_countries.serializer_fields import CountryField
 
-from .models import Match, Team
+from .models import Match, Team, League
+
+
+class LeagueSerializer(ModelSerializer):
+    country = CountryField(country_dict=True)
+
+    class Meta:
+        model = League
+        fields = ('name', 'country',)
 
 
 class TeamSerializer(ModelSerializer):
+    league = LeagueSerializer()
+
     class Meta:
         model = Team
-        fields = ('name',)
+        fields = ('name', 'league',)
 
 
 class MatchSerializer(ModelSerializer):
