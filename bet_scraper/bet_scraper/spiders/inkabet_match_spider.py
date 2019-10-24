@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 from scrapy import Spider, Selector
@@ -37,6 +37,8 @@ class InkabetMatchSpider(Spider):
             ).get().split()[1].split(':')
             start_datetime = datetime.now().replace(
                 hour=int(hour), minute=int(minute), second=0, microsecond=0)
+            if start_datetime > datetime.now() + timedelta(hours=1):
+                raise StopIteration
             local_factor, draw_factor, visitor_factor = map(
                 lambda x: float(x),
                 selector.css('.osg-outcome__price-arrow::text').getall()[:3])
