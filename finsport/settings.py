@@ -151,6 +151,8 @@ COUNTRIES_OVERRIDE = {
     'MK': _('Macedonia'),
 }
 
+SCRAPY_LOG = env('SCRAPY_LOG', default=False)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

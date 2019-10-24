@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from scrapy.crawler import CrawlerProcess
 
@@ -14,7 +15,7 @@ class Command(BaseCommand):
                     'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
                 'ITEM_PIPELINES': {
                     'bet_scraper.bet_scraper.pipelines.MatchPipeline': 300},
-                'LOG_ENABLED': False,
+                'LOG_ENABLED': settings.SCRAPY_LOG,
             })
             process.crawl(bet_page.get_match_spider(), bet_page)
             process.start()
