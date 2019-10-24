@@ -19,9 +19,9 @@ class SeleniumBot:
         self.driver.close()
         self.driver.quit()
 
-    def get_page_source(self, url):
+    def get_page_source(self, url, sleep_time=LONG_SLEEP):
         self.driver.get(url)
-        time.sleep(SeleniumBot.LONG_SLEEP)
+        time.sleep(sleep_time)
 
         return self.driver.page_source
 

@@ -8,6 +8,7 @@ class MatchItem(scrapy.Item):
     visitor_team = scrapy.Field()
     league = scrapy.Field()
     country = scrapy.Field()
+    url = scrapy.Field()
     local_factor = scrapy.Field()
     draw_factor = scrapy.Field()
     visitor_factor = scrapy.Field()

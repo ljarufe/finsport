@@ -29,6 +29,7 @@ class MatchPipeline:
                 local_team=local_team,
                 visitor_team=visitor_team,
                 defaults={
+                    'inkabet_url': item['url'],
                     'start_datetime': item['start_datetime'],
                     'local_factor': item['local_factor'],
                     'draw_factor': item['draw_factor'],
@@ -85,7 +86,7 @@ class ResultsPipeline:
             state=BetRow.CURRENT)
         if bet_rows.exists():
             bet_row = bet_rows.first()
-            if item['result'] is BetRow.WON:
+            if item['result'] == "Ganadas":
                 bet_row.set_won()
                 bet_row.bet_table.set_finished(spider.account, bet_row)
                 logger_inkabet_results.info(

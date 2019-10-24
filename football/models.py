@@ -99,6 +99,7 @@ class Match(TimeStampedModel):
     visitor_team = models.ForeignKey('football.Team', on_delete=models.CASCADE)
     local_score = models.PositiveSmallIntegerField(null=True, blank=True)
     visitor_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    inkabet_url = models.CharField(max_length=150, blank=True)
     state = models.CharField(max_length=1, choices=STATES, default=NEW)
     local_factor = models.FloatField()
     draw_factor = models.FloatField()
