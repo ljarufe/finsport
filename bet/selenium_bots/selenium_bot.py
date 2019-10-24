@@ -9,7 +9,7 @@ from selenium.webdriver.chrome.options import Options
 
 
 class SeleniumBot:
-    LONG_SLEEP = 5
+    SHORT_SLEEP = 5
 
     def __init__(self):
         self.driver = SeleniumBot._set_driver()
@@ -19,9 +19,15 @@ class SeleniumBot:
         self.driver.close()
         self.driver.quit()
 
-    def get_page_source(self, url, sleep_time=LONG_SLEEP):
+    def get_page_source(self, url, sleep_time=SHORT_SLEEP, scroll_down=False):
         self.driver.get(url)
         time.sleep(sleep_time)
+        if scroll_down:
+            self.driver.execute_script(
+                "window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(sleep_time)
+            self.driver.execute_script(
+                "window.scrollTo(0, document.body.scrollHeight);")
 
         return self.driver.page_source
 
