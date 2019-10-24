@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import itertools
-
 from scrapy import Spider, Selector
 
 from bet_scraper.bet_scraper.items import ResultMatchItem
@@ -9,7 +7,7 @@ from bet_scraper.bet_scraper.items import ResultMatchItem
 
 class InkabetResultSpider(Spider):
     name = "inkabet_result_spider"
-    start_urls = ['https://www.inkabet.pe/es-ES/account/history']
+    start_urls = ['https://www.inkabet.pe/account/betshistory']
     LOST = 'L'
     WON = 'W'
     RESULT_TYPE = {
@@ -26,19 +24,13 @@ class InkabetResultSpider(Spider):
         bet_selenium.clean_driver()
 
     def parse(self, response):
-        return itertools.chain(
-            self.yield_items(InkabetResultSpider.LOST),
-            self.yield_items(InkabetResultSpider.WON))
-
-    def yield_items(self, result_type):
-        rows = self.selector.css(
-            'table#history_table .%s' %
-            InkabetResultSpider.RESULT_TYPE[result_type])
+        rows = self.selector.css('.osg-bets-history-item--table')
         for tr in rows:
-            result = tr.xpath('td[6]/span/span/text()').extract()[1]
-            teams = [r.strip().split("  ")[0] for r in result.split(" - ")]
+            result = tr.css(".osg-bets-history-item__status span::text").get()
+            match = tr.css('.osg-bets-history-item__competitors::text').get()
+            local, visitor = match.split(" - ")
 
             yield ResultMatchItem(
-                local_team=teams[2],
-                visitor_team=teams[3],
-                result=result_type)
+                local_team=local,
+                visitor_team=visitor,
+                result=result)
