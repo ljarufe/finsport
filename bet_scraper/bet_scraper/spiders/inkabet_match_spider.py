@@ -37,7 +37,7 @@ class InkabetMatchSpider(Spider):
             ).get().split()[1].split(':')
             start_datetime = datetime.now().replace(
                 hour=int(hour), minute=int(minute), second=0, microsecond=0)
-            if start_datetime > datetime.now() + timedelta(hours=1):
+            if start_datetime > datetime.now() + timedelta(minutes=35):
                 raise StopIteration
             local_factor, draw_factor, visitor_factor = map(
                 lambda x: float(x),
