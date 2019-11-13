@@ -30,8 +30,16 @@ class BetTable(TimeStampedModel):
 
     @classmethod
     def fill_tables(cls, max_tables):
-        available_tables = BetTable.objects.filter(
-            state=BetTable.AVAILABLE)
+        available_tables = BetTable.objects.filter(state=BetTable.AVAILABLE)
+        current_rows = BetRow.objects.filter(
+            state__in=(BetRow.CURRENT, BetRow.NEW)
+        ).values_list('bet_table_id', flat=True)
+        current_tables = available_tables.exclude(
+            id__in=current_rows).order_by("id")
+        for table in current_tables:
+            match = Match.get_best_match()
+            if match:
+                table.add_row(match)
         for i in range(0, max_tables - available_tables.count()):
             match = Match.get_best_match()
             if match:
@@ -39,20 +47,12 @@ class BetTable(TimeStampedModel):
                     name=datetime.now().strftime(settings.DATE_FORMAT))
                 logger.info("New table: %s" % table)
                 table.add_row(match)
-        current_rows = BetRow.objects.filter(
-            state__in=(BetRow.CURRENT, BetRow.NEW)
-        ).values_list('bet_table_id', flat=True)
-        available_tables = available_tables.exclude(id__in=current_rows)
-        for table in available_tables:
-            match = Match.get_best_match()
-            if match:
-                table.add_row(match)
 
     def __str__(self):
         return "{id} - {name}".format(id=self.id, name=self.name)
 
     def add_row(self, match):
-        previous_rows = self.betrow_set.all()
+        previous_rows = self.bet_rows.all()
         if previous_rows.exists():
             previous_row = previous_rows.first()
             BetRow.objects.create(
@@ -65,14 +65,15 @@ class BetTable(TimeStampedModel):
             "Match to table: %s, table: %s" %
             (match.get_logger_info(), self.id))
 
-    def set_finished(self, account, bet_row):
-        bet_row.set_won()
-        self.total_profit = bet_row.profit - bet_row.inversion_amount
-        self.bucle_number = BetRow.objects.filter(bet_table=self).count()
+    def set_total(self, bet_row):
+        self.total_profit = bet_row.profit
+        self.bucle_number = bet_row.iteration + 1
         self.total_inversion = bet_row.inversion_amount
+        self.save()
+
+    def set_finished(self):
         self.state = BetTable.FINISHED
         self.save()
-        account.send_finished_table(self, bet_row)
 
 
 class MatchManager(models.Manager):
@@ -93,7 +94,8 @@ class BetRow(TimeStampedModel):
         ('L', 'lost'),
     )
     match = models.ForeignKey('football.Match', on_delete=models.CASCADE)
-    bet_table = models.ForeignKey('bet.BetTable', on_delete=models.CASCADE)
+    bet_table = models.ForeignKey(
+        'bet.BetTable', related_name='bet_rows', on_delete=models.CASCADE)
     bet_amount = models.FloatField(default=0)
     inversion_amount = models.FloatField(default=0)
     profit = models.FloatField(default=0)
@@ -105,7 +107,7 @@ class BetRow(TimeStampedModel):
 
     objects = MatchManager()
 
-    DEVIATION = 0.565
+    DEVIATION = 1
 
     def first_earn(self):
         first_row = BetRow.objects.get(bet_table=self.bet_table, iteration=0)
@@ -128,13 +130,19 @@ class BetRow(TimeStampedModel):
         self.match.set_draw()
         self.state = BetRow.WON
         self.profit = self.bet_amount * self.match.draw_factor
+        if self.previous:
+            self.profit += self.previous.profit
+        self.bet_table.set_total(self)
         self.save()
 
     def set_lost(self):
-        # TODO: quitar esto cuando siempre se saque el resultado del partido
+        # TODO: cambiar esto cuando siempre se saque el resultado del partido
         self.match.set_used()
         self.state = BetRow.LOST
         self.profit = self.bet_amount * (-1)
+        if self.previous:
+            self.profit += self.previous.profit
+        self.bet_table.set_total(self)
         self.save()
 
     def get_bet_amount(self, account):

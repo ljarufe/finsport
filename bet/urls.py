@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
-from django.urls import path
+from django.urls import include, path
+from rest_framework import routers
 
-from bet.views import BetTableListView, StatisticView
+from .views import BetTableView
 
-app_name = 'bet'
-
+router = routers.DefaultRouter()
+router.register(r'tables', BetTableView, basename='table')
 
 urlpatterns = [
-    path('tables/', BetTableListView.as_view(), name='bet-list'),
-    path('statistics/', StatisticView.as_view(), name='statistics'),
+    path('', include(router.urls)),
 ]

@@ -1,51 +1,56 @@
 # -*- coding: utf-8 -*-
 
-from datetime import datetime
-from scrapy import Spider
+from datetime import datetime, timedelta
+from urllib.parse import urljoin
 
+from scrapy import Spider, Selector
+
+from bet.selenium_bots.selenium_bot import SeleniumBot
 from bet_scraper.bet_scraper.items import MatchItem
 
 
 class InkabetMatchSpider(Spider):
     name = "inkabet"
-    start_urls = ['https://www.inkabet.pe/es-ES/sportsbook/eventpaths/240']
+    start_urls = ['https://www.inkabet.pe']
 
     def __init__(self, bet_page):
         self.bet_page = bet_page
-        super().__init__()
+        self.bet_selenium = SeleniumBot()
+        self.selector = Selector(text=self.bet_selenium.get_page_source(
+            urljoin(InkabetMatchSpider.start_urls[0], "/sportsbook/240")))
+
+    def __del__(self):
+        self.bet_selenium.clean_driver()
 
     def parse(self, response):
-        # TODO: cambiar todo esto
-        table = response.css(
-            'div.today_weekend_coupon_container table tbody tr')
-        for i, tr in enumerate(table, start=10):
-            if 'event' not in tr.xpath("@class").extract()[0]:
-                country, league = tr.css(
-                    'th div span::text').extract_first().split(" - ", 1)
-                continue
-            factors = []
-            for td in tr.css('td'):
-                if 'outcome' in td.xpath("@class").extract()[0]:
-                    factors.append(td.css('a::text').extract_first())
-                if 'event' in td.xpath("@class").extract()[0]:
-                    match = td.css('a::text').extract_first().strip()
-                if 'date_time' in td.xpath("@class").extract()[0]:
-                    start_datetime = datetime.strptime(
-                        td.css('time::text').extract_first().strip(),
-                        '%d-%m-%y %H:%M')
-            if not len(factors) > 3:
-                continue
-            if len(match.split(' - ')) < 2:
-                continue
-            factors = list(map(lambda x: float(x), factors[:3]))
+        items = self.selector.xpath('//div[./preceding-sibling::h3[1]="Hoy"]')
+        for item in items:
+            url = item.css('a::attr(href)').extract_first()
+            selector = Selector(text=self.bet_selenium.get_page_source(
+                urljoin(InkabetMatchSpider.start_urls[0], url), sleep_time=3))
+            country, league = selector.css(
+                '.osg-coupon__breadcrumbs a::text').getall()[2:4]
+            local_team, visitor_team = selector.css(
+                '.osg-coupon__event-header-title::text').get().split(' - ')
+            hour, minute = selector.css(
+                '.osg-coupon__event-header-time::text'
+            ).get().split()[1].split(':')
+            start_datetime = datetime.now().replace(
+                hour=int(hour), minute=int(minute), second=0, microsecond=0)
+            if start_datetime > datetime.now() + timedelta(minutes=35):
+                raise StopIteration
+            local_factor, draw_factor, visitor_factor = map(
+                lambda x: float(x),
+                selector.css('.osg-outcome__price-arrow::text').getall()[:3])
 
             yield MatchItem(
-                local_team=match.split(' - ')[0],
-                visitor_team=match.split(' - ')[1],
+                local_team=local_team,
+                visitor_team=visitor_team,
                 league=league,
                 country=country,
-                local_factor=factors[0],
-                draw_factor=factors[1],
-                visitor_factor=factors[2],
-                start_datetime=start_datetime
+                url=url,
+                local_factor=local_factor,
+                draw_factor=draw_factor,
+                visitor_factor=visitor_factor,
+                start_datetime=start_datetime,
             )

@@ -25,6 +25,8 @@ ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
 DATABASES = {'default': env.db()}
 
+CORS_ORIGIN_WHITELIST = env.list('CORS_ORIGIN_WHITELIST', default=[])
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -38,13 +40,14 @@ INSTALLED_APPS = [
     'bet',
     'accounts',
     # third parties
-    'debug_toolbar',
-    'bootstrap3',
     'django_extensions',
     'django_countries',
+    'rest_framework',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -151,6 +154,8 @@ COUNTRIES_OVERRIDE = {
     'MK': _('Macedonia'),
 }
 
+SCRAPY_LOG = env('SCRAPY_LOG', default=False)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -231,4 +236,13 @@ LOGGING = {
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
+    ],
+    'DEFAULT_PAGINATION_CLASS':
+        'rest_framework.pagination.LimitOffsetPagination',
+    'PAGE_SIZE': 10,
 }

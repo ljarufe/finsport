@@ -16,7 +16,6 @@ from bet_scraper.bet_scraper.spiders.inkabet_match_spider import (
 class BetPage(models.Model):
     name = models.CharField(max_length=250)
     domain = models.URLField()
-    match_list_url = models.URLField()
     active = models.BooleanField()
 
     BET_PAGE_BOTS = {
@@ -58,7 +57,7 @@ class Account(models.Model):
                 settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
         msg = mark_safe(render_to_string('mails/finished_table.html', context))
         send_mail(
-            subject='Ganaste!',
+            subject='Tabla cerrada',
             message=strip_tags(msg),
             html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,

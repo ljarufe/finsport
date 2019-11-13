@@ -99,6 +99,7 @@ class Match(TimeStampedModel):
     visitor_team = models.ForeignKey('football.Team', on_delete=models.CASCADE)
     local_score = models.PositiveSmallIntegerField(null=True, blank=True)
     visitor_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    inkabet_url = models.CharField(max_length=150, blank=True)
     state = models.CharField(max_length=1, choices=STATES, default=NEW)
     local_factor = models.FloatField()
     draw_factor = models.FloatField()
@@ -108,12 +109,12 @@ class Match(TimeStampedModel):
 
     TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_DRAW = 3
-    MAX_DRAW = 4.5
+    MIN_DRAW = 2.8
+    MAX_DRAW = 4.2
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
-    MIN_SCORE_LEAGUE = 21
+    MIN_SCORE_LEAGUE = 25
 
     TRIAL_LAPSE = 300
 

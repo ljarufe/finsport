@@ -4,11 +4,10 @@ import time
 import logging
 
 from datetime import datetime, timedelta
+from urllib.parse import urljoin
 
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.keys import Keys
-from scrapy.selector import Selector
-from selenium.webdriver.common.by import By
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
 
@@ -25,11 +24,12 @@ class InkabetSeleniumBot(SeleniumBot):
         super().__init__()
 
     def login(self):
-        self.driver.get(self.account.bet_page.domain)
-        time.sleep(InkabetSeleniumBot.LONG_SLEEP)
-        username = self.driver.find_element_by_id('user_username')
-        password = self.driver.find_element_by_id('user_password')
-        submit = self.driver.find_element_by_name('commit')
+        self.driver.get(urljoin(self.account.bet_page.domain, 'login'))
+        time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
+        username = self.driver.find_element_by_name('username')
+        password = self.driver.find_element_by_name('password')
+        submit = self.driver.find_element_by_xpath(
+            '//*[@id="osg-app"]/div/div[1]/form/button')
         username.clear()
         username.send_keys(self.account.username)
         password.send_keys(self.account.password)
@@ -37,49 +37,32 @@ class InkabetSeleniumBot(SeleniumBot):
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
 
     def make_bet(self, bet_row):
-        self.driver.get(self.account.bet_page.match_list_url)
-        time.sleep(InkabetSeleniumBot.LONG_SLEEP)
-        my_match = '%s - %s' % (
-            bet_row.match.local_team.name,
-            bet_row.match.visitor_team.name)
-        table = Selector(text=self.driver.page_source).css(
-            'div.today_weekend_coupon_container table tbody tr')
-        table2 = self.driver.find_elements(
-            By.CSS_SELECTOR,
-            'div.today_weekend_coupon_container table tbody tr')
-        # TODO: Buscar el partido por el nombre y no iterar
-        for i in range(len(table)):
-            if 'event' not in table[i].xpath("@class").extract()[0]:
-                continue
-            bet = table2[i].find_elements_by_css_selector('a')
-            for td in table[i].css('td'):
-                if 'event' in td.xpath("@class").extract()[0]:
-                    match = td.css('a::text').extract_first().strip()
-                    if match == my_match:
-                        return self.bet(bet, bet_row.bet_amount)
+        self.driver.get(
+            urljoin(self.account.bet_page.domain, bet_row.match.inkabet_url))
+        time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
+        bet = self.driver.find_elements_by_xpath(
+            '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]'
+            '/div[2]/div/div[2]/div/div')
+        if len(bet) > 0:
+            return self.bet(bet[0], bet_row.bet_amount)
         bet_row.remove_match()
         logger.info("Error, match is not longer available")
+
         return False
 
     def bet(self, bet, amount):
         try:
-            empty = len(self.driver.find_elements_by_class_name(
-                'osg-betslip__content--empty'))
-            if not empty:
-                # TODO: limpiar las apuestas seleccionadas
-                logger.info("Error, a bet is already selected")
-                return False
-            bet[2].click()
+            clean_bets = self.driver.find_elements_by_xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div'
+                '/div[2]/div/div[3]/div[3]/button')
+            if len(clean_bets) > 0:
+                clean_bets[0].click()
+            bet.click()
             time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
-            combined = self.driver.find_elements_by_class_name(
-                'osg-betslip__selection--multiple')
-            if len(combined):
-                logger.info('Error, a multiple bet is already selected')
-                return False
-            amount_css = self.driver.find_elements_by_xpath(
-                "//div[@class='osg-betslip__input-field-container']//input"
-                "[@type='text']")
-            amount_css[0].send_keys(str(amount))
+            amount_css = self.driver.find_element_by_xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]'
+                '/div/div[1]/div[2]/div[2]/div[1]/div[2]/input')
+            amount_css.send_keys(str(amount))
         except Exception as err:
             logger.info('Error, putting the amount: %s' % err)
             return False
@@ -88,20 +71,20 @@ class InkabetSeleniumBot(SeleniumBot):
 
     def confirm_bet(self, init):
         try:
-            bet_button = self.driver.find_element_by_class_name(
-                'osg-betslip__actions-place-bet-button')
+            bet_button = self.driver.find_element_by_xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]'
+                '/div/div[3]/div[2]/button')
             bet_button.send_keys(Keys.RETURN)
             time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
-            receipt = self.driver.find_elements_by_class_name(
-                'osg-betslip__receipt-title')
-            if len(receipt):
+            error = self.driver.find_elements_by_xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/'
+                'div[2]/div/div[3]/div[2]/ul/li')
+            if len(error) > 0:
+                logger.info('Error, pressing confirm: %s' % error[0].text)
+                return False
+            else:
                 logger.info("Successful bet")
                 return True
-            else:
-                error = self.driver.find_elements_by_class_name(
-                    'osg-betslip__actions-errors-list-item')[0].text
-                logger.info('Error, pressing confirm: %s' % error)
-                return False
         except Exception as e:
             if init + timedelta(minutes=InkabetSeleniumBot.RETRY_TIME) < (
                     datetime.now()):

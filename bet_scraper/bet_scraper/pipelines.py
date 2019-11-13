@@ -29,6 +29,7 @@ class MatchPipeline:
                 local_team=local_team,
                 visitor_team=visitor_team,
                 defaults={
+                    'inkabet_url': item['url'],
                     'start_datetime': item['start_datetime'],
                     'local_factor': item['local_factor'],
                     'draw_factor': item['draw_factor'],
@@ -85,14 +86,22 @@ class ResultsPipeline:
             state=BetRow.CURRENT)
         if bet_rows.exists():
             bet_row = bet_rows.first()
-            if item['result'] is BetRow.WON:
-                bet_row.bet_table.set_finished(spider.account, bet_row)
-                logger_inkabet_results.info(
-                    "Won match: %s" % bet_row.match.get_logger_info())
-            else:
-                bet_row.set_lost()
-                logger_inkabet_results.info(
-                    "Lost match: %s" % bet_row.match.get_logger_info())
+            if item['result']:
+                if item['result'] == "Ganadas":
+                    bet_row.set_won()
+                    bet_row.bet_table.set_finished(spider.account, bet_row)
+                    logger_inkabet_results.info(
+                        "Won match: %s" % bet_row.match.get_logger_info())
+                elif item['result'] == "Perdidas":
+                    bet_row.set_lost()
+                    if bet_row.iteration > 5:
+                        bet_row.bet_table.set_finished(spider.account, bet_row)
+                    logger_inkabet_results.info(
+                        "Lost match: %s" % bet_row.match.get_logger_info())
+                elif item['result'] == 'Transacción cancelada':
+                    bet_row.remove_match()
+                    logger_inkabet_results.info(
+                        "Suspended match: %s" % bet_row.match.get_logger_info())
             return item
 
         raise DropItem("Match does not exist" % item)
