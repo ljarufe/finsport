@@ -1,14 +1,11 @@
 from django.conf import settings
 from django.contrib import admin
-from django.urls import path
-from django.conf.urls import include, url
-from django.views.generic.base import RedirectView
+from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('bet/', include('bet.urls', namespace="bet")),
-    url('', RedirectView.as_view(
-        pattern_name='bet:statistics', permanent=False)),
+    path('bet', include('bet.urls')),
+    path('api/', include('rest_framework.urls', namespace='rest_framework')),
 ]
 
 if settings.DEBUG:
