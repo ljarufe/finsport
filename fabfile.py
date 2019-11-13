@@ -38,3 +38,19 @@ def deploy(c):
             c.run('python manage.py collectstatic --noinput')
     _.print_info("Reiniciando uwsgi")
     c.sudo('/etc/init.d/uwsgi restart')
+    _.print_pass("Listo!")
+
+
+@task
+def deployf(c):
+    c = get_connection()
+    with c.cd('/home/ljarufe/Projects/finsport-frontend'):
+        _.print_info("Actualizando repositorio")
+        c.run('export GIT_SSL_NO_VERIFY=1')
+        c.run('git pull')
+        _.print_info("Instalando paquetes")
+        c.run('npm install')
+        _.print_info("Contruyendo...")
+        c.run('npm run build')
+    _.print_pass("Listo!")
+
