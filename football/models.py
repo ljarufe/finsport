@@ -109,8 +109,8 @@ class Match(TimeStampedModel):
 
     TEAM_DIFFERENCE = 3
     MIN_PER_TEAM = 1.5
-    MIN_DRAW = 3
-    MAX_DRAW = 4.5
+    MIN_DRAW = 2.8
+    MAX_DRAW = 4.2
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3

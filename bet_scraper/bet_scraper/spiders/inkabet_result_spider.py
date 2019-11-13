@@ -20,7 +20,7 @@ class InkabetResultSpider(Spider):
         bet_selenium = self.account.bet_page.get_selenium_bot()(self.account)
         bet_selenium.login()
         self.selector = Selector(text=bet_selenium.get_page_source(
-            InkabetResultSpider.start_urls[0]))
+            InkabetResultSpider.start_urls[0], scroll_down=True))
         bet_selenium.clean_driver()
 
     def parse(self, response):

@@ -2,6 +2,7 @@
 
 import logging
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from scrapy.crawler import CrawlerProcess
@@ -28,7 +29,7 @@ class Command(BaseCommand):
                     'ITEM_PIPELINES': {
                         'bet_scraper.bet_scraper.pipelines.ResultsPipeline':
                             300},
-                    'LOG_ENABLED': False,
+                    'LOG_ENABLED': settings.SCRAPY_LOG,
                 })
                 process.crawl(InkabetResultSpider, account)
                 process.start()
