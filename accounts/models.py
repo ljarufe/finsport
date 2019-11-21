@@ -39,35 +39,32 @@ class BetPage(models.Model):
 
 
 class Account(models.Model):
+    GANADA = 'g'
+    PERDIDA = 'p'
+    RESULTADOS = {
+        GANADA: 'ganada',
+        PERDIDA: 'perdida',
+    }
+
     username = models.CharField(max_length=64)
     password = EncryptedCharField(max_length=32)
     email = models.EmailField()
     bet_page = models.ForeignKey(BetPage, on_delete=models.CASCADE)
-    funds = models.FloatField(default=0.0)
     num_allow_tables = models.IntegerField(default=1)
     start_bet = models.IntegerField()
 
     def __str__(self):
         return '%s' % self.username
 
-    def increase_profit(self, profit):
-        self.funds += profit
-        self.save()
-
-    def decrease_profit(self, profit):
-        self.funds -= profit
-        self.save()
-
-    def send_finished_table(self, table, bet_row):
-        self.increase_profit(table.total_profit)
+    def send_finished_table(self, table, bet_row, resultado):
         context = dict(
             table=table,
             bet_row=bet_row,
-            link="{}{}".format(
-                settings.INSTANCE_DOMAIN, '/bet/tables/?state=F'))
+            # TODO: arreglar esto con el routing del frontend
+            link="{}".format(settings.INSTANCE_DOMAIN))
         msg = mark_safe(render_to_string('mails/finished_table.html', context))
         send_mail(
-            subject='Tabla cerrada',
+            subject=f"Tabla {self.RESULTADOS[resultado]}",
             message=strip_tags(msg),
             html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,
