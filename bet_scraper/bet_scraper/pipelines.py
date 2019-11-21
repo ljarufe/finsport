@@ -6,6 +6,7 @@ from django.db.models import Q
 
 from scrapy.exceptions import DropItem
 
+from accounts.models import Account
 from bet.models import BetRow
 from football.models import Match, Team, LeagueRelatedName, League
 
@@ -89,13 +90,17 @@ class ResultsPipeline:
             if item['result']:
                 if item['result'] == "Ganadas":
                     bet_row.set_won()
-                    bet_row.bet_table.set_finished(spider.account, bet_row)
+                    bet_row.bet_table.set_finished()
+                    spider.account.send_finished_table(
+                        bet_row.bet_table, bet_row, Account.GANADA)
                     logger_inkabet_results.info(
                         "Won match: %s" % bet_row.match.get_logger_info())
                 elif item['result'] == "Perdidas":
                     bet_row.set_lost()
                     if bet_row.iteration > 5:
-                        bet_row.bet_table.set_finished(spider.account, bet_row)
+                        bet_row.bet_table.set_finished()
+                        spider.account.send_finished_table(
+                            bet_row.bet_table, bet_row, Account.PERDIDA)
                     logger_inkabet_results.info(
                         "Lost match: %s" % bet_row.match.get_logger_info())
                 elif item['result'] == 'Transacción cancelada':
