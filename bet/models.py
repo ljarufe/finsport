@@ -181,4 +181,3 @@ class BetRow(TimeStampedModel):
         self.inversion_amount = self.get_inversion_amount(account)
         if bet_selenium.make_bet(self):
             self.set_current()
-            account.decrease_profit(self.bet_amount)
