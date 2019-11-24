@@ -129,9 +129,8 @@ class BetRow(TimeStampedModel):
     def set_won(self):
         self.match.set_draw()
         self.state = BetRow.WON
-        self.profit = self.bet_amount * self.match.draw_factor
-        if self.previous:
-            self.profit += self.previous.profit
+        self.profit = (
+            self.bet_amount * self.match.draw_factor - self.inversion_amount)
         self.bet_table.set_total(self)
         self.save()
 
