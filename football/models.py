@@ -28,13 +28,11 @@ class League(TimeStampedModel):
     def get_league(cls, league_name, country):
         # TODO: El preprocesarmiento antes de la consulta depende de la casa
         #  de apuestas
-        country = countries.by_name(country, language="es")
-        if country:
-            league = League.objects.filter(
-                country=country, name__unaccent__trigram_similar=league_name,
-                leaguerelatedname=None)
-            if league.exists():
-                return league.first()
+        league = League.objects.filter(
+            country=country, name__unaccent__trigram_similar=league_name,
+            leaguerelatedname=None)
+        if league.exists():
+            return league.first()
 
         return None
 
@@ -50,20 +48,23 @@ class LeagueRelatedName(models.Model):
 
     @classmethod
     def get_league(cls, league_name, country, bet_page):
-        related_league = cls.objects.filter(
-            name__unaccent__iexact=league_name, bet_page=bet_page)
-        if related_league.exists():
-            return related_league.first().league
-        league = League.get_league(league_name, country)
-        if league:
-            related_league, created = cls.objects.update_or_create(
-                league=league,
-                bet_page=bet_page,
-                defaults={'name': league_name})
-            if created:
-                logger_leagues.info(
-                    "Related league created: %s (%s)" % (league, bet_page))
-            return league
+        country = countries.by_name(country, language="es")
+        if country:
+            related_league = cls.objects.filter(
+                name__unaccent__iexact=league_name, league__country=country,
+                bet_page=bet_page)
+            if related_league.exists():
+                return related_league.first().league
+            league = League.get_league(league_name, country)
+            if league:
+                related_league, created = cls.objects.update_or_create(
+                    league=league,
+                    bet_page=bet_page,
+                    defaults={'name': league_name})
+                if created:
+                    logger_leagues.info(
+                        "Related league created: %s (%s)" % (league, bet_page))
+                return league
 
         return None
 
