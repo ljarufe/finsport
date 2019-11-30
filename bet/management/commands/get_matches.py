@@ -1,8 +1,8 @@
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from scrapy.crawler import CrawlerProcess
 
 from accounts.models import BetPage
+from bet_scraper.utils import get_crawler_options
 
 
 class Command(BaseCommand):
@@ -10,12 +10,6 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         for bet_page in BetPage.objects.filter(active=True):
-            process = CrawlerProcess({
-                'USER_AGENT':
-                    'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
-                'ITEM_PIPELINES': {
-                    'bet_scraper.bet_scraper.pipelines.MatchPipeline': 300},
-                'LOG_ENABLED': settings.SCRAPY_LOG,
-            })
+            process = CrawlerProcess(get_crawler_options('get_matches'))
             process.crawl(bet_page.get_match_spider(), bet_page)
             process.start()

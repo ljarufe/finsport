@@ -2,7 +2,6 @@
 
 import logging
 
-from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from scrapy.crawler import CrawlerProcess
@@ -12,6 +11,7 @@ from bet_scraper.bet_scraper.spiders.inkabet_result_spider import (
     InkabetResultSpider
 )
 from accounts.models import Account
+from bet_scraper.utils import get_crawler_options
 
 logger_inkabet_results = logging.getLogger('inkabet_results')
 
@@ -23,14 +23,8 @@ class Command(BaseCommand):
         for account in Account.objects.filter(bet_page__active=True):
             bet_rows = BetRow.objects.filter(state=BetRow.CURRENT)
             if bet_rows.exists():
-                process = CrawlerProcess({
-                    'USER_AGENT':
-                        'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
-                    'ITEM_PIPELINES': {
-                        'bet_scraper.bet_scraper.pipelines.ResultsPipeline':
-                            300},
-                    'LOG_ENABLED': settings.SCRAPY_LOG,
-                })
+                process = CrawlerProcess(
+                    get_crawler_options('check_results_inkabet'))
                 process.crawl(InkabetResultSpider, account)
                 process.start()
                 for bet_row in bet_rows:
