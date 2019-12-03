@@ -138,10 +138,6 @@ class BetRow(TimeStampedModel):
         # TODO: cambiar esto cuando siempre se saque el resultado del partido
         self.match.set_used()
         self.state = BetRow.LOST
-        self.profit = self.bet_amount * (-1)
-        if self.previous:
-            self.profit += self.previous.profit
-        self.bet_table.set_total(self)
         self.save()
 
     def get_bet_amount(self, account):
@@ -178,5 +174,9 @@ class BetRow(TimeStampedModel):
     def make_bet(self, account, bet_selenium):
         self.bet_amount = self.get_bet_amount(account)
         self.inversion_amount = self.get_inversion_amount(account)
+        self.profit = self.bet_amount * (-1)
+        if self.previous:
+            self.profit += self.previous.profit
         if bet_selenium.make_bet(self):
             self.set_current()
+            self.bet_table.set_total(self)

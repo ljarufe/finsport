@@ -1,11 +1,34 @@
+from collections import OrderedDict
+
+from django.db.models import Sum
+
+from rest_framework.response import Response
 from rest_framework import viewsets
+from rest_framework.pagination import PageNumberPagination
 
 from .models import BetTable
 from .serializers import BetTableSerializer
 
 
+class BetTablePagination(PageNumberPagination):
+    def paginate_queryset(self, queryset, request, view=None):
+        self.total = queryset.aggregate(total=Sum('total_profit'))['total']
+        return super(BetTablePagination, self).paginate_queryset(
+            queryset, request, view=view)
+
+    def get_paginated_response(self, data):
+        return Response(OrderedDict([
+            ('count', self.page.paginator.count),
+            ('total', self.total),
+            ('next', self.get_next_link()),
+            ('previous', self.get_previous_link()),
+            ('results', data)
+        ]))
+
+
 class BetTableView(viewsets.ModelViewSet):
     serializer_class = BetTableSerializer
+    pagination_class = BetTablePagination
 
     def get_queryset(self):
         state = self.request.query_params.get("state", None)

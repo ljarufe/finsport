@@ -23,6 +23,7 @@ class BetRowSerializer(serializers.ModelSerializer):
 
 class BetTableSerializer(serializers.ModelSerializer):
     bet_rows = serializers.SerializerMethodField()
+    state = serializers.CharField(source='get_state_display')
 
     class Meta:
         model = BetTable
@@ -30,8 +31,8 @@ class BetTableSerializer(serializers.ModelSerializer):
             'id',
             'name',
             'total_profit',
-            'total_inversion',
             'bet_rows',
+            'state',
         )
 
     def get_bet_rows(self, instance):
