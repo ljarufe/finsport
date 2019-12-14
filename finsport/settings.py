@@ -245,10 +245,18 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 10,
 }
 
-CRAWLER_OPTIONS = {
-    'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
-    'LOG_ENABLED': True,
-    'LOG_FILE': os.path.join(BASE_DIR, '../logs/scrapy.log'),
-    'LOG_FORMAT': '%(levelname)s [%(name)s] %(asctime).16s: %(message)s',
-    'LOG_LEVEL': 'WARNING',
-}
+if DEBUG:
+    CRAWLER_OPTIONS = {
+        'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
+        'LOG_ENABLED': True,
+        'LOG_FORMAT': '%(levelname)s [%(name)s] %(asctime).16s: %(message)s',
+        'LOG_LEVEL': 'WARNING',
+    }
+else:
+    CRAWLER_OPTIONS = {
+        'USER_AGENT': 'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)',
+        'LOG_ENABLED': True,
+        'LOG_FILE': os.path.join(BASE_DIR, '../logs/scrapy.log'),
+        'LOG_FORMAT': '%(levelname)s [%(name)s] %(asctime).16s: %(message)s',
+        'LOG_LEVEL': 'ERROR',
+    }

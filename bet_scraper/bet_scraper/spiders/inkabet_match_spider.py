@@ -27,11 +27,14 @@ class InkabetMatchSpider(Spider):
         for item in items:
             url = item.css('a::attr(href)').extract_first()
             selector = Selector(text=self.bet_selenium.get_page_source(
-                urljoin(InkabetMatchSpider.start_urls[0], url), sleep_time=3))
-            country, league = selector.css(
-                '.osg-coupon__breadcrumbs a::text').getall()[2:4]
-            local_team, visitor_team = selector.css(
-                '.osg-coupon__event-header-title::text').get().split(' - ')
+                urljoin(InkabetMatchSpider.start_urls[0], url), sleep_time=4))
+            try:
+                country, league = selector.css(
+                    '.osg-coupon__breadcrumbs a::text').getall()[2:4]
+                local_team, visitor_team = selector.css(
+                    '.osg-coupon__event-header-title::text').get().split(' - ')
+            except(ValueError, AttributeError):
+                continue
             hour, minute = selector.css(
                 '.osg-coupon__event-header-time::text'
             ).get().split()[1].split(':')
