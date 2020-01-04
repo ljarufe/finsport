@@ -115,7 +115,7 @@ class Match(TimeStampedModel):
 
     MAX_SCORE_DIFFERENCE = 5
     MAX_SCORE_DRAW = 3
-    MIN_SCORE_LEAGUE = 25
+    MIN_SCORE_LEAGUE = 20
 
     TRIAL_LAPSE = 300
 
@@ -213,7 +213,7 @@ class Match(TimeStampedModel):
         return cls.objects.filter(
             state=Match.NEW,
             start_datetime__gte=datetime.now() + timedelta(minutes=5),
-            start_datetime__lte=datetime.now() + timedelta(minutes=35)
+            start_datetime__lte=datetime.now() + timedelta(minutes=65)
         ).order_by('score').last()
 
     class Meta:

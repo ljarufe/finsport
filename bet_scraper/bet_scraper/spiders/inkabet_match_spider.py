@@ -23,7 +23,13 @@ class InkabetMatchSpider(Spider):
         self.bet_selenium.clean_driver()
 
     def parse(self, response):
-        items = self.selector.xpath('//div[./preceding-sibling::h3[1]="Hoy"]')
+        yield from self.parse_items("Hoy")
+        if datetime.now().hour >= 23:
+            yield from self.parse_items("Mañana")
+
+    def parse_items(self, date_selector):
+        items = self.selector.xpath(
+            f'//div[./preceding-sibling::h3[1]="{date_selector}"]')
         for item in items:
             url = item.css('a::attr(href)').extract_first()
             selector = Selector(text=self.bet_selenium.get_page_source(
@@ -40,8 +46,11 @@ class InkabetMatchSpider(Spider):
             ).get().split()[1].split(':')
             start_datetime = datetime.now().replace(
                 hour=int(hour), minute=int(minute), second=0, microsecond=0)
-            if start_datetime > datetime.now() + timedelta(minutes=35):
-                raise StopIteration
+            if date_selector == "Mañana":
+                start_datetime = start_datetime.replace(
+                    day=start_datetime.day + 1)
+            if start_datetime > datetime.now() + timedelta(hours=1):
+                return
             local_factor, draw_factor, visitor_factor = map(
                 lambda x: float(x),
                 selector.css('.osg-outcome__price-arrow::text').getall()[:3])
