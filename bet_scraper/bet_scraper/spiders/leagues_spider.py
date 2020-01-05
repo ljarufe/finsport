@@ -2,15 +2,15 @@
 
 import logging
 
-from scrapy import Spider
 from django_countries import countries
 
 from bet_scraper.bet_scraper.items import LeagueItem
+from bet_scraper.bet_scraper.spiders.err_back_spider import ErrbackSpider
 
 logger_leagues = logging.getLogger('leagues')
 
 
-class LeaguesSpider(Spider):
+class LeaguesSpider(ErrbackSpider):
     name = "leagues"
     start_urls = ['https://www.progressivebetting.co.uk/statistics/'
                   'football_statistics/leagues_by_draws/']

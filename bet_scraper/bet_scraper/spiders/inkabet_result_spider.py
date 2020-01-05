@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 
-from scrapy import Spider, Selector
+from scrapy import Selector
 
 from bet_scraper.bet_scraper.items import ResultMatchItem
+from bet_scraper.bet_scraper.spiders.err_back_spider import ErrbackSpider
 
 
-class InkabetResultSpider(Spider):
+class InkabetResultSpider(ErrbackSpider):
     name = "inkabet_result_spider"
     start_urls = ['https://www.inkabet.pe/account/betshistory']
     LOST = 'L'
@@ -17,11 +18,14 @@ class InkabetResultSpider(Spider):
 
     def __init__(self, account):
         self.account = account
-        bet_selenium = self.account.bet_page.get_selenium_bot()(self.account)
-        bet_selenium.login()
-        self.selector = Selector(text=bet_selenium.get_page_source(
+        self.bet_selenium = self.account.bet_page.get_selenium_bot()(
+            self.account)
+        self.bet_selenium.login()
+        self.selector = Selector(text=self.bet_selenium.get_page_source(
             InkabetResultSpider.start_urls[0], scroll_down=True))
-        bet_selenium.clean_driver()
+
+    def __del__(self):
+        self.bet_selenium.clean_driver()
 
     def parse(self, response):
         rows = self.selector.css('.osg-bets-history-item--table')

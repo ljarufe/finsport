@@ -3,13 +3,14 @@
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
-from scrapy import Spider, Selector
+from scrapy import Selector
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
 from bet_scraper.bet_scraper.items import MatchItem
+from bet_scraper.bet_scraper.spiders.err_back_spider import ErrbackSpider
 
 
-class InkabetMatchSpider(Spider):
+class InkabetMatchSpider(ErrbackSpider):
     name = "inkabet"
     start_urls = ['https://www.inkabet.pe']
 
