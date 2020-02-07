@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from datetime import datetime, timedelta
 from scrapy import Selector
 
 from bet_scraper.bet_scraper.items import ResultMatchItem
@@ -21,8 +22,13 @@ class InkabetResultSpider(ErrbackSpider):
         self.bet_selenium = self.account.bet_page.get_selenium_bot()(
             self.account)
         self.bet_selenium.login()
+        today = datetime.now().strftime("%Y-%m-%d")
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        url = (
+            f'{InkabetResultSpider.start_urls[0]}'
+            f'?dateTo={tomorrow}&dateFrom={today}')
         self.selector = Selector(text=self.bet_selenium.get_page_source(
-            InkabetResultSpider.start_urls[0], scroll_down=True))
+            url, scroll_down=True))
 
     def __del__(self):
         self.bet_selenium.clean_driver()
