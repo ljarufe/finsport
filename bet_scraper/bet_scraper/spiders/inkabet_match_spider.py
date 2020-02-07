@@ -52,9 +52,15 @@ class InkabetMatchSpider(ErrbackSpider):
                     day=start_datetime.day + 1)
             if start_datetime > datetime.now() + timedelta(hours=1):
                 return
-            local_factor, draw_factor, visitor_factor = map(
-                lambda x: float(x),
-                selector.css('.osg-outcome__price-arrow::text').getall()[:3])
+            local_factor = float(selector.xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
+                'div[2]/div/div[1]/div/div[2]/div/text()').get())
+            draw_factor = float(selector.xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
+                'div[2]/div/div[2]/div/div[2]/div/text()').get())
+            visitor_factor = float(selector.xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
+                'div[2]/div/div[3]/div/div[2]/div/text()').get())
 
             yield MatchItem(
                 local_team=local_team,
