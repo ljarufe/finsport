@@ -162,6 +162,7 @@ class BetRow(TimeStampedModel):
         #  en new
         self.match.set_used()
         if self.previous:
+            self.bet_table.set_total(self.previous)
             bet_rows = BetRow.objects.filter(
                 bet_table=self.bet_table, state=BetRow.NEW)
             for bet_row in bet_rows:
