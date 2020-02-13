@@ -7,7 +7,7 @@ from django.db.models import Q
 from scrapy.exceptions import DropItem
 
 from accounts.models import Account
-from bet.models import BetRow
+from bet.models import BetRow, BetTable
 from football.models import Match, Team, LeagueRelatedName, League
 
 logger_get_matches = logging.getLogger('get_matches')
@@ -97,7 +97,7 @@ class ResultsPipeline:
                         "Won match: %s" % bet_row.match.get_logger_info())
                 elif item['result'] == "Perdidas":
                     bet_row.set_lost()
-                    if bet_row.iteration > 5:
+                    if bet_row.iteration > BetTable.MAX_ITERATION:
                         bet_row.bet_table.set_finished()
                         spider.account.send_finished_table(
                             bet_row.bet_table, bet_row, Account.PERDIDA)

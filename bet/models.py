@@ -22,6 +22,8 @@ class BetTable(TimeStampedModel):
         ('A', 'available'),
         ('F', 'finished'),
     )
+    MAX_ITERATION = 5
+
     name = models.CharField(max_length=250)
     total_profit = models.FloatField(default=0)
     total_inversion = models.FloatField(default=0)
