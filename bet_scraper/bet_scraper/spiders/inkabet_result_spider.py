@@ -21,6 +21,7 @@ class InkabetResultSpider(ErrbackSpider):
         self.account = account
         self.bet_selenium = self.account.bet_page.get_selenium_bot()(
             self.account)
+        self.error = False
         if self.bet_selenium.login():
             today = datetime.now().strftime("%Y-%m-%d")
             tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
