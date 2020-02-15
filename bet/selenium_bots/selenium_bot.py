@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 
+import logging
 import time
 
 from django.conf import settings
 
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
+
+logger_scrapy = logging.getLogger('scrapy_extra')
 
 
 class SeleniumBot:
@@ -20,7 +24,12 @@ class SeleniumBot:
         self.driver.quit()
 
     def get_page_source(self, url, sleep_time=SHORT_SLEEP, scroll_down=False):
-        self.driver.get(url)
+        try:
+            self.driver.get(url)
+        except TimeoutException:
+            logger_scrapy.info("Timeout escaped")
+            self.clean_driver()
+            return
         time.sleep(sleep_time)
         if scroll_down:
             self.driver.execute_script(

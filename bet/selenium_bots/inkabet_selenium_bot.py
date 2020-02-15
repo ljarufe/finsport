@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.keys import Keys
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
@@ -23,7 +24,10 @@ class InkabetSeleniumBot(SeleniumBot):
         super().__init__()
 
     def login(self):
-        self.driver.get(urljoin(self.account.bet_page.domain, 'login'))
+        try:
+            self.driver.get(urljoin(self.account.bet_page.domain, 'login'))
+        except TimeoutException:
+            return
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         username = self.driver.find_element_by_name('username')
         password = self.driver.find_element_by_name('password')
@@ -35,9 +39,14 @@ class InkabetSeleniumBot(SeleniumBot):
         submit.click()
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
 
+        return True
+
     def make_bet(self, bet_row):
-        self.driver.get(
-            urljoin(self.account.bet_page.domain, bet_row.match.inkabet_url))
+        try:
+            self.driver.get(urljoin(
+                self.account.bet_page.domain, bet_row.match.inkabet_url))
+        except TimeoutException:
+            return False
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         bet = self.driver.find_elements_by_xpath(
             '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]'

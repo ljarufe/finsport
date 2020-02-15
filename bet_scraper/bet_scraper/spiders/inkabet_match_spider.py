@@ -17,8 +17,12 @@ class InkabetMatchSpider(ErrbackSpider):
     def __init__(self, bet_page):
         self.bet_page = bet_page
         self.bet_selenium = SeleniumBot()
-        self.selector = Selector(text=self.bet_selenium.get_page_source(
-            urljoin(InkabetMatchSpider.start_urls[0], "/sportsbook/240")))
+        page_source = self.bet_selenium.get_page_source(
+            urljoin(InkabetMatchSpider.start_urls[0], "/sportsbook/240"))
+        if page_source:
+            self.selector = Selector(text=page_source)
+        else:
+            self.selector = None
 
     def __del__(self):
         self.bet_selenium.clean_driver()
@@ -29,12 +33,17 @@ class InkabetMatchSpider(ErrbackSpider):
             yield from self.parse_items("Mañana")
 
     def parse_items(self, date_selector):
+        if not self.selector:
+            return
         items = self.selector.xpath(
             f'//div[./preceding-sibling::h3[1]="{date_selector}"]')
         for item in items:
             url = item.css('a::attr(href)').extract_first()
-            selector = Selector(text=self.bet_selenium.get_page_source(
-                urljoin(InkabetMatchSpider.start_urls[0], url), sleep_time=4))
+            page_source = self.bet_selenium.get_page_source(
+                urljoin(InkabetMatchSpider.start_urls[0], url), sleep_time=4)
+            if not page_source:
+                return
+            selector = Selector(text=page_source)
             try:
                 country, league = selector.css(
                     '.osg-coupon__breadcrumbs a::text').getall()[2:4]
@@ -52,15 +61,18 @@ class InkabetMatchSpider(ErrbackSpider):
                     day=start_datetime.day + 1)
             if start_datetime > datetime.now() + timedelta(hours=1):
                 return
-            local_factor = float(selector.xpath(
-                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
-                'div[2]/div/div[1]/div/div[2]/div/text()').get())
-            draw_factor = float(selector.xpath(
-                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
-                'div[2]/div/div[2]/div/div[2]/div/text()').get())
-            visitor_factor = float(selector.xpath(
-                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/'
-                'div[2]/div/div[3]/div/div[2]/div/text()').get())
+            try:
+                local_factor = float(selector.xpath(
+                    '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/'
+                    'div[2]/div[2]/div/div[1]/div/div[2]/div/text()').get())
+                draw_factor = float(selector.xpath(
+                    '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/'
+                    'div[2]/div[2]/div/div[2]/div/div[2]/div/text()').get())
+                visitor_factor = float(selector.xpath(
+                    '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/'
+                    'div[2]/div[2]/div/div[3]/div/div[2]/div/text()').get())
+            except TypeError:
+                continue
 
             yield MatchItem(
                 local_team=local_team,

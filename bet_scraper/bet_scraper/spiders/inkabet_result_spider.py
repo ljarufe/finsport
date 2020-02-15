@@ -21,19 +21,25 @@ class InkabetResultSpider(ErrbackSpider):
         self.account = account
         self.bet_selenium = self.account.bet_page.get_selenium_bot()(
             self.account)
-        self.bet_selenium.login()
-        today = datetime.now().strftime("%Y-%m-%d")
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        url = (
-            f'{InkabetResultSpider.start_urls[0]}'
-            f'?dateTo={tomorrow}&dateFrom={today}')
-        self.selector = Selector(text=self.bet_selenium.get_page_source(
-            url, scroll_down=True))
+        if self.bet_selenium.login():
+            today = datetime.now().strftime("%Y-%m-%d")
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            url = (
+                f'{InkabetResultSpider.start_urls[0]}'
+                f'?dateTo={tomorrow}&dateFrom={today}')
+            page_source = self.bet_selenium.get_page_source(
+                url, scroll_down=True)
+            if page_source:
+                self.selector = Selector(text=page_source)
+                return
+        self.error = True
 
     def __del__(self):
         self.bet_selenium.clean_driver()
 
     def parse(self, response):
+        if self.error:
+            return
         rows = self.selector.css('.osg-bets-history-item--table')
         for tr in rows:
             result = tr.css(".osg-bets-history-item__status span::text").get()

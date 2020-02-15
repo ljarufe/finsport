@@ -21,15 +21,15 @@ class Command(BaseCommand):
                 state=BetTable.AVAILABLE).exclude(id__in=current_tables)
             if available_tables:
                 bet_selenium = account.bet_page.get_selenium_bot()(account)
-                bet_selenium.login()
-                for table in available_tables:
-                    bet_rows = BetRow.objects.filter(
-                        bet_table=table, state=BetRow.NEW
-                    ).order_by('match__start_datetime')
-                    if bet_rows.exists():
-                        bet_row = bet_rows.first()
-                        logger.info(
-                            "Making the bet for: %s" %
-                            bet_row.match.get_logger_info())
-                        bet_row.make_bet(account, bet_selenium)
+                if bet_selenium.login():
+                    for table in available_tables:
+                        bet_rows = BetRow.objects.filter(
+                            bet_table=table, state=BetRow.NEW
+                        ).order_by('match__start_datetime')
+                        if bet_rows.exists():
+                            bet_row = bet_rows.first()
+                            logger.info(
+                                "Making the bet for: %s" %
+                                bet_row.match.get_logger_info())
+                            bet_row.make_bet(account, bet_selenium)
                 bet_selenium.clean_driver()

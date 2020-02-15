@@ -18,8 +18,10 @@ class LivescoreResultsSpider(ErrbackSpider):
         self.selenium_bot.clean_driver()
 
     def parse(self, response):
-        selector = Selector(
-            text=self.selenium_bot.get_page_source(response.url))
+        page_source = self.selenium_bot.get_page_source(response.url)
+        if not page_source:
+            return
+        selector = Selector(text=page_source)
         for match in selector.css('div[data-type="container"] .match-row'):
             yield MatchResultItem(
                 local_team=match.css('div.ply span::text')[0].get(),

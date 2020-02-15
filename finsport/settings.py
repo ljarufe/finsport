@@ -214,6 +214,13 @@ LOGGING = {
             'filename': os.path.join(BASE_DIR, '../logs/leagues.log'),
             'formatter': 'all',
         },
+        'scrapy_extra_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filters': ['require_debug_false'],
+            'filename': os.path.join(BASE_DIR, '../logs/scrapy.log'),
+            'formatter': 'all',
+        },
     },
     'loggers': {
         'get_matches': {
@@ -234,6 +241,10 @@ LOGGING = {
         },
         'leagues': {
             'handlers': ['console', 'leagues_file'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+        },
+        'scrapy_extra': {
+            'handlers': ['console', 'scrapy_extra_file'],
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
         },
     },
