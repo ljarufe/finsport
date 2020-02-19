@@ -27,6 +27,8 @@ class InkabetSeleniumBot(SeleniumBot):
         try:
             self.driver.get(urljoin(self.account.bet_page.domain, 'login'))
         except TimeoutException:
+            logger.info("Timeout escaped")
+            self.clean_driver()
             return
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         username = self.driver.find_element_by_name('username')
@@ -46,6 +48,8 @@ class InkabetSeleniumBot(SeleniumBot):
             self.driver.get(urljoin(
                 self.account.bet_page.domain, bet_row.match.inkabet_url))
         except TimeoutException:
+            logger.info("Timeout escaped")
+            self.clean_driver()
             return False
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         bet = self.driver.find_elements_by_xpath(
