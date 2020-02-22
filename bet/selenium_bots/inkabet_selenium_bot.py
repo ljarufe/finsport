@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.keys import Keys
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
@@ -31,10 +31,15 @@ class InkabetSeleniumBot(SeleniumBot):
             self.clean_driver()
             return
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
-        username = self.driver.find_element_by_name('username')
-        password = self.driver.find_element_by_name('password')
-        submit = self.driver.find_element_by_xpath(
-            '//*[@id="osg-app"]/div/div[1]/form/button')
+        try:
+            username = self.driver.find_element_by_name('username')
+            password = self.driver.find_element_by_name('password')
+            submit = self.driver.find_element_by_xpath(
+                '//*[@id="osg-app"]/div/div[1]/form/button')
+        except Exception as err:
+            logger.info('Error, login: %s' % err)
+            self.clean_driver()
+            return
         username.clear()
         username.send_keys(self.account.username)
         password.send_keys(self.account.password)
