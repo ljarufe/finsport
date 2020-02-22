@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.keys import Keys
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
@@ -28,7 +28,7 @@ class InkabetSeleniumBot(SeleniumBot):
             self.driver.get(urljoin(self.account.bet_page.domain, 'login'))
         except TimeoutException:
             logger.info("Timeout escaped")
-            self.clean_driver()
+            self.driver.quit()
             return
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         try:
@@ -54,7 +54,7 @@ class InkabetSeleniumBot(SeleniumBot):
                 self.account.bet_page.domain, bet_row.match.inkabet_url))
         except TimeoutException:
             logger.info("Timeout escaped")
-            self.clean_driver()
+            self.driver.quit()
             return False
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         bet = self.driver.find_elements_by_xpath(

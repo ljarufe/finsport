@@ -20,7 +20,6 @@ class SeleniumBot:
 
     def clean_driver(self):
         self.driver.delete_all_cookies()
-        self.driver.close()
         self.driver.quit()
 
     def get_page_source(self, url, sleep_time=SHORT_SLEEP, scroll_down=False):
@@ -28,7 +27,7 @@ class SeleniumBot:
             self.driver.get(url)
         except TimeoutException:
             logger_scrapy.info("Timeout escaped")
-            self.clean_driver()
+            self.driver.quit()
             return
         time.sleep(sleep_time)
         if scroll_down:
