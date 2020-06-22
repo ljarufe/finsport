@@ -47,13 +47,14 @@ class InkabetMatchSpider(ErrbackSpider):
             try:
                 country, league = selector.css(
                     '.osg-coupon__breadcrumbs a::text').getall()[2:4]
-                local_team, visitor_team = selector.css(
-                    '.osg-coupon__event-header-title::text').get().split(' - ')
+                local_team, visitor_team = selector.xpath(
+                    '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[1]/h1/'
+                    'text()').get().split(' - ')
             except(ValueError, AttributeError):
                 continue
-            hour, minute = selector.css(
-                '.osg-coupon__event-header-time::text'
-            ).get().split()[1].split(':')
+            hour, minute = selector.xpath(
+                '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[1]/span/'
+                'text()').get().split()[1].split(':')
             start_datetime = datetime.now().replace(
                 hour=int(hour), minute=int(minute), second=0, microsecond=0)
             if date_selector == "Mañana":
