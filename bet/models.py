@@ -22,7 +22,7 @@ class BetTable(TimeStampedModel):
         ('A', 'available'),
         ('F', 'finished'),
     )
-    MAX_ITERATION = 5
+    MAX_ITERATION = 7
 
     name = models.CharField(max_length=250)
     total_profit = models.FloatField(default=0)
