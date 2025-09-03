@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import logging
 import time
 
@@ -9,7 +7,7 @@ from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 
-logger_scrapy = logging.getLogger('scrapy_extra')
+logger_scrapy = logging.getLogger("scrapy_extra")
 
 
 class SeleniumBot:
@@ -28,14 +26,16 @@ class SeleniumBot:
         except TimeoutException:
             logger_scrapy.info("Timeout escaped")
             self.driver.quit()
-            return
+            return None
         time.sleep(sleep_time)
         if scroll_down:
             self.driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight);")
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
             time.sleep(sleep_time)
             self.driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight);")
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
 
         return self.driver.page_source
 
@@ -45,10 +45,8 @@ class SeleniumBot:
         if not settings.DEBUG:
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument('--no-sandbox')
-        driver = webdriver.Chrome(
-            '%s/chromedriver' % settings.SELENIUM_DATA,
-            chrome_options=chrome_options)
+            chrome_options.add_argument("--no-sandbox")
+        driver = webdriver.Remote(command_executor=settings.SELENIUM_URL, options=chrome_options)
         driver.set_window_size(2000, 2050)
 
         return driver

@@ -5,32 +5,39 @@ from django.conf import settings
 
 
 class Command(BaseCommand):
-    help = 'Execute commands sequentially'
+    help = "Execute commands sequentially"
 
     def handle(self, *args, **options):
-        python = '{env}{python_path}'.format(
-            env=settings.ENV_FOLDER, python_path='bin/python3')
-        check_results = '{python} {site_root}{command}'.format(
+        # TODO: this is not going to work, fix it
+        python = "{env}{python_path}".format(
+            env=settings.ENV_FOLDER, python_path="bin/python3"
+        )
+        check_results = "{python} {site_root}{command}".format(
             python=python,
             site_root=settings.SITE_ROOT,
-            command='/manage.py check_results')
-        check_results_inkabet = '{python} {site_root}{command}'.format(
+            command="/manage.py check_results",
+        )
+        check_results_inkabet = "{python} {site_root}{command}".format(
             python=python,
             site_root=settings.SITE_ROOT,
-            command='/manage.py check_results_inkabet')
-        get_matches = '{python} {site_root}{command}'.format(
+            command="/manage.py check_results_inkabet",
+        )
+        get_matches = "{python} {site_root}{command}".format(
             python=python,
             site_root=settings.SITE_ROOT,
-            command='/manage.py get_matches')
-        fill_tables = '{python} {site_root}{command}'.format(
+            command="/manage.py get_matches",
+        )
+        fill_tables = "{python} {site_root}{command}".format(
             python=python,
-            site_root=settings.SITE_ROOT, command='/manage.py fill_tables')
-        make_bets = '{python} {site_root}{command}'.format(
-            python=python,
-            site_root=settings.SITE_ROOT, command='/manage.py make_bets')
+            site_root=settings.SITE_ROOT,
+            command="/manage.py fill_tables",
+        )
+        make_bets = "{python} {site_root}{command}".format(
+            python=python, site_root=settings.SITE_ROOT, command="/manage.py make_bets"
+        )
         commands = (
             "{check_results}; "
-            "{check_results_inkabet}; "            
+            "{check_results_inkabet}; "
             "{get_matches}; "
             "{fill_tables}; "
             "{make_bets}; "

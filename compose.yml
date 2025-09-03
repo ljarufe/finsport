@@ -1,0 +1,92 @@
+services:
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  init-logs:
+    image: busybox
+    volumes:
+      - logs_volume:/app/logs
+    user: "0"
+    command: sh -c "mkdir -p /app/logs && chown -R 1000:1000 /app/logs"
+
+  db:
+    image: postgres:17
+    restart: always
+    ports:
+      - "${DATABASE_PORT}:${DATABASE_PORT}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - .env
+
+  django-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - init-logs
+      - db
+      - redis
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+      - logs_volume:/app/logs
+      - ~/.ssh:/home/appuser/.ssh:ro
+    env_file:
+      - .env
+
+  celery:
+    build: .
+    restart: always
+    command: celery -A finsport worker -l info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - django-web
+    env_file:
+      - .env
+
+  celery-beat:
+    build: .
+    restart: always
+    command: celery -A finsport beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - django-web
+    env_file:
+      - .env
+
+  nginx:
+    image: nginx:1.29
+    ports:
+      - "8001:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles
+    depends_on:
+      - django-web
+
+  selenium:
+    image: selenium/standalone-chrome:123.0
+    ports:
+      - "4444:4444"
+    environment:
+      - VNC_NO_PASSWORD=1
+      - SE_NODE_MAX_SESSIONS=5
+    shm_size: '2gb'
+
+volumes:
+  postgres_data:
+  static_volume:
+  logs_volume:
+  redis_data:

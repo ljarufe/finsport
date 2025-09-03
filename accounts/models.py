@@ -8,9 +8,6 @@ from django.db import models
 from fernet_fields import EncryptedCharField
 
 from bet.selenium_bots.inkabet_selenium_bot import InkabetSeleniumBot
-from bet_scraper.bet_scraper.spiders.inkabet_match_spider import (
-    InkabetMatchSpider
-)
 
 
 class BetPage(models.Model):
@@ -19,31 +16,26 @@ class BetPage(models.Model):
     active = models.BooleanField()
 
     BET_PAGE_BOTS = {
-        'inkabet': {
-            'match_spider': InkabetMatchSpider,
-            'selenium_bot': InkabetSeleniumBot},
+        "inkabet": {"selenium_bot": InkabetSeleniumBot},
     }
 
     def __str__(self):
-        return '{name}'.format(name=self.name)
-
-    def get_match_spider(self):
-        return self.BET_PAGE_BOTS[self.name.lower()]['match_spider']
+        return f"{self.name}"
 
     def get_selenium_bot(self):
-        return self.BET_PAGE_BOTS[self.name.lower()]['selenium_bot']
+        return self.BET_PAGE_BOTS[self.name.lower()]["selenium_bot"]
 
     class Meta:
-        verbose_name = 'Bet Page'
-        verbose_name_plural = 'Bet Pages'
+        verbose_name = "Bet Page"
+        verbose_name_plural = "Bet Pages"
 
 
 class Account(models.Model):
-    GANADA = 'g'
-    PERDIDA = 'p'
+    GANADA = "g"
+    PERDIDA = "p"
     RESULTADOS = {
-        GANADA: 'ganada',
-        PERDIDA: 'perdida',
+        GANADA: "ganada",
+        PERDIDA: "perdida",
     }
 
     username = models.CharField(max_length=64)
@@ -54,22 +46,24 @@ class Account(models.Model):
     start_bet = models.IntegerField()
 
     def __str__(self):
-        return '%s' % self.username
+        return f"{self.username}"
 
     def send_finished_table(self, table, bet_row, resultado):
-        context = dict(
-            table=table,
-            bet_row=bet_row,
+        context = {
+            "table": table,
+            "bet_row": bet_row,
             # TODO: arreglar esto con el routing del frontend
-            link="{}".format(settings.INSTANCE_DOMAIN))
-        msg = mark_safe(render_to_string('mails/finished_table.html', context))
+            "link": f"{settings.INSTANCE_DOMAIN}",
+        }
+        msg = mark_safe(render_to_string("mails/finished_table.html", context))
         send_mail(
             subject=f"Tabla {self.RESULTADOS[resultado]}",
             message=strip_tags(msg),
             html_message=msg,
             from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[self.email])
+            recipient_list=[self.email],
+        )
 
     class Meta:
-        verbose_name = 'Account'
-        verbose_name_plural = 'Accounts'
+        verbose_name = "Account"
+        verbose_name_plural = "Accounts"

@@ -1,35 +1,44 @@
-# -*- coding: utf-8 -*-
-
 import logging
 
 from django_countries import countries
+from scrapy import Spider
 
-from bet_scraper.bet_scraper.items import LeagueItem
-from bet_scraper.bet_scraper.spiders.err_back_spider import ErrbackSpider
+from ..items import LeagueItem
 
-logger_leagues = logging.getLogger('leagues')
+logger_leagues = logging.getLogger("leagues")
 
 
-class LeaguesSpider(ErrbackSpider):
+class LeaguesSpider(Spider):
     name = "leagues"
-    start_urls = ['https://www.progressivebetting.co.uk/statistics/'
-                  'football_statistics/leagues_by_draws/']
+    start_urls = [
+        "https://www.progressivebetting.co.uk/statistics/football_statistics/leagues_by_draws/"
+    ]
+    custom_settings = {
+        "ITEM_PIPELINES": {"bet_scraper.pipelines.LeaguesPipeline": 300},
+    }
 
     def parse(self, response):
         for league in response.css(".lgdraws tbody tr"):
-            country_league = league.css("td:nth-child(2) a::text").get().split()
-            for i, w in enumerate(country_league):
-                country_name = " ".join(country_league[:i + 1])
-                country = countries.by_name(country_name, language="en")
+            country_league = (
+                league.css("td:nth-child(2) a::text").get(default="").strip().split()
+            )
+            percentage_text = (
+                league.css("td:nth-child(3)::text").get(default="").strip()
+            )
+            percentage = percentage_text.replace("%", "").strip()
+
+            country = None
+            name = None
+            for i in range(len(country_league)):
+                maybe_country = " ".join(country_league[: i + 1])
+                country = countries.by_name(maybe_country, language="en")
                 if country:
-                    name = " ".join(country_league[i + 1:])
-                    percentage = league.css(
-                        "td:nth-child(3)::text").get().strip()[:-1]
-                    yield LeagueItem(
-                        name=name,
-                        country=country,
-                        percentage=percentage,
-                    )
+                    name = " ".join(country_league[i + 1 :])
                     break
+
+            if country and name:
+                yield LeagueItem(name=name, country=country, percentage=percentage)
             else:
-                logger_leagues.info("Country not found: %s" % country_league)
+                logger_leagues.warning(
+                    f"Country not found: {' '.join(country_league)} | Row snippet: {league.get()[:80]}..."
+                )

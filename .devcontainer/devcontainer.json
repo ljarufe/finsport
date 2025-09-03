@@ -1,0 +1,44 @@
+{
+	"name": "finsport",
+	"dockerComposeFile": [
+		"../compose.yml",
+		"./compose.yml"
+	],
+	"service": "django-web",
+	"workspaceFolder": "/app",
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {}
+    },
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"editor.formatOnSave": true,
+				"python.formatting.provider": "black",
+				"python.linting.enabled": true,
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "terminal.integrated.profiles.linux": {
+                    "bash": {
+                    "path": "/bin/bash"
+                    }
+                }
+			},
+			"extensions": [
+				"ms-python.vscode-pylance",
+				"redhat.vscode-yaml",
+				"visualstudioexptteam.vscodeintellicode",
+				"kevinrose.vsc-python-indent",
+				"ms-python.python",
+				"codezombiech.gitignore",
+				"waderyan.gitblame",
+				"batisteo.vscode-django",
+				"mrorz.language-gettext",
+				"codezombiech.gitignore",
+				"yzhang.markdown-all-in-one",
+				"donjayamanne.python-environment-manager",
+				"donjayamanne.python-extension-pack",
+				"github.copilot",
+                "eamodio.gitlens"
+			]
+		}
+	}
+}

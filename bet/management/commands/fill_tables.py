@@ -5,7 +5,7 @@ from bet.models import BetTable
 
 
 class Command(BaseCommand):
-    help = 'Fill the tables with the matches'
+    help = "Fill the tables with the matches"
 
     def handle(self, *args, **options):
         for account in Account.objects.all():

@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  django-web:
+    ports:
+      - "8000:8000"
+      - "5678:5678"
+    command: sleep infinity
+  celery-beat:
+    command: sleep infinity

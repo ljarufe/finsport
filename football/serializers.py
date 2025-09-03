@@ -9,7 +9,10 @@ class LeagueSerializer(ModelSerializer):
 
     class Meta:
         model = League
-        fields = ('name', 'country',)
+        fields = (
+            "name",
+            "country",
+        )
 
 
 class TeamSerializer(ModelSerializer):
@@ -17,7 +20,10 @@ class TeamSerializer(ModelSerializer):
 
     class Meta:
         model = Team
-        fields = ('name', 'league',)
+        fields = (
+            "name",
+            "league",
+        )
 
 
 class MatchSerializer(ModelSerializer):
@@ -27,12 +33,12 @@ class MatchSerializer(ModelSerializer):
     class Meta:
         model = Match
         fields = (
-            'local_team',
-            'visitor_team',
-            'start_datetime',
-            'local_score',
-            'visitor_score',
-            'local_factor',
-            'visitor_factor',
-            'draw_factor',
+            "local_team",
+            "visitor_team",
+            "start_datetime",
+            "local_score",
+            "visitor_score",
+            "local_factor",
+            "visitor_factor",
+            "draw_factor",
         )

@@ -11,22 +11,30 @@ from .serializers import BetTableSerializer
 
 
 class BetTablePagination(LimitOffsetPagination):
+    def __init__(self, *args, **kwargs):
+        self.total = 0
+        super().__init__(*args, **kwargs)
+
     def paginate_queryset(self, queryset, request, view=None):
-        self.total = queryset.aggregate(total=Sum('total_profit'))['total']
-        return super(BetTablePagination, self).paginate_queryset(
-            queryset, request, view=view)
+        self.total = queryset.aggregate(total=Sum("total_profit"))["total"]
+
+        return super().paginate_queryset(queryset, request, view=view)
 
     def get_paginated_response(self, data):
-        return Response(OrderedDict([
-            ('total', self.total),
-            ('count', self.count),
-            ('next', self.get_next_link()),
-            ('previous', self.get_previous_link()),
-            ('results', data)
-        ]))
+        return Response(
+            OrderedDict(
+                [
+                    ("total", self.total),
+                    ("count", self.count),
+                    ("next", self.get_next_link()),
+                    ("previous", self.get_previous_link()),
+                    ("results", data),
+                ]
+            )
+        )
 
 
-class BetTableView(viewsets.ModelViewSet):
+class BetTableView(viewsets.ModelViewSet):  # pylint: disable=too-many-ancestors
     serializer_class = BetTableSerializer
     pagination_class = BetTablePagination
 
@@ -35,7 +43,7 @@ class BetTableView(viewsets.ModelViewSet):
         bet_tables = BetTable.objects.all()
         if state:
             bet_tables = bet_tables.filter(state=state)
-            if state == 'A':
-                bet_tables = bet_tables.order_by('id')
+            if state == "A":
+                bet_tables = bet_tables.order_by("id")
 
         return bet_tables

@@ -1,17 +1,18 @@
-# -*- coding: utf-8 -*-
-
-from scrapy import Selector
+from scrapy import Selector, Spider
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
-from bet_scraper.bet_scraper.items import MatchResultItem
-from bet_scraper.bet_scraper.spiders.err_back_spider import ErrbackSpider
+from ..items import MatchResultItem
 
 
-class LivescoreResultsSpider(ErrbackSpider):
+class LivescoreResultsSpider(Spider):
     name = "livescore"
-    start_urls = ['https://www.livescore.com/']
+    start_urls = ["https://www.livescore.com/"]
+    custom_settings = {
+        "ITEM_PIPELINES": {"bet_scraper.pipelines.LeaguesPipeline": 300},
+    }
 
     def __init__(self):
+        super().__init__()
         self.selenium_bot = SeleniumBot()
 
     def __del__(self):
@@ -24,8 +25,8 @@ class LivescoreResultsSpider(ErrbackSpider):
         selector = Selector(text=page_source)
         for match in selector.css('div[data-type="container"] .match-row'):
             yield MatchResultItem(
-                local_team=match.css('div.ply span::text')[0].get(),
-                visitor_team=match.css('div.ply span::text')[1].get(),
-                local_score=match.css('div.sco span.hom::text').get(),
-                visitor_score=match.css('div.sco span.awy::text').get()
+                local_team=match.css("div.ply span::text")[0].get(),
+                visitor_team=match.css("div.ply span::text")[1].get(),
+                local_score=match.css("div.sco span.hom::text").get(),
+                visitor_score=match.css("div.sco span.awy::text").get(),
             )
