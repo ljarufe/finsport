@@ -8,5 +8,5 @@ from football.models import League
 class LeagueForm(forms.ModelForm):
     class Meta:
         model = League
-        fields = ("name", "country", "draw_percentage")
+        fields = ("name", "name_en", "name_local", "country", "draw_percentage")
         widgets = {"country": CountrySelectWidget()}

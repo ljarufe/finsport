@@ -6,7 +6,7 @@ from django_countries import countries
 from django_countries.fields import CountryField
 from django_extensions.db.models import TimeStampedModel
 from django.db import models
-from django.db.models import Max
+from django.db.models import Max, Q
 
 
 logger_leagues = logging.getLogger("leagues")
@@ -14,6 +14,8 @@ logger_leagues = logging.getLogger("leagues")
 
 class League(TimeStampedModel):
     name = models.CharField(max_length=250)
+    name_en = models.CharField(max_length=250, blank=True)
+    name_local = models.CharField(max_length=250, blank=True)
     country = CountryField(blank_label="(select country)")
     draw_percentage = models.FloatField(blank=True, null=True)
 
@@ -24,8 +26,10 @@ class League(TimeStampedModel):
     def get_league(cls, league_name, country):
         # TODO: El preprocesarmiento antes de la consulta depende de la casa de apuestas
         league = League.objects.filter(
+            Q(name__unaccent__trigram_similar=league_name) |
+            Q(name_en__unaccent__trigram_similar=league_name) |
+            Q(name_local__unaccent__trigram_similar=league_name),
             country=country,
-            name__unaccent__trigram_similar=league_name,
             leaguerelatedname=None,
         )
         if league.exists():
