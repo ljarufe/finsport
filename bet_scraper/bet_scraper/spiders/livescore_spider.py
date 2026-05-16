@@ -25,9 +25,9 @@ class LivescoreResultsSpider(Spider):
         selector = Selector(text=page_source)
         for match in selector.xpath('//*[@data-id[contains(., "_mtc-r")]]'):
             print(match.xpath('.//*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]/text()').get())
-            # yield MatchResultItem(
-            #     local_team=match.xpath('//*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]'),
-            #     visitor_team=match.css("div.ply span::text")[1].get(),
-            #     local_score=match.css("div.sco span.hom::text").get(),
-            #     visitor_score=match.css("div.sco span.awy::text").get(),
-            # )
+            yield MatchResultItem(
+                local_team=match.xpath('//*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]'),
+                visitor_team=match.css("div.ply span::text")[1].get(),
+                local_score=match.css("div.sco span.hom::text").get(),
+                visitor_score=match.css("div.sco span.awy::text").get(),
+            )

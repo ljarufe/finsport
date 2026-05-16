@@ -1,15 +1,58 @@
 import logging
 
 from datetime import timedelta, datetime
-
 from django_countries import countries
 from django_countries.fields import CountryField
+
 from django_extensions.db.models import TimeStampedModel
 from django.db import models
-from django.db.models import Max, Q
+from django.db.models import Max
+from django.core.cache import cache
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import TrigramSimilarity
+
+from .constants import LEAGUE_CACHE_TTL
 
 
 logger_leagues = logging.getLogger("leagues")
+
+
+class LeagueManager(models.Manager):
+    def get_league(self, league_name, country_name, field_name="name", language="es"):
+        country = countries.by_name(country_name, language=language)
+        if not country:
+            logger_leagues.warning(f"Country not found: {country_name} for league: {league_name}")
+            return None
+
+        cache_key = f"league:{country.lower()}:{league_name.lower()}:{field_name}"
+        if league := cache.get(cache_key):
+            return league
+
+        league = self.filter(
+            **{f"{field_name}__unaccent__iexact": league_name},
+            country=country,
+        ).first()
+        if league:
+            cache.set(cache_key, league, LEAGUE_CACHE_TTL)
+            return league
+
+        league = (
+            self.annotate(
+                similarity=(
+                    TrigramSimilarity("name", league_name) +
+                    TrigramSimilarity("name_en", league_name) +
+                    TrigramSimilarity("name_local", league_name)
+                )
+            )
+            .filter(country=country, similarity__gt=0.3)
+            .order_by("-similarity")
+            .first()
+        )
+
+        if league:
+            cache.set(cache_key, league, LEAGUE_CACHE_TTL)
+        
+        return league
 
 
 class League(TimeStampedModel):
@@ -19,25 +62,25 @@ class League(TimeStampedModel):
     country = CountryField(blank_label="(select country)")
     draw_percentage = models.FloatField(blank=True, null=True)
 
+    objects = LeagueManager()
+
     def __str__(self):
         return f"{self.country.name} {self.name}"
 
-    @classmethod
-    def get_league(cls, league_name, country):
-        # TODO: El preprocesarmiento antes de la consulta depende de la casa de apuestas
-        league = League.objects.filter(
-            Q(name__unaccent__trigram_similar=league_name) |
-            Q(name_en__unaccent__trigram_similar=league_name) |
-            Q(name_local__unaccent__trigram_similar=league_name),
-            country=country,
-            leaguerelatedname=None,
-        )
-        if league.exists():
-            return league.first()
-
-        return None
+    class Meta:
+        indexes = [
+            models.Index(fields=["name", "country"]),
+            models.Index(fields=["name_en", "country"]),
+            models.Index(fields=["name_local", "country"]),
+            GinIndex(fields=["name"], name="league_name_trgm_idx", opclasses=["gin_trgm_ops"]),
+            GinIndex(fields=["name_en"], name="league_name_en_trgm_idx", opclasses=["gin_trgm_ops"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["name", "country"], name="unique_league_per_country"),
+        ]
 
 
+# TODO: delete this class after migrating all leagues to use it
 class LeagueRelatedName(models.Model):
     league = models.ForeignKey("football.League", on_delete=models.CASCADE)
     bet_page = models.ForeignKey("accounts.BetPage", on_delete=models.CASCADE)
@@ -46,6 +89,7 @@ class LeagueRelatedName(models.Model):
     def __str__(self):
         return f"{self.bet_page}: {self.name}"
 
+    # TODO: optimize this using indexes and only
     @classmethod
     def get_league(cls, league_name, country, bet_page):
         country = countries.by_name(country, language="es")
