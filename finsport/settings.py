@@ -4,6 +4,8 @@ import mimetypes
 
 import environ
 
+from celery.schedules import crontab
+
 from django.utils.translation import gettext_lazy as _
 
 
@@ -304,3 +306,10 @@ CELERY_WORKER_CONCURRENCY = 2
 if DEBUG:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
+
+CELERY_BEAT_SCHEDULE = {
+    "run-betting-cycle-every-5-min": {
+        "task": "bet.tasks.run_betting_cycle",
+        "schedule": crontab(minute="*/5"),
+    },
+}
