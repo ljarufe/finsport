@@ -1,5 +1,4 @@
 from django.core.management.base import BaseCommand
-
 from django_countries import countries
 
 from accounts.models import BetPage
@@ -8,12 +7,17 @@ from football.models import League, LeagueRelatedName
 
 # Para obtener la lista de ligas
 def get_missing():
-    for l in League.objects.all().order_by("country"):
-        if not l.leaguerelatedname_set.all().exists():
-            print(f"('{l.name}', '{l.country}', '{countries.name(l.country)}', '?'),")
+    for league in League.objects.all().order_by("country"):
+        if not league.leaguerelatedname_set.all().exists():
+            print(
+                f"('{league.name}', '{league.country}', "
+                f"'{countries.name(league.country)}', '?'),"
+            )
         else:
             print(
-                f"('{l.name}', '{l.country}', '{countries.name(l.country)}', '{l.leaguerelatedname_set.last().name}'),"
+                f"('{league.name}', '{league.country}', "
+                f"'{countries.name(league.country)}', "
+                f"'{league.leaguerelatedname_set.last().name}'),"
             )
 
 

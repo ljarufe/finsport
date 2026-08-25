@@ -1,11 +1,9 @@
-import math
 import logging
-
+import math
 from datetime import datetime
 
 from django.conf import settings
 from django.db import models
-
 from django_extensions.db.models import TimeStampedModel
 
 from football.models import Match
@@ -80,10 +78,10 @@ class BetTable(TimeStampedModel):
 
 class MatchManager(models.Manager):  # pylint: disable=too-few-public-methods
     def get_queryset(self):
-        return super().get_queryset().select_related(
-            "match__local_team",
-            "match__visitor_team",
-            "bet_table"
+        return (
+            super()
+            .get_queryset()
+            .select_related("match__local_team", "match__visitor_team", "bet_table")
         )
 
 

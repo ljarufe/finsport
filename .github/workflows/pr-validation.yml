@@ -1,0 +1,32 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare disposable local configuration
+        run: cp .env.dist .env
+
+      - name: Build application image
+        run: make build
+
+      - name: Run stable repository gate
+        run: make check
+
+      - name: Stop disposable services
+        if: always()
+        run: docker compose down

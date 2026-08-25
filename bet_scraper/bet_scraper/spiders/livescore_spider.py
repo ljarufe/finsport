@@ -1,6 +1,7 @@
 from scrapy import Selector, Spider
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
+
 from ..items import MatchResultItem
 
 
@@ -24,7 +25,11 @@ class LivescoreResultsSpider(Spider):
             return
         selector = Selector(text=page_source)
         for match in selector.xpath('//*[@data-id[contains(., "_mtc-r")]]'):
-            print(match.xpath('.//*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]/text()').get())
+            print(
+                match.xpath(
+                    './/*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]/text()'
+                ).get()
+            )
             yield MatchResultItem(
                 local_team=match.xpath('//*[@data-id[contains(., "_mtc-r_hm-tm-nm")]]'),
                 visitor_team=match.css("div.ply span::text")[1].get(),

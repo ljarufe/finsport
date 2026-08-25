@@ -1,44 +1,59 @@
 {
-	"name": "finsport",
-	"dockerComposeFile": [
-		"../compose.yml",
-		"./compose.yml"
-	],
-	"service": "django-web",
-	"workspaceFolder": "/app",
-    "features": {
-        "ghcr.io/devcontainers/features/git:1": {}
-    },
-	"customizations": {
-		"vscode": {
-			"settings": {
-				"editor.formatOnSave": true,
-				"python.formatting.provider": "black",
-				"python.linting.enabled": true,
-                "terminal.integrated.defaultProfile.linux": "bash",
-                "terminal.integrated.profiles.linux": {
-                    "bash": {
-                    "path": "/bin/bash"
-                    }
-                }
-			},
-			"extensions": [
-				"ms-python.vscode-pylance",
-				"redhat.vscode-yaml",
-				"visualstudioexptteam.vscodeintellicode",
-				"kevinrose.vsc-python-indent",
-				"ms-python.python",
-				"codezombiech.gitignore",
-				"waderyan.gitblame",
-				"batisteo.vscode-django",
-				"mrorz.language-gettext",
-				"codezombiech.gitignore",
-				"yzhang.markdown-all-in-one",
-				"donjayamanne.python-environment-manager",
-				"donjayamanne.python-extension-pack",
-				"github.copilot",
-                "eamodio.gitlens"
-			]
-		}
-	}
+  "name": "Finsport",
+  "dockerComposeFile": [
+    "../compose.yml",
+    "compose.yml"
+  ],
+  "service": "django-web",
+  "runServices": [
+    "init-logs",
+    "db",
+    "redis",
+    "django-web"
+  ],
+  "workspaceFolder": "/app",
+  "shutdownAction": "stopCompose",
+  "remoteUser": "appuser",
+  "updateRemoteUserUID": true,
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "appuser",
+      "installZsh": false,
+      "configureZshAsDefaultShell": false,
+      "installOhMyZsh": false,
+      "upgradePackages": false
+    }
+  },
+  "containerEnv": {
+    "PYTEST_ADDOPTS": "-o cache_dir=/tmp/finsport-pytest-cache"
+  },
+  "forwardPorts": [
+    8000,
+    8002
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+        "batisteo.vscode-django",
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml",
+        "editorconfig.editorconfig"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestArgs": [
+          "-o",
+          "cache_dir=/tmp/finsport-pytest-cache"
+        ],
+        "python.analysis.typeCheckingMode": "basic"
+      }
+    }
+  }
 }

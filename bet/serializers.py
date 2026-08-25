@@ -1,7 +1,8 @@
 from rest_framework import serializers
 
 from football.serializers import MatchSerializer
-from .models import BetTable, BetRow
+
+from .models import BetRow, BetTable
 
 
 class BetRowSerializer(serializers.ModelSerializer):

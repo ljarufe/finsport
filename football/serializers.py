@@ -1,7 +1,7 @@
-from rest_framework.serializers import ModelSerializer
 from django_countries.serializer_fields import CountryField
+from rest_framework.serializers import ModelSerializer
 
-from .models import Match, Team, League
+from .models import League, Match, Team
 
 
 class LeagueSerializer(ModelSerializer):

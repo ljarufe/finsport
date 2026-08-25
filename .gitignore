@@ -65,6 +65,8 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+.coverage
+htmlcov/
 
 # Translations
 *.mo
@@ -132,5 +134,6 @@ dmypy.json
 
 # Project
 selenium-data/*
+tmp/
 
 # End of https://www.gitignore.io/api/python,django,pycharm

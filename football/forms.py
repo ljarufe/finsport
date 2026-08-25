@@ -1,5 +1,4 @@
 from django import forms
-
 from django_countries.widgets import CountrySelectWidget
 
 from football.models import League

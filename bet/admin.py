@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BetTable, BetRow
+from .models import BetRow, BetTable
 
 
 class BetRowInline(admin.StackedInline):

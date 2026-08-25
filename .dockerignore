@@ -1,31 +1,33 @@
-# Ignore node_modules
-node_modules
-
-# Ignore Python cache
-__pycache__/
-*.pyc
-
-# Ignore build artifacts
-dist/
-build/
-*.egg-info
-
-# Ignore logs
-*.log
-
-# TODO: resolve this issue
-# Ignore environment files
-# .env
-# .env.*
-
-# Ignore Docker files
-Dockerfile*
-compose*
-
-# Ignore git files
 .git
-.gitignore
-
-# Ignore OS generated files
+.agents
+.codex
+.env
+*.env
+.env.*
+!.env.dist
+*.dump
+*.sql
+*.bak
+*.backup
+*.key
+*.pem
+*.crt
+backups/
+tmp/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.log
+build/
+dist/
+*.egg-info/
+node_modules/
+staticfiles/
+media/
 .DS_Store
-Thumbs.db
+.idea/
+.vscode/*.log

@@ -1,11 +1,11 @@
 from django.contrib import admin, messages
-from django.urls import path
 from django.shortcuts import redirect
+from django.urls import path
 
 from common.scrapy_runner import run_scrapy_spider
 
 from .forms import LeagueForm
-from .models import Match, Team, League, LeagueRelatedName
+from .models import League, LeagueRelatedName, Match, Team
 
 
 @admin.register(Match)

@@ -1,66 +1,71 @@
 # Finsport
 
-## Docker
-Install Docker in your local machinne.
+Finsport is currently a local-only, demo-only Django application. The supported developer workflow is Docker-first and preserves the existing PostgreSQL data volume.
 
-## Clone the project
-First verify your SSH Keys on github configuration `https://github.com/settings/keys`
-then if you dont have a key that points to your computer follow this tutorial
-`https://help.github.com/articles/connecting-to-github-with-ssh/`
+## Quick Start
 
-In a server in case you need to add the public key to the deployements keys in the project
-`https://github.com/ljarufe/finsport/settings/keys`
+Prerequisites:
 
-now you can clone your repository using ssh
+- Docker with Docker Compose;
+- GNU Make;
+- pre-commit on the host (`pipx install pre-commit==4.6.2` is recommended);
+- VS Code and Dev Containers for the recommended editor workflow.
 
-```
-git@github.com:ljarufe/finsport.git
-```
+Create local configuration once:
 
-#### .env file
-You have to add .env file with your local variables using .env.dist as a template
-
-In order to check that everything is ok. Run this command:
-
-```
-($project_name$) $ ./manage.py check
+```bash
+cp .env.dist .env
 ```
 
-## Database load
-```
-$ docker compose up
+Do not add bookmaker credentials. Build and start the normal safe stack:
+
+```bash
+make build
+make up
 ```
 
-To load the database backup comment the migrate RUN in Dockerfile and follow this steps:
-```
-$ docker cp finsport.sql <postgresql_container_name>:/docker-entrypoint-initdb.d/finsport.sql
-$ docker exec -it <postgresql_container_name> psql -U finsport -d finsport -f /docker-entrypoint-initdb.d/finsport.sql
+Open the normal browser/Admin endpoint at <http://localhost:8001/>. Nginx proxies Django and serves collected static files there.
+
+The direct Gunicorn/Django endpoint at <http://localhost:8000/> is intended for technical probing. It reaches the same root-mounted Admin but does not serve collected static files.
+
+The normal stack includes PostgreSQL, Redis, Django, Celery, Celery Beat, and Nginx. It does not start Selenium. Real betting and the legacy automatic betting schedule are disabled.
+
+Stop services without deleting persistent data:
+
+```bash
+make down
 ```
 
-### Share a database
-To make a backup
-```
-pg_dump -U <user> <database> > nombre_db.sql
+## Development Commands
+
+```bash
+make test
+make coverage
+make lint
+make format
+make format-check
+make django-check
+make check
+make shell
+make migrate
+make createsuperuser
 ```
 
-To load the backup
-```
-psql -U <user> <database> < nombre_db.sql
+Install the repository hooks from the host checkout with `make hooks`. Host Git and the host Python 3.13.15 selected by `.tool-versions` own hook installation and execution; application, test, and debug commands remain Docker-first.
+
+Selenium remains available only through explicit activation:
+
+```bash
+make selenium-up
+make selenium-down
 ```
 
-### Serve REST for Reactjs
-```
-./manage.py runserver 0.0.0.0:8000
-```
+Do not use Selenium against Inkabet or another bookmaker.
 
-### Format
-Run pylint in the entire project
-```
-python -m pylint .
-```
+## Developer Documentation
 
-Run black to format automaticaly
+- [Dev Container and VS Code workflow](docs/development/devcontainer.md)
+- [Safe local runtime](docs/operations/local_runtime.md)
+- [FS-001 feedback](docs/process/FS-001_feedback.md)
 
-```
-python -m black --target-version=py37 .
-```
+There is no supported external server, staging environment, production environment, or deployment workflow in the current product stage.

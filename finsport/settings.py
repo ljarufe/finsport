@@ -1,13 +1,9 @@
+import mimetypes
 import os
 import socket
-import mimetypes
 
 import environ
-
-from celery.schedules import crontab
-
 from django.utils.translation import gettext_lazy as _
-
 
 env = environ.Env(DEBUG=(bool, False))
 
@@ -290,26 +286,27 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": "redis://localhost:6379/0",
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        },
+        "LOCATION": "redis://redis:6379/13",
     }
 }
 
 # Celery configuration
-CELERY_BROKER_URL = "redis://redis:6379/0"
-CELERY_RESULT_BACKEND = "redis://redis:6379/1"
+#
+# The historical worker used Redis DB 0. Keep the local development worker on
+# a dedicated broker database and queue so it cannot consume unknown legacy
+# messages retained in the persistent Redis volume.
+CELERY_BROKER_URL = "redis://redis:6379/14"
+CELERY_RESULT_BACKEND = "redis://redis:6379/15"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
+CELERY_TASK_DEFAULT_QUEUE = "finsport.local.safe"
 CELERY_WORKER_CONCURRENCY = 2
 if DEBUG:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
-CELERY_BEAT_SCHEDULE = {
-    "run-betting-cycle-every-5-min": {
-        "task": "bet.tasks.run_betting_cycle",
-        "schedule": crontab(minute="*/5"),
-    },
-}
+# Beat is intentionally available with no automatic jobs during the demo-only
+# stage. The local Beat service uses Celery's file scheduler rather than the
+# database scheduler, so persisted django-celery-beat rows cannot dispatch the
+# historical betting cycle.
+CELERY_BEAT_SCHEDULE = {}

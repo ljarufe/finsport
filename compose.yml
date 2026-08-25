@@ -1,3 +1,5 @@
+name: finsport
+
 services:
   redis:
     image: redis:7
@@ -6,23 +8,40 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
   init-logs:
     image: busybox
     volumes:
       - logs_volume:/app/logs
+      - static_volume:/app/staticfiles
     user: "0"
-    command: sh -c "mkdir -p /app/logs && chown -R 1000:1000 /app/logs"
+    command: >-
+      sh -c "mkdir -p /app/logs /app/staticfiles &&
+      chown -R 1000:1000 /app/logs /app/staticfiles"
 
   db:
     image: postgres:17
     restart: always
     ports:
-      - "${DATABASE_PORT}:${DATABASE_PORT}"
+      - "${DATABASE_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     env_file:
       - .env
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
   django-web:
     build:
@@ -31,21 +50,23 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - init-logs
-      - db
-      - redis
+      init-logs:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
       - logs_volume:/app/logs
-      - ~/.ssh:/home/appuser/.ssh:ro
     env_file:
       - .env
 
   celery:
     build: .
     restart: always
-    command: celery -A finsport worker -l info
+    command: celery -A finsport worker -l info -Q finsport.local.safe
     volumes:
       - .:/app
     depends_on:
@@ -57,7 +78,7 @@ services:
   celery-beat:
     build: .
     restart: always
-    command: celery -A finsport beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A finsport beat -l info --schedule=/tmp/finsport-celerybeat-schedule
     volumes:
       - .:/app
     depends_on:
@@ -78,6 +99,8 @@ services:
 
   selenium:
     image: selenium/standalone-chrome:123.0
+    profiles:
+      - selenium
     ports:
       - "4444:4444"
     environment:

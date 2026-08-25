@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 from scrapy.crawler import CrawlerProcess
 
-from accounts.models import BetPage
 from bet_scraper.bet_scraper.spiders.inkabet_match_spider import InkabetMatchSpider
 
 

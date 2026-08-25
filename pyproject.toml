@@ -1,0 +1,13 @@
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+extend-exclude = "/migrations/"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

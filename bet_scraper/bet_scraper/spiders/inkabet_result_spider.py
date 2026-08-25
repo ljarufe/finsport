@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+
 from scrapy import Selector, Spider
 
 from ..items import ResultMatchItem
