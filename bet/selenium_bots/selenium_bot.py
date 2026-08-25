@@ -2,7 +2,6 @@ import logging
 import time
 
 from django.conf import settings
-
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -46,7 +45,9 @@ class SeleniumBot:
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--no-sandbox")
-        driver = webdriver.Remote(command_executor=settings.SELENIUM_URL, options=chrome_options)
+        driver = webdriver.Remote(
+            command_executor=settings.SELENIUM_URL, options=chrome_options
+        )
         driver.set_window_size(2000, 2050)
 
         return driver

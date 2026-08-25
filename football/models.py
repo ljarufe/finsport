@@ -1,18 +1,16 @@
 import logging
+from datetime import datetime, timedelta
 
-from datetime import timedelta, datetime
-from django_countries import countries
-from django_countries.fields import CountryField
-
-from django_extensions.db.models import TimeStampedModel
-from django.db import models
-from django.db.models import Max
-from django.core.cache import cache
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import TrigramSimilarity
+from django.core.cache import cache
+from django.db import models
+from django.db.models import Max
+from django_countries import countries
+from django_countries.fields import CountryField
+from django_extensions.db.models import TimeStampedModel
 
 from .constants import LEAGUE_CACHE_TTL
-
 
 logger_leagues = logging.getLogger("leagues")
 
@@ -21,7 +19,9 @@ class LeagueManager(models.Manager):
     def get_league(self, league_name, country_name, field_name="name", language="es"):
         country = countries.by_name(country_name, language=language)
         if not country:
-            logger_leagues.warning(f"Country not found: {country_name} for league: {league_name}")
+            logger_leagues.warning(
+                f"Country not found: {country_name} for league: {league_name}"
+            )
             return None
 
         cache_key = f"league:{country.lower()}:{league_name.lower()}:{field_name}"
@@ -39,9 +39,9 @@ class LeagueManager(models.Manager):
         league = (
             self.annotate(
                 similarity=(
-                    TrigramSimilarity("name", league_name) +
-                    TrigramSimilarity("name_en", league_name) +
-                    TrigramSimilarity("name_local", league_name)
+                    TrigramSimilarity("name", league_name)
+                    + TrigramSimilarity("name_en", league_name)
+                    + TrigramSimilarity("name_local", league_name)
                 )
             )
             .filter(country=country, similarity__gt=0.3)
@@ -51,7 +51,7 @@ class LeagueManager(models.Manager):
 
         if league:
             cache.set(cache_key, league, LEAGUE_CACHE_TTL)
-        
+
         return league
 
 
@@ -72,11 +72,19 @@ class League(TimeStampedModel):
             models.Index(fields=["name", "country"]),
             models.Index(fields=["name_en", "country"]),
             models.Index(fields=["name_local", "country"]),
-            GinIndex(fields=["name"], name="league_name_trgm_idx", opclasses=["gin_trgm_ops"]),
-            GinIndex(fields=["name_en"], name="league_name_en_trgm_idx", opclasses=["gin_trgm_ops"]),
+            GinIndex(
+                fields=["name"], name="league_name_trgm_idx", opclasses=["gin_trgm_ops"]
+            ),
+            GinIndex(
+                fields=["name_en"],
+                name="league_name_en_trgm_idx",
+                opclasses=["gin_trgm_ops"],
+            ),
         ]
         constraints = [
-            models.UniqueConstraint(fields=["name", "country"], name="unique_league_per_country"),
+            models.UniqueConstraint(
+                fields=["name", "country"], name="unique_league_per_country"
+            ),
         ]
 
 
@@ -107,7 +115,9 @@ class LeagueRelatedName(models.Model):
                     league=league, bet_page=bet_page, defaults={"name": league_name}
                 )
                 if created:
-                    logger_leagues.info("Related league created: %s (%s)", league, bet_page)
+                    logger_leagues.info(
+                        "Related league created: %s (%s)", league, bet_page
+                    )
                 return league
 
         return None

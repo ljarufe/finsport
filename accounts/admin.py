@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.forms import ModelForm, PasswordInput
 
-from .models import BetPage, Account
+from .models import Account, BetPage
 
 
 class AccountAdminForm(ModelForm):

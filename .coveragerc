@@ -1,0 +1,17 @@
+[run]
+branch = True
+source =
+    accounts
+    bet
+    common
+    finsport
+    football
+omit =
+    */migrations/*
+    */tests.py
+    */test_*.py
+
+[report]
+show_missing = True
+skip_covered = True
+precision = 1

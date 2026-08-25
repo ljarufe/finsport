@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 from scrapy import Selector, Spider
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
+
 from ..items import MatchItem
 
 

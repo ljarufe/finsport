@@ -1,10 +1,9 @@
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db import models
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.utils.safestring import mark_safe
-from django.db import models
-
 from fernet_fields import EncryptedCharField
 
 from bet.selenium_bots.inkabet_selenium_bot import InkabetSeleniumBot

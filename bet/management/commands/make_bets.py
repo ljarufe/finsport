@@ -1,9 +1,6 @@
 import logging
 
-from django.core.management.base import BaseCommand
-
-from accounts.models import Account
-from bet.models import BetTable, BetRow
+from django.core.management.base import BaseCommand, CommandError
 
 logger = logging.getLogger("make_bets")
 
@@ -12,6 +9,15 @@ class Command(BaseCommand):
     help = "Hace las apuestas de las tablas de apuestas"
 
     def handle(self, *args, **options):
+        raise CommandError(
+            "Real betting is disabled: Finsport is local-only and demo-only."
+        )
+
+    def _legacy_handle(self):
+        """Preserve the historical implementation without making it callable."""
+        from accounts.models import Account
+        from bet.models import BetRow, BetTable
+
         # TODO: poner en cache las cuentas de apuestas activas
         for account in Account.objects.filter(bet_page__active=True):
             # TODO: optimizar la consulta de las tablas de apuestas

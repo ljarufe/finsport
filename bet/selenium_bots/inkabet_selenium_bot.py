@@ -1,12 +1,11 @@
-import time
 import logging
-
+import time
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
 from bet.selenium_bots.selenium_bot import SeleniumBot
 
@@ -60,7 +59,7 @@ class InkabetSeleniumBot(SeleniumBot):
         time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
         bet = self.driver.find_elements(
             By.XPATH,
-            '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/div[2]/div/div[2]/div/div'
+            '//*[@id="osg-app"]/div/div[1]/div/div[2]/div[2]/div[2]/div[2]/div[2]/div/div[2]/div/div',
         )
         if len(bet) > 0:
             return self.bet(bet[0], bet_row.bet_amount)
@@ -73,7 +72,7 @@ class InkabetSeleniumBot(SeleniumBot):
         try:
             clean_bets = self.driver.find_elements(
                 By.XPATH,
-                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[3]/button'
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[3]/button',
             )
             if len(clean_bets) > 0:
                 clean_bets[0].click()
@@ -82,7 +81,7 @@ class InkabetSeleniumBot(SeleniumBot):
             amount_css = self.driver.find_element(
                 By.XPATH,
                 '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[1]/div[2]/div[2]/'
-                'div[1]/div[2]/input'
+                "div[1]/div[2]/input",
             )
             amount_css.send_keys(str(amount))
         except Exception as err:
@@ -95,13 +94,13 @@ class InkabetSeleniumBot(SeleniumBot):
         try:
             bet_button = self.driver.find_elements(
                 By.XPATH,
-                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[2]/button'
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[2]/button',
             )
             bet_button.send_keys(Keys.RETURN)
             time.sleep(InkabetSeleniumBot.SHORT_SLEEP)
             error = self.driver.find_elements(
                 By.XPATH,
-                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[2]/ul/li'
+                '//*[@id="osg-app"]/div/div[1]/div/div[3]/div[1]/div/div/div[2]/div/div[3]/div[2]/ul/li',
             )
             if len(error) > 0:
                 logger.info(f"Error, pressing confirm: {error[0].text}")

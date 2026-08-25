@@ -1,15 +1,13 @@
 import logging
-
 from datetime import datetime
 
 from django.db.models import Q
-
 from scrapy.exceptions import DropItem
 from twisted.internet.threads import deferToThread
 
 from accounts.models import Account
 from bet.models import BetRow, BetTable
-from football.models import Match, Team, LeagueRelatedName, League
+from football.models import League, LeagueRelatedName, Match, Team
 
 logger_get_matches = logging.getLogger("get_matches")
 logger_inkabet_results = logging.getLogger("inkabet_results")
