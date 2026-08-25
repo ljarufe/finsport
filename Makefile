@@ -58,10 +58,10 @@ coverage:
 	$(APP) pytest -o cache_dir=$(PYTEST_CACHE_DIR) --cov --cov-config=.coveragerc --cov-report=term-missing:skip-covered
 
 lint:
-	$(APP) ruff check .
+	$(APP) ruff check --no-cache .
 
 format:
-	$(APP) sh -c "black . && ruff check --fix ."
+	$(APP) sh -c "black . && ruff check --no-cache --fix ."
 
 format-check:
 	$(APP) black --check .
