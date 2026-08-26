@@ -2,12 +2,12 @@ IN_CONTAINER := $(shell test -f /.dockerenv && echo 1 || echo 0)
 COMPOSE = docker compose
 PYTEST_CACHE_DIR = /tmp/finsport-pytest-cache
 
-.PHONY: build up down logs shell migrate makemigrations createsuperuser test coverage lint format format-check django-check check hooks selenium-up selenium-down
+.PHONY: build up down logs shell migrate makemigrations createsuperuser test coverage lint format format-check django-check check hooks
 
 ifeq ($(IN_CONTAINER),1)
 APP =
 
-build up down logs selenium-up selenium-down:
+build up down logs:
 	@echo "This target controls Docker Compose and must run on the host."
 	@exit 1
 
@@ -28,12 +28,6 @@ down:
 
 logs:
 	$(COMPOSE) logs -f
-
-selenium-up:
-	$(COMPOSE) --profile selenium up -d selenium
-
-selenium-down:
-	$(COMPOSE) stop selenium
 
 hooks:
 	pre-commit install --install-hooks

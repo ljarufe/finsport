@@ -1,44 +1,39 @@
 from django_countries.serializer_fields import CountryField
 from rest_framework.serializers import ModelSerializer
 
-from .models import League, Match, Team
+from .models import Competition, Match, Team
 
 
-class LeagueSerializer(ModelSerializer):
+class CompetitionSerializer(ModelSerializer):
     country = CountryField(country_dict=True)
 
     class Meta:
-        model = League
-        fields = (
-            "name",
-            "country",
-        )
+        model = Competition
+        fields = ("id", "name", "country", "competition_type")
 
 
 class TeamSerializer(ModelSerializer):
-    league = LeagueSerializer()
+    competition = CompetitionSerializer()
 
     class Meta:
         model = Team
-        fields = (
-            "name",
-            "league",
-        )
+        fields = ("id", "name", "competition")
 
 
 class MatchSerializer(ModelSerializer):
-    local_team = TeamSerializer()
-    visitor_team = TeamSerializer()
+    home_team = TeamSerializer()
+    away_team = TeamSerializer()
 
     class Meta:
         model = Match
         fields = (
-            "local_team",
-            "visitor_team",
-            "start_datetime",
-            "local_score",
-            "visitor_score",
-            "local_factor",
-            "visitor_factor",
-            "draw_factor",
+            "id",
+            "home_team",
+            "away_team",
+            "kickoff",
+            "status_short",
+            "status_long",
+            "outcome",
+            "home_score",
+            "away_score",
         )

@@ -11,7 +11,7 @@ make build
 make up
 ```
 
-The normal Compose path starts PostgreSQL, Redis, Django, Celery, Celery Beat, and Nginx. It does not start Selenium because that service belongs to the `selenium` profile.
+The normal Compose path starts PostgreSQL, Redis, Django, Celery, Celery Beat, and Nginx. Legacy scraping and bookmaker-browser services are not part of the runtime.
 
 | Port | Service |
 | --- | --- |
@@ -20,7 +20,6 @@ The normal Compose path starts PostgreSQL, Redis, Django, Celery, Celery Beat, a
 | 8000 | Direct Django/Gunicorn technical endpoint |
 | 8001 | Normal browser/Admin endpoint through Nginx |
 | 8002 | VS Code Django debug server |
-| 4444 | Selenium, only when explicitly activated |
 
 Admin is mounted at the root `/`, not `/admin/`. The supported normal browser endpoint is <http://localhost:8001/>. Nginx proxies Django and serves collected files under `/static/`, including Django Admin CSS.
 
@@ -47,20 +46,34 @@ The historical worker used Redis DB 0, so the normal worker cannot consume that 
 
 Celery Beat remains available, but `CELERY_BEAT_SCHEDULE` is empty. The normal Beat command uses Celery's file scheduler at an ephemeral `/tmp` path, not `django-celery-beat`'s `DatabaseScheduler`; persisted PostgreSQL schedule rows therefore cannot dispatch the historical betting cycle.
 
-Do not run `bet.tasks.run_betting_cycle` as a check. The historical task code remains for reference and is not repaired by FS-001.
+The historical `bet.tasks.run_betting_cycle` module and all betting management commands have been removed. Celery remains available for future safe application tasks, but has no configured Beat jobs.
 
-## Betting And Selenium
+## API-Football Manual Workflow
 
-`python manage.py make_bets` is unconditionally disabled and exits with an explicit `CommandError` before the historical implementation. There is no ordinary flag or environment variable to re-enable it.
-
-Selenium is not needed for normal startup. To make its standalone service available for future non-bookmaker work:
+Store `API_FOOTBALL_KEY`, `INKABET_BRAND_ID`, and `INKABET_MARKET_CODE` only in the ignored local `.env`. Do not place their local values in commands, source, tests, logs, or feedback. Run the occasional catalogue operation first:
 
 ```bash
-make selenium-up
-make selenium-down
+docker compose run --rm django-web python manage.py sync_football_catalog
 ```
 
-Do not execute Selenium against Inkabet, authenticate to a bookmaker, use bookmaker credentials, or place a real bet.
+This refreshes canonical Competition and Season lifecycle/coverage metadata from `/leagues`, resolves Match Winner from `/odds/bets`, seeds resolved API-Football CompetitionSourceRefs, and leaves newly discovered competitions disabled. Enable only a selected domestic professional Competition in Admin. Use its canonical local ID for a supported historical season bootstrap:
+
+```bash
+docker compose run --rm django-web python manage.py sync_football_season <competition-id> <provider-year>
+```
+
+The season command gets all fixture/team identity from the fixture payload; it does not call `/teams`. The daily morning/evening flow is:
+
+```bash
+docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD --with-odds
+docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD
+```
+
+The first global Lima-timezone fixture-date response is filtered locally by `Competition.enabled`. API-Football Teams and Matches are canonicalized through resolved source refs. With odds enabled, API Match Winner calls are per relevant fixture and require explicit Season API odds coverage. Inkabet categories are fetched once, mappings are reconciled without prompts, and accordion MW3W is fetched only for resolved relevant Match refs. Pending mappings are skipped and reported for Django Admin review.
+
+Every API-Football call and pagination page is counted. Quota headers are authoritative; the default daily reserve is zero and another request is refused once the known remaining budget reaches zero. Retries, pagination, and sequential pacing are bounded. No final T-minus cutoff or intraday allocation algorithm is implemented.
+
+There is no scheduler, notification email, or automatic new-season bootstrap in FS-002. Source documentation/official status is tracked as reliability context, not a terms/licensing acceptance gate for this local personal research project.
 
 ## Checks
 
