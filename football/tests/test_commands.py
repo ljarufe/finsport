@@ -19,6 +19,7 @@ from football.management.commands.sync_football_season import Command as SeasonC
 from football.models import (
     CompetitionSourceRef,
     Match,
+    OddsObservation,
     OddsSnapshot,
     Season,
     Team,
@@ -199,6 +200,7 @@ def test_day_uses_one_global_fixture_call_and_per_fixture_api_odds():
     ]
     assert Match.objects.count() == 1
     assert OddsSnapshot.objects.count() == 1
+    assert OddsObservation.objects.count() == 1
     assert "INKABET_CONFIGURATION_REQUIRED" in output.getvalue()
 
 
@@ -293,6 +295,7 @@ def test_day_reconciles_inkabet_once_and_updates_one_current_inkabet_row():
     ]
     assert OddsSnapshot.objects.filter(source__code="inkabet").count() == 1
     assert OddsSnapshot.objects.count() == 2
+    assert OddsObservation.objects.filter(source__code="inkabet").count() == 1
     assert "inkabet_calls=2" in output.getvalue()
     assert "pending_matches=0" in output.getvalue()
     assert "RECONCILIATION_REQUIRED" not in output.getvalue()

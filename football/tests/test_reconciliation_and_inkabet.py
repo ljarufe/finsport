@@ -17,6 +17,7 @@ from football.models import (
     CompetitionSourceRef,
     Match,
     MatchSourceRef,
+    OddsObservation,
     OddsSnapshot,
     ReconciliationStatus,
     Team,
@@ -401,6 +402,7 @@ def test_inkabet_odds_update_single_current_row_and_do_not_change_result():
     assert second.updated == 1
     assert second.unchanged == 2
     assert OddsSnapshot.objects.filter(source=inkabet_source()).count() == 1
+    assert OddsObservation.objects.filter(source=inkabet_source()).count() == 2
     assert snapshot.home == Decimal("1.9500")
     assert match.home_score == 2
     assert match.outcome == Match.OUTCOME_HOME

@@ -15,6 +15,7 @@ from .models import (
     Match,
     MatchSourceRef,
     OddsMarket,
+    OddsObservation,
     OddsSnapshot,
     ReconciliationStatus,
     Season,
@@ -514,9 +515,12 @@ def _decimal_odds(values, labels):
         if raw is None:
             return None
         try:
-            parsed.append(Decimal(str(raw)))
+            value = Decimal(str(raw))
         except InvalidOperation:
             return None
+        if not value.is_finite() or value <= 1:
+            return None
+        parsed.append(value)
     return tuple(parsed)
 
 
@@ -531,6 +535,20 @@ def upsert_current_odds(
     observed_at=None,
 ):
     observed_at = observed_at or timezone.now()
+    observation, _ = OddsObservation.objects.get_or_create(
+        match=match,
+        source=source,
+        bookmaker=bookmaker,
+        market=market,
+        observed_at=observed_at,
+        defaults={
+            "home": prices[0],
+            "draw": prices[1],
+            "away": prices[2],
+            "provider_updated_at": provider_updated_at,
+        },
+    )
+    observation.full_clean()
     snapshot = OddsSnapshot.objects.filter(
         match=match,
         source=source,

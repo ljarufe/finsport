@@ -1,0 +1,21 @@
+ENGINE_VERSION = "fs003-v1"
+
+DIXON_COLES_VERSION = "fs003-dixon-coles-v1"
+INDEPENDENT_POISSON_VERSION = "fs003-independent-poisson-v1"
+ELO_MULTINOMIAL_LOGIT_VERSION = "fs003-elo-multinomial-logit-v1"
+MARKET_CONSENSUS_VERSION = "fs003-market-consensus-v1"
+MODERNIZED_R45_VERSION = "fs003-modernized-r45-v1"
+LEGACY_R45_VERSION = "R45-refund-stop@ef861a4897e4bfdff938e8541e8185f731ddaa5c"
+
+MODAL_ALL_VERSION = "fs003-modal-all-v1"
+SELECTIVE_CONFIDENCE_VERSION = "fs003-selective-confidence-v1"
+VALUE_VERSION = "fs003-value-v1"
+
+OUTCOMES = ("HOME", "DRAW", "AWAY")
+XI_GRID = (0.0, 0.001, 0.002)
+ELO_K_GRID = (10, 20, 40)
+LOGISTIC_C_GRID = (0.1, 1.0, 10.0)
+CONFIDENCE_GRID = (0.40, 0.45, 0.50, 0.55, 0.60)
+MINIMUM_EV_GRID = (0.00, 0.02, 0.05)
+PRIOR_STRENGTH_GRID = (10, 20, 40)
+R45_VARIANTS = ("M0", "M1", "M2", "M3")
