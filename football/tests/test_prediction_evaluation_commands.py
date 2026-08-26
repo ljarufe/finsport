@@ -4,6 +4,7 @@ from unittest import mock
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 from football.models import Decision, Prediction, PredictionExperiment
 from football.prediction import evaluation, service
@@ -134,6 +135,12 @@ def test_management_commands_validate_and_delegate(monkeypatch):
     )
     assert captured["cutoff"] == cutoff
     assert "'experiments': 0" in output.getvalue()
+    with pytest.raises(CommandError, match="Cutoff must include a timezone offset"):
+        call_command(
+            "predict_football_day",
+            date="2024-08-01",
+            cutoff="2024-08-01T10:00:00",
+        )
 
 
 def test_predict_day_history_respects_explicit_cutoff(monkeypatch):

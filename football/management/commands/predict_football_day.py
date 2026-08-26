@@ -1,6 +1,7 @@
 from datetime import date
 
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from football.prediction.service import predict_day
@@ -21,6 +22,8 @@ class Command(BaseCommand):
         cutoff = parse_datetime(options["cutoff"]) if options["cutoff"] else None
         if options["cutoff"] and cutoff is None:
             raise CommandError("Cutoff must be an ISO datetime.")
+        if cutoff is not None and timezone.is_naive(cutoff):
+            raise CommandError("Cutoff must include a timezone offset.")
         experiments = predict_day(day, cutoff)
         totals = {
             "experiments": len(experiments),
