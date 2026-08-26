@@ -97,17 +97,6 @@ services:
     depends_on:
       - django-web
 
-  selenium:
-    image: selenium/standalone-chrome:123.0
-    profiles:
-      - selenium
-    ports:
-      - "4444:4444"
-    environment:
-      - VNC_NO_PASSWORD=1
-      - SE_NODE_MAX_SESSIONS=5
-    shm_size: '2gb'
-
 volumes:
   postgres_data:
   static_volume:

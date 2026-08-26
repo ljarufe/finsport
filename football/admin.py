@@ -1,84 +1,188 @@
-from django.contrib import admin, messages
-from django.shortcuts import redirect
-from django.urls import path
+from django.contrib import admin
 
-from common.scrapy_runner import run_scrapy_spider
+from .models import (
+    Bookmaker,
+    Competition,
+    CompetitionSourceRef,
+    Match,
+    MatchSourceRef,
+    OddsMarket,
+    OddsSnapshot,
+    Season,
+    Source,
+    Team,
+    TeamSourceRef,
+)
 
-from .forms import LeagueForm
-from .models import League, LeagueRelatedName, Match, Team
+
+@admin.register(Source)
+class SourceAdmin(admin.ModelAdmin):
+    list_display = ("code", "name", "base_url")
+    search_fields = ("code", "name")
+
+
+@admin.register(Competition)
+class CompetitionAdmin(admin.ModelAdmin):
+    list_display = ("name", "country", "competition_type", "enabled")
+    list_filter = ("enabled", "competition_type", "country")
+    search_fields = ("name",)
+    list_editable = ("enabled",)
+
+
+@admin.register(CompetitionSourceRef)
+class CompetitionSourceRefAdmin(admin.ModelAdmin):
+    list_display = (
+        "source",
+        "external_id",
+        "external_name",
+        "external_country",
+        "reconciliation_status",
+        "confidence",
+        "competition",
+        "proposed_competition",
+    )
+    list_filter = ("source", "reconciliation_status")
+    search_fields = ("external_id", "external_name", "external_slug")
+    raw_id_fields = ("competition", "proposed_competition")
+
+    @admin.display(description="Provider country")
+    def external_country(self, obj):
+        return (
+            obj.context.get("country_slug")
+            or obj.context.get("country_name")
+            or obj.context.get("country_code")
+            or ""
+        )
+
+
+@admin.register(Season)
+class SeasonAdmin(admin.ModelAdmin):
+    list_display = (
+        "competition",
+        "year",
+        "start_date",
+        "end_date",
+        "is_current",
+    )
+    list_filter = ("is_current", "year", "competition")
+    search_fields = ("competition__name",)
+
+
+@admin.register(Team)
+class TeamAdmin(admin.ModelAdmin):
+    list_display = ("name", "competition", "is_active")
+    list_filter = ("is_active", "competition", "competition__country")
+    search_fields = ("name", "code", "competition__name")
+    raw_id_fields = ("competition",)
+
+
+@admin.register(TeamSourceRef)
+class TeamSourceRefAdmin(admin.ModelAdmin):
+    list_display = (
+        "source",
+        "external_id",
+        "external_name",
+        "competition",
+        "reconciliation_status",
+        "confidence",
+        "team",
+        "proposed_team",
+    )
+    list_filter = ("source", "reconciliation_status", "competition")
+    search_fields = (
+        "external_id",
+        "external_name",
+        "competition__name",
+        "team__name",
+    )
+    raw_id_fields = ("competition", "team", "proposed_team")
 
 
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
     list_display = (
-        "get_match_name",
-        "state",
-        "start_datetime",
-        "score",
-        "local_factor",
-        "draw_factor",
-        "visitor_factor",
+        "id",
+        "home_team",
+        "away_team",
+        "kickoff",
+        "status_short",
+        "outcome",
     )
     list_filter = (
-        "state",
-        "start_datetime",
+        "status_short",
+        "outcome",
+        "kickoff",
+        "season__year",
+        "season__competition",
     )
     search_fields = (
-        "local_team__name",
-        "visitor_team__name",
+        "home_team__name",
+        "away_team__name",
+        "season__competition__name",
+        "source_refs__external_id",
     )
-    raw_id_fields = (
-        "local_team",
-        "visitor_team",
-    )
+    raw_id_fields = ("season", "home_team", "away_team")
+    date_hierarchy = "kickoff"
 
 
-@admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
+@admin.register(MatchSourceRef)
+class MatchSourceRefAdmin(admin.ModelAdmin):
     list_display = (
-        "name",
-        "league",
+        "source",
+        "external_id",
+        "external_label",
+        "reconciliation_status",
+        "confidence",
+        "match",
+        "proposed_match",
     )
-    search_fields = ("name", "league__name")
-    list_filter = ("league",)
+    list_filter = ("source", "reconciliation_status")
+    search_fields = (
+        "external_id",
+        "external_label",
+        "match__home_team__name",
+        "match__away_team__name",
+    )
+    raw_id_fields = ("match", "proposed_match")
 
 
-class LeagueRelatedNameAdminInline(admin.TabularInline):
-    model = LeagueRelatedName
-    extra = 1
+@admin.register(Bookmaker)
+class BookmakerAdmin(admin.ModelAdmin):
+    list_display = ("name", "external_id", "source")
+    list_filter = ("source",)
+    search_fields = ("name", "external_id")
 
 
-@admin.register(League)
-class LeagueAdmin(admin.ModelAdmin):
-    list_display = ("name", "country", "draw_percentage")
-    list_filter = ("country",)
-    ordering = ("-draw_percentage",)
-    search_fields = ("name",)
-    form = LeagueForm
-    inlines = (LeagueRelatedNameAdminInline,)
+@admin.register(OddsMarket)
+class OddsMarketAdmin(admin.ModelAdmin):
+    list_display = ("name", "external_id", "source")
+    list_filter = ("source",)
+    search_fields = ("name", "external_id")
 
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path(
-                "get-leagues/",
-                self.admin_site.admin_view(self.get_leagues),
-                name="get_leagues",
-            ),
-        ]
-        return custom_urls + urls
 
-    def get_leagues(self, request):
-        message = run_scrapy_spider("leagues")
-        if message["success"]:
-            self.message_user(
-                request, "Successful command get leagues", messages.SUCCESS
-            )
-        else:
-            self.message_user(
-                request,
-                f"Error command get leagues: {message['stderr']}",
-                messages.ERROR,
-            )
-
-        return redirect("admin:football_league_changelist")
+@admin.register(OddsSnapshot)
+class OddsSnapshotAdmin(admin.ModelAdmin):
+    list_display = (
+        "match",
+        "source",
+        "bookmaker",
+        "market",
+        "home",
+        "draw",
+        "away",
+        "provider_updated_at",
+        "observed_at",
+    )
+    list_filter = (
+        "source",
+        "bookmaker",
+        "market",
+        "match__season__competition",
+    )
+    search_fields = (
+        "match__source_refs__external_id",
+        "match__home_team__name",
+        "match__away_team__name",
+        "bookmaker__name",
+    )
+    raw_id_fields = ("match", "bookmaker", "market")

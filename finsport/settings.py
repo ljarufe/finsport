@@ -37,34 +37,27 @@ DATABASES = {
     }
 }
 
-CORS_ORIGIN_WHITELIST = env.list("CORS_ORIGIN_WHITELIST", default=[])
-
-CORS_ALLOW_CREDENTIALS = True
-
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    "django.contrib.staticfiles",
     "django.contrib.postgres",
+    "django.contrib.staticfiles",
     # local apps
     "football",
     "bet",
-    "accounts",
     # third parties
-    "django_extensions",
     "django_countries",
+    "django_extensions",
     "rest_framework",
     "rest_framework.authtoken",
-    "corsheaders",
     "django_celery_beat",
     "django_celery_results",
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.locale.LocaleMiddleware",
@@ -128,26 +121,10 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 mimetypes.add_type("text/css", ".css", True)
 
-SELENIUM_URL = "http://selenium:4444/wd/hub"
-
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-
-EMAIL_USE_TLS = True
-
-EMAIL_HOST = env("EMAIL_HOST", default="localhost")
-
-EMAIL_PORT = env("EMAIL_PORT", default=25)
-
-EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
-
-EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
-
-INSTANCE_DOMAIN = env("INSTANCE_DOMAIN")
-
 DATE_FORMAT = "%d de %B del %Y, %H:%M"
 
-DEFAULT_FROM_EMAIL = "luisjarufe@gmail.com"
-
+# Keep the historic domestic-football distinctions that are not represented by
+# ISO 3166 country codes but are meaningful to provider reconciliation.
 COUNTRIES_OVERRIDE = {
     "EN": _("England"),
     "CT": _("Scotland"),
@@ -166,93 +143,10 @@ COUNTRIES_OVERRIDE = {
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {
-        "all": {
-            "format": "%(levelname)s %(asctime).16s: %(message)s",
-        },
-    },
-    "filters": {
-        "require_debug_false": {
-            "()": "django.utils.log.RequireDebugFalse",
-        },
-        "require_debug_true": {
-            "()": "django.utils.log.RequireDebugTrue",
-        },
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "filters": ["require_debug_true"],
-            "formatter": "all",
-        },
-        "get_matches_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/get_matches.log"),
-            "formatter": "all",
-        },
-        "fill_tables_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/fill_tables.log"),
-            "formatter": "all",
-        },
-        "make_bets_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/make_bets.log"),
-            "formatter": "all",
-        },
-        "inkabet_results_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/inkabet_results.log"),
-            "formatter": "all",
-        },
-        "leagues_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/leagues.log"),
-            "formatter": "all",
-        },
-        "scrapy_extra_file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filters": ["require_debug_false"],
-            "filename": os.path.join(BASE_DIR, "logs/scrapy.log"),
-            "formatter": "all",
-        },
-    },
-    "loggers": {
-        "get_matches": {
-            "handlers": ["console", "get_matches_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
-        "fill_tables": {
-            "handlers": ["console", "fill_tables_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
-        "make_bets": {
-            "handlers": ["console", "make_bets_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
-        "inkabet_results": {
-            "handlers": ["console", "inkabet_results_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
-        "leagues": {
-            "handlers": ["console", "leagues_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
-        "scrapy_extra": {
-            "handlers": ["console", "scrapy_extra_file"],
-            "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-        },
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {
+        "handlers": ["console"],
+        "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
     },
 }
 
@@ -265,23 +159,28 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,
 }
 
-if DEBUG:
-    CRAWLER_OPTIONS = {
-        "USER_AGENT": "Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)",
-        "LOG_ENABLED": True,
-        "LOG_FORMAT": "%(levelname)s [%(name)s] %(asctime).16s: %(message)s",
-        "LOG_LEVEL": "WARNING",
-    }
-else:
-    CRAWLER_OPTIONS = {
-        "USER_AGENT": "Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)",
-        "LOG_ENABLED": True,
-        "LOG_FILE": os.path.join(BASE_DIR, "logs/scrapy.log"),
-        "LOG_FORMAT": "%(levelname)s [%(name)s] %(asctime).16s: %(message)s",
-        "LOG_LEVEL": "ERROR",
-    }
-
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
+
+# Read-only API-Football boundary. The key is never logged or persisted.
+API_FOOTBALL_KEY = env("API_FOOTBALL_KEY", default="")
+API_FOOTBALL_BASE_URL = env(
+    "API_FOOTBALL_BASE_URL", default="https://v3.football.api-sports.io/"
+)
+API_FOOTBALL_TIMEOUT = env.int("API_FOOTBALL_TIMEOUT", default=15)
+API_FOOTBALL_DAILY_RESERVE = env.int("API_FOOTBALL_DAILY_RESERVE", default=0)
+API_FOOTBALL_MAX_PAGES = env.int("API_FOOTBALL_MAX_PAGES", default=25)
+API_FOOTBALL_MAX_RETRIES = env.int("API_FOOTBALL_MAX_RETRIES", default=2)
+API_FOOTBALL_MINIMUM_INTERVAL = env.float("API_FOOTBALL_MINIMUM_INTERVAL", default=6.0)
+
+# Read-only Inkabet JSON boundary. These values are local configuration, not
+# browser/session credentials, and are never logged or persisted.
+INKABET_BASE_URL = env(
+    "INKABET_BASE_URL",
+    default="https://d-cf.inkabetplayground.net/api/sb/v1/",
+)
+INKABET_BRAND_ID = env("INKABET_BRAND_ID", default="")
+INKABET_MARKET_CODE = env("INKABET_MARKET_CODE", default="")
+INKABET_TIMEOUT = env.int("INKABET_TIMEOUT", default=15)
 
 CACHES = {
     "default": {

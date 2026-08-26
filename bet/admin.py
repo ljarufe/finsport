@@ -44,8 +44,8 @@ class BetRowAdmin(admin.ModelAdmin):
         "iteration",
     )
     search_fields = (
-        "match__local_team__name",
-        "match__visitor_team__name",
+        "match__home_team__name",
+        "match__away_team__name",
     )
     raw_id_fields = (
         "match",
