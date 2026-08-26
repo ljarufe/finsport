@@ -4,10 +4,14 @@ from .models import (
     Bookmaker,
     Competition,
     CompetitionSourceRef,
+    Decision,
     Match,
     MatchSourceRef,
     OddsMarket,
+    OddsObservation,
     OddsSnapshot,
+    Prediction,
+    PredictionExperiment,
     Season,
     Source,
     Team,
@@ -186,3 +190,118 @@ class OddsSnapshotAdmin(admin.ModelAdmin):
         "bookmaker__name",
     )
     raw_id_fields = ("match", "bookmaker", "market")
+
+
+@admin.register(OddsObservation)
+class OddsObservationAdmin(admin.ModelAdmin):
+    list_display = (
+        "match",
+        "source",
+        "bookmaker",
+        "market",
+        "home",
+        "draw",
+        "away",
+        "provider_updated_at",
+        "observed_at",
+    )
+    list_filter = (
+        "source",
+        "bookmaker",
+        "market",
+        "match__season__competition",
+    )
+    search_fields = (
+        "match__source_refs__external_id",
+        "match__home_team__name",
+        "match__away_team__name",
+        "bookmaker__name",
+    )
+    raw_id_fields = ("match", "bookmaker", "market")
+    date_hierarchy = "observed_at"
+
+
+@admin.register(PredictionExperiment)
+class PredictionExperimentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "competition",
+        "mode",
+        "period_start",
+        "period_end",
+        "engine_version",
+        "completed_at",
+    )
+    list_filter = ("mode", "competition", "engine_version")
+    search_fields = ("competition__name", "engine_version")
+    raw_id_fields = ("competition",)
+    readonly_fields = ("config", "summary")
+
+
+@admin.register(Prediction)
+class PredictionAdmin(admin.ModelAdmin):
+    list_display = (
+        "match",
+        "experiment",
+        "model_code",
+        "variant",
+        "model_version",
+        "cutoff",
+        "p_home",
+        "p_draw",
+        "p_away",
+        "predicted_outcome",
+        "actual_outcome",
+    )
+    list_filter = (
+        ("experiment", admin.RelatedOnlyFieldListFilter),
+        "model_code",
+        "variant",
+        "predicted_outcome",
+        "actual_outcome",
+        "experiment__mode",
+        "match__season__competition",
+    )
+    search_fields = (
+        "match__home_team__name",
+        "match__away_team__name",
+        "model_version",
+    )
+    raw_id_fields = ("experiment", "match")
+    date_hierarchy = "cutoff"
+
+
+@admin.register(Decision)
+class DecisionAdmin(admin.ModelAdmin):
+    list_display = (
+        "match",
+        "experiment",
+        "policy_code",
+        "policy_variant",
+        "action",
+        "reason",
+        "selected_price",
+        "decision_time",
+    )
+    list_filter = (
+        ("experiment", admin.RelatedOnlyFieldListFilter),
+        "policy_code",
+        "policy_variant",
+        "action",
+        "reason",
+        "experiment__mode",
+        "match__season__competition",
+    )
+    search_fields = (
+        "match__home_team__name",
+        "match__away_team__name",
+        "policy_version",
+        "reason",
+    )
+    raw_id_fields = (
+        "experiment",
+        "match",
+        "prediction",
+        "selected_odds_observation",
+    )
+    date_hierarchy = "decision_time"

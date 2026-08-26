@@ -1,9 +1,13 @@
+import math
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 from django_countries.fields import CountryField
 from django_extensions.db.models import TimeStampedModel
+
+PROBABILITY_TOLERANCE = 1e-6
 
 
 class Source(TimeStampedModel):
@@ -397,3 +401,237 @@ class OddsSnapshot(models.Model):
             )
         ]
         ordering = ("-observed_at",)
+
+
+class OddsObservation(models.Model):
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="odds_observations"
+    )
+    source = models.ForeignKey(
+        Source, on_delete=models.PROTECT, related_name="odds_observations"
+    )
+    bookmaker = models.ForeignKey(
+        Bookmaker, on_delete=models.PROTECT, related_name="odds_observations"
+    )
+    market = models.ForeignKey(
+        OddsMarket, on_delete=models.PROTECT, related_name="odds_observations"
+    )
+    home = models.DecimalField(max_digits=10, decimal_places=4)
+    draw = models.DecimalField(max_digits=10, decimal_places=4)
+    away = models.DecimalField(max_digits=10, decimal_places=4)
+    provider_updated_at = models.DateTimeField(null=True, blank=True)
+    observed_at = models.DateTimeField()
+
+    def __str__(self):
+        return f"{self.match} — {self.bookmaker} observed @ {self.observed_at}"
+
+    def clean(self):
+        if (
+            self.source_id
+            and self.bookmaker_id
+            and self.bookmaker.source_id != self.source_id
+        ):
+            raise ValidationError("Bookmaker must use the odds source.")
+        if (
+            self.source_id
+            and self.market_id
+            and self.market.source_id != self.source_id
+        ):
+            raise ValidationError("Odds market must use the odds source.")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "source", "bookmaker", "market", "observed_at"],
+                name="football_odds_observation_identity_unique",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["match", "observed_at"],
+                name="football_odds_match_obs_idx",
+            ),
+            models.Index(
+                fields=["match", "source", "bookmaker", "market", "observed_at"],
+                name="football_odds_asof_idx",
+            ),
+        ]
+        ordering = ("-observed_at", "id")
+
+
+class PredictionExperiment(TimeStampedModel):
+    MODE_BACKTEST = "BACKTEST"
+    MODE_PROSPECTIVE = "PROSPECTIVE"
+    MODES = (
+        (MODE_BACKTEST, "Backtest"),
+        (MODE_PROSPECTIVE, "Prospective"),
+    )
+
+    competition = models.ForeignKey(
+        Competition, on_delete=models.PROTECT, related_name="prediction_experiments"
+    )
+    mode = models.CharField(max_length=12, choices=MODES)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    engine_version = models.CharField(max_length=50, default="fs003-v1")
+    config = models.JSONField(default=dict)
+    summary = models.JSONField(default=dict, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return (
+            f"{self.competition} {self.mode} " f"{self.period_start}..{self.period_end}"
+        )
+
+    class Meta:
+        ordering = ("-created",)
+
+
+class Prediction(TimeStampedModel):
+    DIXON_COLES = "DIXON_COLES"
+    INDEPENDENT_POISSON = "INDEPENDENT_POISSON"
+    ELO_MULTINOMIAL_LOGIT = "ELO_MULTINOMIAL_LOGIT"
+    MARKET_CONSENSUS = "MARKET_CONSENSUS"
+    MODERNIZED_R45 = "MODERNIZED_R45"
+    MODEL_CODES = (
+        (DIXON_COLES, "Dixon-Coles"),
+        (INDEPENDENT_POISSON, "Independent Poisson"),
+        (ELO_MULTINOMIAL_LOGIT, "Elo multinomial logit"),
+        (MARKET_CONSENSUS, "Market consensus"),
+        (MODERNIZED_R45, "Modernized R45"),
+    )
+
+    experiment = models.ForeignKey(
+        PredictionExperiment, on_delete=models.CASCADE, related_name="predictions"
+    )
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="predictions"
+    )
+    model_code = models.CharField(max_length=30, choices=MODEL_CODES)
+    variant = models.CharField(max_length=20, blank=True)
+    model_version = models.CharField(max_length=100)
+    model_config = models.JSONField(default=dict)
+    cutoff = models.DateTimeField()
+    p_home = models.FloatField()
+    p_draw = models.FloatField()
+    p_away = models.FloatField()
+    predicted_outcome = models.CharField(max_length=4, choices=Match.OUTCOMES)
+    diagnostics = models.JSONField(default=dict, blank=True)
+    evaluated_at = models.DateTimeField(null=True, blank=True)
+    actual_outcome = models.CharField(
+        max_length=4, choices=Match.OUTCOMES, null=True, blank=True
+    )
+
+    def clean(self):
+        super().clean()
+        probabilities = (self.p_home, self.p_draw, self.p_away)
+        if not all(math.isfinite(value) and 0 <= value <= 1 for value in probabilities):
+            raise ValidationError("Probabilities must be finite and between 0 and 1.")
+        if abs(sum(probabilities) - 1) > PROBABILITY_TOLERANCE:
+            raise ValidationError("Probabilities must sum to one.")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["experiment", "match", "model_code", "variant"],
+                name="football_prediction_logical_identity_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(p_home__gte=0)
+                    & Q(p_home__lte=1)
+                    & Q(p_draw__gte=0)
+                    & Q(p_draw__lte=1)
+                    & Q(p_away__gte=0)
+                    & Q(p_away__lte=1)
+                ),
+                name="football_prediction_probability_bounds",
+            ),
+        ]
+        ordering = ("cutoff", "match_id", "model_code", "variant")
+
+
+class Decision(TimeStampedModel):
+    ACTION_NO_BET = "NO_BET"
+    ACTIONS = (*Match.OUTCOMES, (ACTION_NO_BET, "No bet"))
+
+    experiment = models.ForeignKey(
+        PredictionExperiment, on_delete=models.CASCADE, related_name="decisions"
+    )
+    match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name="decisions")
+    prediction = models.ForeignKey(
+        Prediction,
+        on_delete=models.CASCADE,
+        related_name="decisions",
+        null=True,
+        blank=True,
+    )
+    policy_code = models.CharField(max_length=30)
+    policy_variant = models.CharField(max_length=30, blank=True)
+    policy_version = models.CharField(max_length=100)
+    policy_config = models.JSONField(default=dict, blank=True)
+    decision_time = models.DateTimeField()
+    action = models.CharField(max_length=6, choices=ACTIONS)
+    reason = models.CharField(max_length=100)
+    model_probability = models.FloatField(null=True, blank=True)
+    selected_odds_observation = models.ForeignKey(
+        OddsObservation,
+        on_delete=models.PROTECT,
+        related_name="decisions",
+        null=True,
+        blank=True,
+    )
+    selected_price = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True
+    )
+    expected_value = models.FloatField(null=True, blank=True)
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.model_probability is not None and (
+            not math.isfinite(self.model_probability)
+            or not 0 <= self.model_probability <= 1
+        ):
+            errors["model_probability"] = (
+                "Model probability must be finite and between zero and one."
+            )
+        if self.expected_value is not None and not math.isfinite(self.expected_value):
+            errors["expected_value"] = "Expected value must be finite."
+        if self.prediction_id:
+            if self.prediction.experiment_id != self.experiment_id:
+                errors["prediction"] = "Prediction must belong to this experiment."
+            if self.prediction.match_id != self.match_id:
+                errors["prediction"] = "Prediction must belong to this match."
+        if self.selected_odds_observation_id:
+            observation = self.selected_odds_observation
+            if observation.match_id != self.match_id:
+                errors["selected_odds_observation"] = (
+                    "Selected odds must belong to this match."
+                )
+            if self.action in dict(Match.OUTCOMES) and self.selected_price is not None:
+                expected_price = getattr(
+                    self.selected_odds_observation, self.action.lower()
+                )
+                if self.selected_price != expected_price:
+                    errors["selected_price"] = (
+                        "Selected price must match the selected observation."
+                    )
+        if errors:
+            raise ValidationError(errors)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "experiment",
+                    "match",
+                    "prediction",
+                    "policy_code",
+                    "policy_variant",
+                ],
+                name="football_decision_logical_identity_unique",
+                nulls_distinct=False,
+            )
+        ]
+        ordering = ("decision_time", "match_id", "policy_code", "policy_variant")

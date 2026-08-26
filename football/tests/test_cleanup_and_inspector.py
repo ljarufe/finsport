@@ -8,12 +8,14 @@ from tools.inspect_legacy_dump import inspect_dump
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_only_three_custom_football_commands_and_legacy_paths_are_absent():
+def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
     commands = get_commands()
     assert {name for name, app in commands.items() if app == "football"} == {
         "sync_football_catalog",
         "sync_football_day",
         "sync_football_season",
+        "evaluate_football_predictions",
+        "predict_football_day",
     }
     for name in (
         "get_leagues",
