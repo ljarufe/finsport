@@ -514,3 +514,58 @@ def test_day_inkabet_mw3w_failure_is_fail_soft():
     assert "inkabet_calls=2" in report
     assert "inkabet_errors=1" in report
     assert "error=none" in report
+
+
+@override_settings(
+    INKABET_BRAND_ID="local-brand",
+    INKABET_MARKET_CODE="local-market",
+)
+def test_day_malformed_inkabet_categories_is_fail_soft():
+    tracked = competition()
+    catalog_season(tracked)
+    sync_catalog_payloads([], [{"id": 1, "name": "Match Winner"}])
+
+    FakeClient.responses = {
+        "fixtures": [fixture_payload()],
+        "odds": [odds_payload()],
+    }
+
+    # Top-level response is valid JSON/data, but the nested provider
+    # categories shape has drifted.
+    FakeInkabetClient.categories_payload = {
+        "data": {
+            "items": [],
+        }
+    }
+
+    output = StringIO()
+
+    with (
+        mock.patch.object(DayCommand, "client_class", FakeClient),
+        mock.patch.object(
+            DayCommand,
+            "inkabet_client_class",
+            FakeInkabetClient,
+        ),
+    ):
+        call_command(
+            "sync_football_day",
+            date="2025-08-24",
+            with_odds=True,
+            stdout=output,
+        )
+
+    report = output.getvalue()
+
+    assert OddsSnapshot.objects.filter(
+        source__code="api_football",
+    ).exists()
+    assert not OddsSnapshot.objects.filter(
+        source__code="inkabet",
+    ).exists()
+
+    assert "INKABET_DEGRADED" in report
+    assert "unexpected categories payload shape" in report
+    assert "inkabet_calls=1" in report
+    assert "inkabet_errors=1" in report
+    assert "error=none" in report

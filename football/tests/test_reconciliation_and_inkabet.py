@@ -405,3 +405,21 @@ def test_inkabet_odds_update_single_current_row_and_do_not_change_result():
     assert match.home_score == 2
     assert match.outcome == Match.OUTCOME_HOME
     assert TeamSourceRef.objects.filter(source=inkabet_source()).count() == 2
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [],
+        {"indexBySlug": []},
+    ],
+)
+def test_categories_parser_rejects_invalid_nested_shapes(items):
+    payload = {
+        "data": {
+            "items": items,
+        }
+    }
+
+    with pytest.raises(TypeError):
+        parse_categories(payload)

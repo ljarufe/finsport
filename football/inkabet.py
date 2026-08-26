@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django_countries.fields import Country
 
+from .api_inkabet import InkabetResponseError
 from .country_mapping import country_code, normalized_text
 from .models import (
     Bookmaker,
@@ -141,8 +142,17 @@ def _is_real_match(event_id, label, slug, metadata):
 
 
 def parse_categories(payload):
-    items = (payload.get("data") or {}).get("items") or {}
-    index_by_slug = items.get("indexBySlug") or {}
+    data = payload.get("data") or {}
+    items = data.get("items", {})
+
+    if not isinstance(items, dict):
+        raise TypeError("Inkabet categories items must be an object.")
+
+    index_by_slug = items.get("indexBySlug", {})
+
+    if not isinstance(index_by_slug, dict):
+        raise TypeError("Inkabet categories indexBySlug must be an object.")
+
     metadata_by_id = _metadata_by_id(items)
     competitions = {}
     events = []
@@ -248,7 +258,12 @@ def _matches_in_kickoff_window(event, matches):
 def reconcile_categories(payload, relevant_matches):
     source = get_inkabet_source()
     stats = SyncStats()
-    competitions, events = parse_categories(payload)
+    try:
+        competitions, events = parse_categories(payload)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        raise InkabetResponseError(
+            "Inkabet returned an unexpected categories payload shape."
+        ) from error
     relevant_by_country = {}
     for match in relevant_matches:
         relevant_by_country.setdefault(match.competition.country.code, []).append(match)

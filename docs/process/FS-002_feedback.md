@@ -512,6 +512,28 @@ La UAT final dio:
 inkabet_errors=0
 ```
 
+### PR review correction — parser boundary
+
+GitHub Codex Review detectó que el fail-soft inicial protegía el request HTTP de
+`categories()` pero no el parsing/reconciliation posterior. Un response HTTP/JSON
+válido con drift estructural anidado podía lanzar una excepción Python desde
+`parse_categories()` y hacer fallar `sync_football_day` después de haber completado
+el trabajo autoritativo de API-Football.
+
+La corrección final:
+
+- convierte errores estructurales esperables del parser de categories en
+  `InkabetResponseError`;
+- mantiene `reconcile_categories()` dentro del mismo boundary `InkabetError`;
+- preserva fixtures y odds de API-Football;
+- reporta `INKABET_DEGRADED`;
+- incrementa `inkabet_errors`;
+- mantiene `error=none`.
+
+Se añadió regresión con JSON/data válido pero `items` malformado. No fue necesario
+repetir UAT live: la corrección sólo modifica la frontera de error para input
+malformado y no cambia el contrato HTTP ni el happy path ya validado.
+
 ---
 
 ## 8. Admin

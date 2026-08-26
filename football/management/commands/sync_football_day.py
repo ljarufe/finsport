@@ -91,15 +91,15 @@ class Command(SyncCommand):
 
         try:
             categories = self.inkabet_client.categories()
+            discovery_stats = reconcile_categories(
+                categories,
+                accepted.values(),
+            )
         except InkabetError as error:
             self.inkabet_errors += 1
             self.stdout.write(self.style.WARNING(f"INKABET_DEGRADED: {error}"))
             return stats
 
-        discovery_stats = reconcile_categories(
-            categories,
-            accepted.values(),
-        )
         stats.merge(discovery_stats)
 
         for match_ref in resolved_match_refs_for(accepted.values()):
