@@ -2,6 +2,9 @@ from django.contrib import admin
 
 from .models import (
     Bookmaker,
+    CapitalExperiment,
+    CapitalLedgerEntry,
+    CapitalPolicyRun,
     Competition,
     CompetitionSourceRef,
     Decision,
@@ -17,6 +20,100 @@ from .models import (
     Team,
     TeamSourceRef,
 )
+
+
+class ReadOnlyCapitalAuditMixin:
+    def get_readonly_fields(self, request, obj=None):
+        del request, obj
+        return tuple(field.name for field in self.model._meta.concrete_fields)
+
+    def has_add_permission(self, request, obj=None):
+        del request, obj
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        del request, obj
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        del request, obj
+        return False
+
+
+class CapitalPolicyRunInline(ReadOnlyCapitalAuditMixin, admin.TabularInline):
+    model = CapitalPolicyRun
+    extra = 0
+    can_delete = False
+    show_change_link = True
+
+
+@admin.register(CapitalExperiment)
+class CapitalExperimentAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "source_experiment",
+        "source_identity",
+        "decision_policy_code",
+        "decision_policy_variant",
+        "mode",
+        "engine_version",
+        "input_count",
+        "completed_at",
+    )
+    list_filter = ("mode", "engine_version", "decision_policy_code")
+    raw_id_fields = ("source_experiment",)
+    inlines = (CapitalPolicyRunInline,)
+
+    @admin.display(description="Source")
+    def source_identity(self, obj):
+        if obj.source_model_code:
+            return f"{obj.source_model_code}:{obj.source_model_variant}"
+        return f"comparator:{obj.source_comparator_code}"
+
+
+@admin.register(CapitalPolicyRun)
+class CapitalPolicyRunAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "experiment",
+        "policy_code",
+        "policy_version",
+        "status",
+        "reason",
+        "seed",
+        "path_count",
+    )
+    list_filter = ("status", "policy_code", "policy_version", "experiment__mode")
+    raw_id_fields = ("experiment",)
+
+
+@admin.register(CapitalLedgerEntry)
+class CapitalLedgerEntryAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "policy_run",
+        "source_decision",
+        "batch_time",
+        "batch_index",
+        "step",
+        "requested_stake",
+        "applied_stake",
+        "bankroll_before",
+        "bankroll_after",
+        "profit_loss",
+        "cap_hit",
+        "practical_ruin",
+        "termination_reason",
+    )
+    list_filter = (
+        "policy_run__policy_code",
+        "policy_run__experiment__mode",
+        "cap_hit",
+        "practical_ruin",
+        "termination_reason",
+    )
+    raw_id_fields = ("policy_run", "source_decision")
+    date_hierarchy = "batch_time"
 
 
 @admin.register(Source)
