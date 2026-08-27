@@ -15,6 +15,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "sync_football_day",
         "sync_football_season",
         "evaluate_football_predictions",
+        "evaluate_capital_policies",
         "predict_football_day",
     }
     for name in (

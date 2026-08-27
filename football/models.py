@@ -635,3 +635,120 @@ class Decision(TimeStampedModel):
             )
         ]
         ordering = ("decision_time", "match_id", "policy_code", "policy_variant")
+
+
+class CapitalExperiment(TimeStampedModel):
+    MODE_REPLAY = "REPLAY"
+    MODE_MONTE_CARLO = "MONTE_CARLO"
+    MODE_STRESS = "STRESS"
+    MODES = (
+        (MODE_REPLAY, "Deterministic replay"),
+        (MODE_MONTE_CARLO, "Monte Carlo"),
+        (MODE_STRESS, "Stress"),
+    )
+
+    source_experiment = models.ForeignKey(
+        PredictionExperiment,
+        on_delete=models.PROTECT,
+        related_name="capital_experiments",
+    )
+    source_model_code = models.CharField(max_length=30, blank=True)
+    source_model_variant = models.CharField(max_length=20, blank=True)
+    source_comparator_code = models.CharField(max_length=30, blank=True)
+    decision_policy_code = models.CharField(max_length=30)
+    decision_policy_variant = models.CharField(max_length=30, blank=True)
+    engine_version = models.CharField(max_length=50, default="fs004-v1")
+    mode = models.CharField(max_length=12, choices=MODES)
+    initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
+    config = models.JSONField(default=dict)
+    input_count = models.PositiveIntegerField(default=0)
+    input_hash = models.CharField(max_length=64)
+    input_manifest = models.JSONField(default=dict)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    summary = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        source = self.source_model_code or self.source_comparator_code
+        return f"{self.mode} {source}/{self.decision_policy_code} ({self.pk})"
+
+    class Meta:
+        ordering = ("-created",)
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(source_model_code="", source_comparator_code__gt="")
+                    | Q(source_model_code__gt="", source_comparator_code="")
+                ),
+                name="football_capital_experiment_one_source_identity",
+            ),
+            models.CheckConstraint(
+                condition=Q(initial_bankroll__gt=0),
+                name="football_capital_experiment_positive_bankroll",
+            ),
+        ]
+
+
+class CapitalPolicyRun(TimeStampedModel):
+    STATUS_PRODUCED = "PRODUCED"
+    STATUS_UNAVAILABLE = "UNAVAILABLE"
+    STATUS_FAILED = "FAILED"
+    STATUSES = (
+        (STATUS_PRODUCED, "Produced"),
+        (STATUS_UNAVAILABLE, "Unavailable"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    experiment = models.ForeignKey(
+        CapitalExperiment, on_delete=models.CASCADE, related_name="policy_runs"
+    )
+    policy_code = models.CharField(max_length=40)
+    policy_version = models.CharField(max_length=100)
+    policy_config = models.JSONField(default=dict)
+    status = models.CharField(max_length=12, choices=STATUSES)
+    reason = models.CharField(max_length=120, blank=True)
+    seed = models.BigIntegerField(null=True, blank=True)
+    path_count = models.PositiveIntegerField(null=True, blank=True)
+    metrics = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.policy_code} {self.status} ({self.pk})"
+
+    class Meta:
+        ordering = ("experiment_id", "id")
+
+
+class CapitalLedgerEntry(models.Model):
+    policy_run = models.ForeignKey(
+        CapitalPolicyRun, on_delete=models.CASCADE, related_name="ledger_entries"
+    )
+    source_decision = models.ForeignKey(
+        Decision, on_delete=models.PROTECT, related_name="capital_ledger_entries"
+    )
+    batch_time = models.DateTimeField()
+    batch_index = models.PositiveIntegerField()
+    step = models.PositiveIntegerField(null=True, blank=True)
+    requested_stake = models.DecimalField(max_digits=24, decimal_places=8)
+    applied_stake = models.DecimalField(max_digits=24, decimal_places=8)
+    bankroll_before = models.DecimalField(max_digits=24, decimal_places=8)
+    bankroll_after = models.DecimalField(max_digits=24, decimal_places=8)
+    profit_loss = models.DecimalField(max_digits=24, decimal_places=8)
+    action_snapshot = models.CharField(max_length=6)
+    outcome_snapshot = models.CharField(max_length=4, blank=True)
+    price_snapshot = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True
+    )
+    capital_reason = models.CharField(max_length=120, blank=True)
+    policy_state = models.JSONField(default=dict, blank=True)
+    cap_hit = models.BooleanField(default=False)
+    shortfall = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    practical_ruin = models.BooleanField(default=False)
+    termination_reason = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ("policy_run_id", "batch_index", "source_decision_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["policy_run", "source_decision"],
+                name="football_capital_ledger_run_decision_unique",
+            )
+        ]
