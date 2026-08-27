@@ -66,6 +66,7 @@ def simulate(
     peak = bankroll.copy()
     maximum_drawdown = np.zeros(path_count, dtype=np.float64)
     max_stake = np.zeros(path_count, dtype=np.float64)
+    max_stake_pre_bankroll_ratio = np.zeros(path_count, dtype=np.float64)
     ruined = np.zeros(path_count, dtype=np.bool_)
     terminated = np.zeros(path_count, dtype=np.bool_)
     cap_hits = np.zeros(path_count, dtype=np.int64)
@@ -122,6 +123,7 @@ def simulate(
             active & ~batch_termination & (requested_exposure > pre_batch_bankroll)
         )
         ruined |= overcommitted
+        terminated |= overcommitted
         terminated |= batch_termination
         funded = active & ~overcommitted & ~batch_termination
         batch_pnl = np.zeros(path_count, dtype=np.float64)
@@ -135,6 +137,16 @@ def simulate(
             )
             effective_stake = np.where(funded, applied, 0.0)
             max_stake = np.maximum(max_stake, effective_stake)
+            stake_pre_bankroll_ratio = np.divide(
+                effective_stake,
+                pre_batch_bankroll,
+                out=np.zeros_like(effective_stake),
+                where=funded & (pre_batch_bankroll > 0),
+            )
+            max_stake_pre_bankroll_ratio = np.maximum(
+                max_stake_pre_bankroll_ratio,
+                stake_pre_bankroll_ratio,
+            )
             batch_pnl += np.where(
                 funded,
                 np.where(wins, effective_stake * (price - 1.0), -effective_stake),
@@ -171,6 +183,7 @@ def simulate(
         initial_bankroll=initial_bankroll,
         maximum_drawdown=maximum_drawdown,
         max_stake=max_stake,
+        max_stake_pre_bankroll_ratio=max_stake_pre_bankroll_ratio,
         ruined=ruined,
         cap_hits=cap_hits,
         terminated=terminated,
@@ -212,14 +225,11 @@ def _request_vectors(
     elif policy.code in (LEGACY_RECOVERY, LEGACY_CAPPED):
         first = np.isnan(target_profit)
         initial = float(policy.initial_stake)
-        theoretical = np.where(
-            first,
-            initial,
-            (target_profit + accumulated_loss) / (price - 1.0),
-        )
-        requested = (
-            np.ceil(theoretical) if policy.code == LEGACY_RECOVERY else theoretical
-        )
+        subsequent = (target_profit + accumulated_loss) / (price - 1.0)
+        if policy.code == LEGACY_RECOVERY:
+            requested = np.where(first, initial, np.ceil(subsequent))
+        else:
+            requested = np.where(first, initial, subsequent)
     elif policy.code == LEGACY_PARTIAL:
         requested = (float(policy.target) + float(policy.alpha) * accumulated_loss) / (
             price - 1.0

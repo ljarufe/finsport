@@ -106,6 +106,7 @@ def stochastic_metrics(
     initial_bankroll,
     maximum_drawdown,
     max_stake,
+    max_stake_pre_bankroll_ratio,
     ruined,
     cap_hits,
     terminated,
@@ -116,6 +117,7 @@ def stochastic_metrics(
     terminal = np.asarray(terminal_bankroll, dtype=np.float64)
     mdd = np.asarray(maximum_drawdown, dtype=np.float64)
     max_stake = np.asarray(max_stake, dtype=np.float64)
+    max_stake_ratio = np.asarray(max_stake_pre_bankroll_ratio, dtype=np.float64)
     pnl = terminal - initial_bankroll
     quantile_1 = float(np.quantile(terminal, 0.01))
     quantile_5 = float(np.quantile(terminal, 0.05))
@@ -148,6 +150,12 @@ def stochastic_metrics(
             "quantile_95": float(np.quantile(max_stake, 0.95)),
             "maximum": float(np.max(max_stake)),
         },
+        "max_stake_pre_bankroll_ratio_distribution": {
+            "mean": float(np.mean(max_stake_ratio)),
+            "median": float(np.median(max_stake_ratio)),
+            "quantile_95": float(np.quantile(max_stake_ratio, 0.95)),
+            "maximum": float(np.max(max_stake_ratio)),
+        },
         "cap_distribution": {
             "mean_hits": float(np.mean(cap_hits)),
             "probability_any": float(np.mean(cap_hits > 0)),
@@ -158,7 +166,7 @@ def stochastic_metrics(
         "mean_pnl": float(np.mean(pnl)),
         "median_pnl": float(np.median(pnl)),
         "return": float(np.mean(pnl)),
-        "stake_concentration": float(np.mean(max_stake) / initial_bankroll),
+        "stake_concentration": float(np.mean(max_stake_ratio)),
     }
 
 

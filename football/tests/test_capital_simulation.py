@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -110,6 +111,61 @@ def test_terminal_batch_depletion_is_ruin_and_depleted_paths_stop():
     assert metrics["practical_ruin_probability"] == 1
     assert metrics["termination_distribution"]["probability"] == 1
     assert metrics["max_stake_distribution"]["mean"] == 100
+
+
+def test_overcommit_is_ruin_and_termination_without_processing_later_decisions():
+    metrics = simulate(
+        basis(count=2, probability="1"),
+        make_policy("FLAT_UNIT", {"unit": "101"}),
+        Decimal("100"),
+        seed=7,
+        path_count=32,
+        tail_level=0.05,
+        mdd_thresholds=(0.5,),
+    )
+
+    assert metrics["practical_ruin_probability"] == 1
+    assert metrics["termination_distribution"]["probability"] == 1
+    assert metrics["mean_terminal_bankroll"] == 100
+    assert metrics["max_stake_distribution"]["maximum"] == 0
+
+
+def test_stake_concentration_tracks_max_applied_stake_over_pre_batch_bankroll():
+    metrics = simulate(
+        basis(count=12, probability="0.5"),
+        make_policy("FIXED_FRACTION_BANKROLL", {"fraction": "0.20"}),
+        Decimal("100"),
+        seed=23,
+        path_count=256,
+        tail_level=0.05,
+        mdd_thresholds=(0.5,),
+    )
+
+    distribution = metrics["max_stake_pre_bankroll_ratio_distribution"]
+    assert distribution["mean"] == pytest.approx(0.20)
+    assert distribution["median"] == pytest.approx(0.20)
+    assert distribution["maximum"] == pytest.approx(0.20)
+    assert metrics["stake_concentration"] == pytest.approx(0.20)
+
+
+def test_fractional_initial_legacy_stake_is_exact_and_only_recovery_is_ceiled():
+    rows = basis(count=2)
+    rows = (
+        replace(rows[0], probability=Decimal("0"), outcome="AWAY"),
+        replace(rows[1], probability=Decimal("1"), outcome="HOME"),
+    )
+    metrics = simulate(
+        rows,
+        make_policy("LEGACY_RECOVERY", {"initial_stake": "1.25"}),
+        Decimal("100"),
+        seed=31,
+        path_count=16,
+        tail_level=0.05,
+        mdd_thresholds=(0.5,),
+    )
+
+    assert metrics["mean_terminal_bankroll"] == pytest.approx(101.75)
+    assert metrics["max_stake_distribution"]["mean"] == pytest.approx(3.0)
 
 
 def test_simulation_requires_probability_but_never_mutates_input():
