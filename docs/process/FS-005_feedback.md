@@ -1,261 +1,390 @@
-# FS-005 — Feedback de implementación
+# FS-005 — Feedback final reconciliado
 
-**Estado del documento:** `IMPLEMENTATION SNAPSHOT — MAY BECOME STALE`
+**Estado del documento:** `FINAL RECONCILED FEEDBACK`
 
-Este documento es una fotografía factual del Pass 1 de implementación y de su único
-Pass 2 consolidado pre-UAT. Puede quedar stale después de UAT o PR review. **No es
-`FINAL RECONCILED FEEDBACK`**, no declara cerrado FS-005 y no afirma que el ticket esté
-UAT-ready. El execution chat reconciliará el feedback final después de implementation
-+ corrections + UAT + PR review.
-
-## Identidad y alcance
+## Identidad y outcome
 
 - Ticket: `FS-005 — Implementar captura temporal de odds quota-aware`.
 - Branch: `FS-005-odds-capture-planner`.
-- Base post-FS-004: `1e93e97c81888c688f0955927f3ea43dc818286c`.
-- Modo de producto: local-only, demo-only y research-oriented.
-- Research: `docs/research/FS-005_odds_cadence_quota_research.md`, clasificado
-  `REFERENCE ONLY` y no modificado durante Pass 1 ni Pass 2.
-- Passes documentados: Pass 1 de implementación y un Pass 2 consolidado de corrección
-  pre-UAT.
+- Base de inicio: `master` post-FS-004, SHA de preflight `1e93e97c81888c688f0955927f3ea43dc818286c`.
+- Modo: `local-only / demo-only / research-oriented`.
+- Research durable: `docs/research/FS-005_odds_cadence_quota_research.md` — `REFERENCE ONLY`.
+- Side effects financieros: ninguno.
 
-El alcance entregado es:
+Outcome entregado:
 
 ```text
-canonical fixtures
-→ quota-aware planning
-→ kickoff-relative windows
-→ bounded provider execution
-→ append-only OddsObservation
-→ protected result refresh
-→ durable capture audit
-→ optional default-off Celery wake
+scheduler/manual wake
+→ planner DB-only
+→ deterministic due work
+→ bounded executor
+→ API-Football GET-only
+→ OddsObservation append-only
+→ OddsSnapshot latest projection
+→ canonical result refresh
+→ CaptureRun/CaptureWorkItem audit
 ```
 
-No se implementó ni se reclama optimización de cadence, rentabilidad, estrategia de
-apuestas o verdad de producto sobre el mejor cutoff.
+Automatic capture queda `default OFF`; el camino manual permanece disponible.
 
-## Arquitectura entregada
+## Arquitectura implementada
 
-- `football/capture/contracts.py` define ventanas, configuración, cuota, plan, trabajo
-  y resultado estructurados.
-- `football/capture/planner.py` construye planes deterministas desde fixtures
-  canónicos, identidad, ventanas y evidencia local de cuota; el planner hace cero
-  provider calls.
-- `football/capture/executor.py` revalida bajo lock, ejecuta trabajo acotado, persiste
-  auditoría y delega la ingestión a `sync_odds_payloads` y
-  `sync_fixture_payloads`.
-- `football/capture/locks.py` implementa single-flight con el advisory lock PostgreSQL
-  `finsport:fs005:api_football`.
-- `football/capture/service.py` y `football/capture/__init__.py` exponen el entrypoint
-  Python reusable `run_capture(...)` compartido por operación manual, task y tests.
-- `football/management/commands/run_football_capture.py` ofrece el comando manual con
-  `--dry-run`, `--at`, filtros de match/purpose/window y límites que sólo estrechan la
-  ejecución.
-- `football/tasks.py` define la task segura `football.capture.wake`; sólo despierta al
-  servicio común y conserva fallos pre-executor en auditoría.
-- `finsport/settings.py` y `.env.dist` contienen ventanas, horizon, reserve, discovery,
-  result refresh y bounds configurables con automatización default-off.
-- `football/admin.py` registra runs y work items para inspección operativa.
+Nuevo boundary reusable:
 
-## Correcciones consolidadas de Pass 2
+```text
+football/capture/
+├── contracts.py
+├── planner.py
+├── executor.py
+├── locks.py
+├── service.py
+└── __init__.py
+```
 
-El único Pass 2 pre-UAT corrigió cuatro findings sin cambiar schema, offsets, query
-shape ni semántica de producto:
+Servicio compartido:
 
-1. En `BOUNDED_BOOTSTRAP`, un `ODDS_CAPTURE` sin `allow_bootstrap=True` queda
-   `QUOTA_RESERVE` con razón explícita y cero calls, independientemente del reserve. La
-   regla se aplica en planning y otra vez durante la revalidación bajo lock. Result y
-   fixture refresh obligatorios conservan el bootstrap bounded existente.
-2. La precedencia determinista es result debt primero, odds due ordenadas
-   lexicográficamente por expiración/coverage/freshness/kickoff/ID después, y discovery
-   due al final. Discovery conserva cadence/config propia pero no desplaza odds due.
-3. Cualquier `actual_attempts > 0` no fulfilled reclama esa misma
-   `logical_identity` como `PROVIDER_BACKOFF`. Un guard de budget/quota disparado
-   después de un attempt ya no se presenta como skip pre-call; una identidad temporal
-   posterior sigue siendo válida.
-4. El stratum competition/day convierte kickoff aware a `settings.TIME_ZONE`
-   (`America/Lima`). La identidad absoluta de kickoff y el epoch de cuota UTC no
-   cambiaron.
+```python
+from football.capture import run_capture
+```
 
-## Persistencia y contrato dry-run
+Entry points:
 
-La migración `football/migrations/0004_capturerun_captureworkitem.py` crea:
+- management command `run_football_capture`;
+- Celery task `football.capture.wake`;
+- conditional Beat schedule;
+- Django Admin para `CaptureRun` y `CaptureWorkItem`.
 
-- `CaptureRun`: trigger/status, planning/start/completion, snapshot de configuración,
-  base/límite/remaining/timestamp de cuota, reserve, attempts/pages/retries, efectos,
-  skips/failures, summary y error sanitizado.
-- `CaptureWorkItem`: purpose/status, source/match/market, identidad lógica, ventana,
-  `target_at`, `not_before`, `not_after`, prioridad, costes esperados, attempts/pages/
-  retries reales, efectos, cuota antes/después, `executed_at`, `completed_at`, lateness
-  y error sanitizado.
+Persistencia:
 
-La identidad exitosa de odds equivale a provider + fixture canónico + market + intended
-window + `target_at`. Una `UniqueConstraint` condicional sobre `logical_identity` evita
-más de una fila fulfilled (`SUCCESS`, `SUCCESS_EMPTY` o `LATE_CAPTURE`) para la misma
-unidad lógica. El modo dry-run no crea `CaptureRun`, `CaptureWorkItem`,
-`OddsObservation` ni ningún otro dato, y tampoco instancia el cliente del proveedor.
+- `CaptureRun`: una invocación real manual/scheduler con resumen, quota y efectos;
+- `CaptureWorkItem`: unidad lógica de trabajo/ventana/target con estado, attempts, quota evidence y efectos.
 
-## Contrato de proveedor y cuota
+Dry-run:
 
-API-Football es la fuente primaria y Match Winner/1X2 H-D-A es el baseline actual. La
-captura usa `/odds?fixture=<external fixture id>&bet=<market external id>`; el valor
-preflight del market es `1`. No se reabrió research ni se compararon shapes alternativos.
+```text
+provider calls = 0
+CaptureRun writes = 0
+CaptureWorkItem writes = 0
+OddsObservation writes = 0
+external effects = 0
+```
 
-Cada HTTP attempt, incluidas páginas y retries, se presupuesta conservadoramente como
-posible consumo. Los daily headers observados reconcilian el estado local y son la
-autoridad de runtime; minute-only o ausencia de daily headers no inventan cuota diaria.
-El epoch diario es UTC. Cuando faltan headers, sólo existe bootstrap acotado y
-acumulado dentro del epoch UTC: odds opcionales requieren autorización explícita y el
-trabajo obligatorio permanece sujeto al mismo bound. La reserva obligatoria protege el
-trabajo canónico frente a odds opcionales.
+## Semántica temporal, quota e idempotencia
 
-El planner exige que el worst case de una operación quepa antes de admitirla. El
-`attempt_guard` vuelve a admitir cada página/attempt antes de enviarlo. Pages, retries,
-attempts por run, coste máximo por operación y bootstrap tienen bounds independientes;
-un fallo o parcialidad detiene el resto del run con estado explícito en vez de abrir un
-bucle de rescate.
+Se mantienen separados:
 
-## Ventanas y semántica temporal
+```text
+target_at
+not_before
+not_after
+executed_at
+observed_at
+lateness
+```
 
-La configuración exige `early` + `middle` y soporta como máximo un candidate adicional
-cuyo nombre empiece por `near`. Los offsets incluidos actualmente son defaults de
-research, no product truth ni una afirmación sobre el cutoff óptimo.
+No backdating.
 
-El modelo separa `target_at`, `not_before`, `not_after`, `executed_at`, `observed_at` y
-`lateness_seconds`. Una ejecución dentro de tolerancia tardía pero fuera de tolerancia
-normal queda `LATE_CAPTURE`; una ventana vencida antes del executor queda
-`MISSED_WINDOW`. `OddsObservation.observed_at` conserva el momento real de ingestión:
-no existe backdating hacia el target nominal.
+FS-005 usa provider headers como autoridad cuando son utilizables, epoch/reset UTC, accounting conservador de attempts, mandatory reserve, re-gate por page/retry y bounded bootstrap.
 
-## Idempotency y concurrencia
+Optional odds sobre `BOUNDED_BOOTSTRAP` requieren opt-in explícito.
 
-La misma intended window se cumple como máximo una vez. Una ventana posterior con otro
-target conserva una identidad legítima distinta, incluso si el precio observado no
-cambió; por tanto puede producir otra observación temporal válida. Cualquier estado no
-fulfilled con attempts reales queda en backoff para esa identidad, mientras errores o
-skips previos a un attempt no fabrican cumplimiento ni bloquean una replanificación
-todavía válida.
+Prioridad final bajo presión de cuota:
 
-El executor toma el advisory lock PostgreSQL y, bajo él, vuelve a evaluar cuota,
-identidad, hora real, kickoff, status y outcome antes de cualquier call. El perdedor
-concurrente registra `CONCURRENT_EXECUTOR` y realiza cero provider calls.
+```text
+mandatory result debt
+→ due odds
+→ discovery due
+```
 
-## Fixture discovery y result refresh
+Single-flight:
 
-Existe discovery reusable por fecha local con cadence y número de días futuros
-configurables. `FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False` es el default, por lo que no
-se repite discovery en cada wake ni en cada candidate de odds.
+```text
+PostgreSQL advisory lock
+finsport:fs005:api_football
+```
 
-Result refresh está protegido y bounded. Consulta cada fixture por
-`/fixtures?id=<external fixture id>`, reutiliza `sync_fixture_payloads` y mantiene
-`Match.outcome` como autoridad canónica. Un outcome ya resuelto se clasifica
-`ALREADY_FULFILLED`; un fixture final o cancelado/abandonado sin outcome canónico se
-clasifica `STATUS_INELIGIBLE` para evitar loops. Si el kickoff cambió entre plan y
-executor, el trabajo de odds actual queda `NOT_DUE` y debe replanificarse contra el
-nuevo kickoff; otros cambios fuera de pre-match quedan explícitamente ineligibles.
+La identidad lógica de odds es:
 
-## Lifecycle del scheduler
+```text
+provider + fixture + market + intended window + target_at
+```
 
-`FOOTBALL_CAPTURE_ENABLED=False` es el default. Con esa configuración `make up` puede
-levantar worker y Beat, pero FS-005 no añade schedule; una invocación directa de la task
-devuelve `DISABLED` y cero attempts. Al habilitarlo y reiniciar `make up`, settings
-añade el wake periódico de Beat; el wake delega a `run_capture`, y un wake por sí solo
-no implica provider call porque un plan sin trabajo due no instancia el cliente.
+Una intended window fulfilled no se reejecuta; una ventana posterior legítima sí.
 
-El runtime soportado requiere PostgreSQL, Redis, Django, el worker aislado
-`finsport.local.safe` y Beat. Beat conserva el file scheduler; no usa schedules
-persistidos de base de datos. La validación manual del lifecycle disabled/enabled y la
-inspección Admin siguen pendientes.
+Después de cualquier provider attempt real, una identidad no fulfilled no vuelve a autoejecutarse silenciosamente.
 
-## Disposición de Inkabet y seguridad financiera
+## Result refresh
 
-Inkabet permanece secondary, read-only, GET-only y fail-soft dentro del flujo manual
-existente. FS-005 no lo invoca ni agenda, y no extrapola hacia Inkabet quota headers,
-reserve, reset ni cadence de API-Football. En Pass 2 pasaron 45 tests de comandos,
-reconciliation y cliente Inkabet; el gate completo también pasó, por lo que A27 queda
-PASS.
+El refresh:
 
-La implementación no autentica bookmakers, no coloca apuestas reales, no ejecuta el
-Selenium histórico de betting y no realiza mutaciones financieras externas. Esas
-acciones permanecen prohibidas.
+- reutiliza `sync_fixture_payloads`;
+- conserva `Match.outcome` como autoridad canónica;
+- está protegido por reserve;
+- es bounded;
+- no hace polling infinito de terminal no-outcome;
+- actualiza postponement/reschedule y timing cuando corresponde.
+
+Corrección final de PR review:
+
+`FOOTBALL_CAPTURE_HORIZON_HOURS` es horizonte de elegibilidad **futura** para captura, no TTL retrospectivo de result debt.
+
+Contrato final:
+
+```text
+unresolved nonterminal result debt
+→ no expira sólo por edad
+
+terminal no-outcome
+→ explicit stopping semantics
+```
+
+Se añadió regresión focalizada.
+
+## Findings corregidos
+
+### Pass 2
+
+1. Optional odds bootstrap ahora exige opt-in explícito independientemente del reserve.
+2. Discovery dejó de preemptar due odds: `result debt → due odds → discovery`.
+3. Cualquier `actual_attempts > 0` no fulfilled protege la same identity contra retry automático silencioso.
+4. Competition/day stratum usa `America/Lima`; kickoff absoluto y quota epoch continúan UTC.
+
+### PR review
+
+5. Un unresolved result debt podía desaparecer al superar `FOOTBALL_CAPTURE_HORIZON_HOURS`.
+
+Fix directo y localizado: se retiró ese lower bound retrospectivo y se añadió regresión.
 
 ## Evidencia automatizada
 
-Las autoridades persistidas son `tmp/FS-005_focused_evidence.txt` para Pass 1 y
-`tmp/FS-005_pass2_evidence.txt` para Pass 2.
+Pass 2 consolidado:
 
-Pass 1 dejó Black/Ruff, migration drift, Django check, `git diff --check` y 41 tests
-enfocados en PASS. Pass 2 añadió esta evidencia:
+- Black/Ruff: PASS.
+- focused FS-005 evidence: 90 tests PASS.
+- API-Football/Inkabet regression: 45 tests PASS.
+- `make check`: PASS.
+- repository tests: 197 PASS.
+- Django check: PASS.
+- migration drift: `No changes detected`.
+- `git diff --check`: PASS.
+- complete relevant diff review: PASS.
+- seis warnings deprecados externos de `penaltyblog`, no pertenecientes a FS-005.
 
-- 29 tests de captura: PASS.
-- 16 tests de cliente e inventario: PASS.
-- 45 tests de comandos, reconciliation y cliente Inkabet: PASS.
-- Combinación enfocada final: Black/Ruff PASS y 90 tests PASS.
-- `make check`, ejecutado una sola vez: Black sobre 85 archivos, Ruff, Django check y
-  197 tests PASS. Se observaron seis warnings de deprecation dentro de `penaltyblog`;
-  no son fallos del gate ni fueron absorbidos por FS-005.
-- `makemigrations --check --dry-run`: PASS, `No changes detected`.
-- `git diff --check`: PASS, exit code 0.
+Después del fix de PR review se ejecutó evidencia focalizada sobre result semantics; GitHub CI/review final quedó verde según reporte del maintainer.
 
-Las nuevas regresiones cubren el opt-in obligatorio de bootstrap con reserve 0 y bajo
-lock, result → odds → discovery bajo budget limitado, backoff de la misma identidad
-después de un único attempt real bloqueado antes del retry, y el boundary UTC-midnight
-del día calendario `America/Lima`. Toda interacción de proveedor se simuló con
-fakes/mocks o un opener local que lanza timeout sin acceder a red.
+No se repitió UAT live ni el general gate por ceremonia porque el fix era focalizado y no invalidaba provider transport, quota accounting, persistence ni scheduler lifecycle.
 
-## Estado de acceptance
+## UAT final
 
-El ledger contiene **40 PASS, 7 PENDING y 3 N/A**. El technical close continúa
-bloqueado por estos required PENDING:
+### UAT A — dry-run
 
-- dry-run UAT con identidad frozen (A38);
-- captura real de odds con ceiling de un attempt (A39);
-- rerun real same-window a cero calls adicionales (A40);
-- result refresh real bounded o evidencia explícita de no aplicabilidad (A41);
-- lifecycle manual disabled/enabled con `make up` (A42);
-- inspección manual Admin/operator (A43);
-- `Final FS-005 feedback` reconciliado (A48).
+Match `1158`, API fixture `1570362`, Sevilla – Atletico Madrid:
 
-Los N/A son: no provocar live 429/timeout/5xx (se usaron fakes/mocks), failed-call quota
-probe cerrado como `NOT PLANNED`, y toda autenticación/apuesta/Selenium/mutación
-financiera real por estar expresamente prohibida.
+- `DRY_RUN`;
+- 0 provider attempts/pages/retries;
+- 0 DB writes;
+- bounded bootstrap plan explícito.
 
-## UAT frozen facts pendientes
+### UAT B — real odds capture
 
-No se ejecutó UAT en esta continuación. Quedan preparados, no validados:
+Mismo fixture:
 
-- Odds: match `1158`, fixture API `1570362`, Sevilla–Atletico Madrid, kickoff
-  `2026-08-29T19:30:00+00:00`, ceiling de un provider attempt.
-- Result refresh: match `1142`, fixture API `1570336`, Celta Vigo–Osasuna, kickoff
-  `2026-08-27T18:30:00+00:00`, ceiling de un provider attempt si sigue aplicable.
-- Ceiling live total: dos attempts como máximo (uno odds + uno result refresh); el
-  failed-call probe no está planificado.
-- Evidencia preflight de cuota: daily remaining observado `98` después de discovery del
-  fixture 2026-08-29; este valor es sólo la fotografía de preflight, no cuota actual.
-- Probe del advisory lock PostgreSQL `finsport:fs005:api_football`: PASS.
+- `SUCCESS`;
+- 1 provider attempt;
+- 1 page;
+- 0 retries;
+- 13 `OddsObservation`;
+- 13 `OddsSnapshot` cambiados/creados;
+- `run_id=1`;
+- quota remaining: `97`.
 
-## Pass, diff review y trabajo diferido
+`observed_at` fue real, no backdateado.
 
-Se usaron Pass 1 de implementación y el único Pass 2 consolidado de corrección pre-UAT.
-El budget normal de código pre-UAT quedó agotado; no corresponde un tercer pass salvo
-un STOP/exception genuino. Este documento permanece snapshot y no es feedback final.
+### UAT C — same-window idempotency
 
-El complete-diff review está en `tmp/FS-005_diff_review.txt`. El artifact regenerado
-tiene 4.938 líneas e incluye tracked unstaged, staged si existiera y
-relevant untracked: feedback, migration, código/tests nuevos y research
-maintainer-owned. El review cubre el conjunto completo y presta atención específica a
-orden del planner, bootstrap, revalidación bajo lock, idempotency por attempts, día
-local, tests y consistencia documental.
+Misma logical identity:
 
-No se descubrió un finding material nuevo ni un ticket nuevo durante el Pass 2. Los
-seis warnings externos de `penaltyblog` quedan sólo como advertencia factual. El trabajo
-diferido real es exactamente el conjunto PENDING del ledger; no se decide roadmap desde
-este snapshot.
+```text
+api_football:odds:1570362:1:middle:2026-08-28T17:30:00+00:00
+```
 
-## Estado al devolver control
+Resultado:
 
-El snapshot factual de Pass 1 + Pass 2 queda completo y el gate automatizado general
-está verde. Los UAT requeridos y el feedback final reconciliado siguen pendientes. No
-se ejecutaron provider calls ni UAT. El feedback final será reconciliado después de
-implementation + corrections + UAT + PR review.
+- `NO_WORK`;
+- `ALREADY_FULFILLED`;
+- 0 provider calls;
+- 0 new observations;
+- quota intacta en `97`.
+
+### UAT D — bounded result refresh
+
+Match `1142`, API fixture `1570336`, Celta Vigo – Osasuna:
+
+- `SUCCESS`;
+- 1 provider attempt;
+- 1 page;
+- `fixtures_changed=1`;
+- `matches_resolved=1`;
+- canonical outcome `AWAY`;
+- `FT`, 1–2;
+- quota remaining `96`;
+- `run_id=3`.
+
+### UAT E/F — scheduler + Admin/DB audit
+
+Se validó:
+
+```text
+default disabled
+→ no FS-005 Beat schedule
+
+enabled safe override
+→ scheduler wake
+
+restart enabled
+→ scheduler wake vuelve a aparecer
+
+restore normal
+→ default OFF restaurado
+```
+
+Scheduler runs post-baseline:
+
+- IDs `15` y `16`;
+- 2 runs;
+- 0 provider attempts;
+- 0 failures;
+- skips explícitos `MISSED_WINDOW` / `NOT_DUE`.
+
+Admin fue inspeccionado manualmente.
+
+Audit DB read-only confirmó:
+
+- 3 manual runs;
+- 2 scheduler runs post-baseline;
+- 13 OddsObservation;
+- 13 OddsSnapshot;
+- scheduler attempts = 0;
+- scheduler failures = 0;
+- match 1142 resuelto `AWAY`, `FT`, 1–2.
+
+## Provider-call accounting del UAT
+
+```text
+odds capture → 1
+result refresh → 1
+total → 2
+```
+
+No hubo:
+
+- live 429/timeout/5xx probes;
+- failed-call accounting probe;
+- Inkabet calls desde FS-005;
+- bookmaker auth;
+- betting;
+- Selenium betting;
+- financial writes.
+
+## Acceptance final
+
+```text
+47 PASS
+0 PENDING
+3 N/A
+```
+
+N/A:
+
+- live 429/timeout/5xx triggering;
+- failed-call quota probe `NOT PLANNED`;
+- real betting/bookmaker auth/Selenium/financial mutation.
+
+A48 queda PASS con este `FINAL RECONCILED FEEDBACK`.
+
+## Pass budget
+
+- Pass 1 — implementation.
+- Closure continuation documental para completar factual snapshot omitido; no correction pass.
+- Pass 2 — única corrección consolidada pre-UAT.
+- No Pass 3 de UAT.
+- Finding de PR review corregido directamente por ser pequeño/localizado; no nueva pasada Codex.
+
+## Warning/deferred
+
+- Seis warnings `penaltyblog`: externos/no FS-005.
+- Automatic capture permanece default OFF.
+- Temporal history no acumula autónomamente hasta habilitación/configuración explícita.
+- Shipped offsets no son una política óptima congelada.
+- No email/Slack/dashboard de observabilidad.
+- No real betting.
+
+## New Work Discovered — lifecycle de partidos cancelados/no realizados
+
+Nueva decisión del maintainer:
+
+> Cuando un partido quede definitivamente cancelado/no realizado y deje de ser relevante para experimentación, no interesa conservar datos dependientes inútiles asociados, incluidas odds, predicciones y demás evidencia derivada.
+
+No se absorbe en FS-005 después de review estable.
+
+Debe volver a F006/F008 para disposición y definición.
+
+El siguiente diseño debe cerrar:
+
+- qué estado significa cancelación definitiva/no realización;
+- cómo distinguirlo de postponement/reschedule, que no debe limpiarse prematuramente;
+- tratamiento de `OddsObservation` / `OddsSnapshot`;
+- `Prediction` / `Decision`;
+- source refs;
+- `CaptureWorkItem` y audit;
+- capital/evaluation rows derivadas;
+- experiments/agregados multi-match que quedarían stale;
+- si `Match` permanece como tombstone/status o también se elimina;
+- orden/cascade;
+- idempotencia;
+- audit del cleanup;
+- guardas contra borrar evidencia de partidos válidos.
+
+Disposición recomendada para F008:
+
+```text
+candidate ABSORB into FS-006 post-match lifecycle
+```
+
+si sigue siendo un outcome coherente. Si el riesgo destructivo/provenance exige boundary independiente, F008 debe dividirlo deliberadamente.
+
+## Process learnings
+
+1. En tickets materiales/multi-boundary, el factual implementation snapshot de Pass 1 debe pedirse explícitamente en kickoff.
+2. Una closure continuation exclusivamente documental no consume correction pass si no cambia lógica.
+3. Execution chat posee el `FINAL RECONCILED FEEDBACK`.
+4. No usar Codex sólo para wording final.
+5. Findings de review pequeños/localizados pueden corregirse directamente con evidence-by-delta.
+6. Un scripted lifecycle UAT no debe asumir que `make up` devuelve el prompt; usar Compose detached o dos terminales cuando se necesita continuar automáticamente.
+7. Evidence-by-delta evitó repetir provider UAT y suites completas tras el fix de review.
+
+## Source projection requerida
+
+No regenerar F001–F010 en bloque.
+
+- `F001`: FS-005 pasa de `IN DEVELOPMENT` a capability actual; automatic capture sigue default OFF.
+- `F002`: proyectar sólo semánticas durables; incorporar cleanup de cancelados cuando F008 cierre el contrato exacto.
+- `F003`: añadir capture package, audit models, `run_capture`, advisory lock, command y Celery wake.
+- `F004`: añadir operación/config de capture, reserve/bootstrap, Admin audit y default-off lifecycle.
+- `F006`: marcar FS-005 `COMPLETED`, reconciliar FS-006 y registrar finding de cancelados.
+- `F009`: evaluar promoción de los process learnings anteriores.
+- `F000`: actualizar sólo si cambian catálogo/estado/versiones activas.
+- `F005`: sin cambio, `NOT USED`.
+- `F007`: sin cambio feature-specific.
+- `F008`: la guía no cambia; debe ingerir/disponer el new finding.
+- `F010`: sin cambio.
+
+## Estado de cierre
+
+```text
+READY FOR FINAL DOCUMENTATION COMMIT
+→ SQUASH MERGE
+→ MASTER SYNC / CLEANUP
+→ PLANKA DONE
+→ MAIN-CHAT HANDOFF
+```
