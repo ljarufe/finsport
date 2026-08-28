@@ -101,6 +101,21 @@ def test_success_empty_response_and_quota_headers():
     assert "fictional-provider-secret" not in request.full_url
 
 
+def test_minute_only_header_is_not_a_daily_quota_observation():
+    api = client(
+        QueueOpener(
+            Response(
+                payload(),
+                {"X-RateLimit-Limit": "10", "X-RateLimit-Remaining": "9"},
+            )
+        )
+    )
+    api.get_page("fixtures")
+    assert api.minute_remaining == 9
+    assert api.daily_remaining is None
+    assert api.quota_observed_at is None
+
+
 def test_pagination_requests_each_page_and_has_hard_bound():
     opener = QueueOpener(
         Response(payload([{"id": 1}], current=1, total=2)),
@@ -117,6 +132,20 @@ def test_pagination_requests_each_page_and_has_hard_bound():
     with pytest.raises(APIFootballPaginationError, match="configured bound"):
         bounded.get_all("odds")
     assert bounded.calls == 1
+
+
+def test_attempt_guard_rechecks_before_every_page():
+    opener = QueueOpener(
+        Response(payload([{"id": 1}], current=1, total=2)),
+        Response(payload([{"id": 2}], current=2, total=2)),
+    )
+    admitted_calls = []
+    api = client(opener, max_pages=2)
+    api.attempt_guard = lambda active: admitted_calls.append(active.calls)
+
+    assert api.get_all("odds", {"fixture": 1}) == [{"id": 1}, {"id": 2}]
+    assert admitted_calls == [0, 1]
+    assert api.pages == 2
 
 
 @pytest.mark.parametrize(
@@ -156,9 +185,11 @@ def test_free_plan_restriction_has_clear_sanitized_error():
 
 def test_timeout_and_5xx_retries_are_bounded():
     timeouts = QueueOpener(socket.timeout(), socket.timeout())
+    timeout_client = client(timeouts, max_retries=1)
     with pytest.raises(APIFootballTransientError):
-        client(timeouts, max_retries=1).get_page("fixtures")
+        timeout_client.get_page("fixtures")
     assert len(timeouts.requests) == 2
+    assert timeout_client.retries == 1
 
     failures = QueueOpener(http_error(503), http_error(503))
     with pytest.raises(APIFootballTransientError, match="bounded retries"):

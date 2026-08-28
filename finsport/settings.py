@@ -3,6 +3,7 @@ import os
 import socket
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
 
 env = environ.Env(DEBUG=(bool, False))
@@ -172,6 +173,61 @@ API_FOOTBALL_MAX_PAGES = env.int("API_FOOTBALL_MAX_PAGES", default=25)
 API_FOOTBALL_MAX_RETRIES = env.int("API_FOOTBALL_MAX_RETRIES", default=2)
 API_FOOTBALL_MINIMUM_INTERVAL = env.float("API_FOOTBALL_MINIMUM_INTERVAL", default=6.0)
 
+# FS-005 temporal capture. These are local research controls, not a frozen
+# market-timing policy. Automatic wakeup is safe/default-off.
+FOOTBALL_CAPTURE_ENABLED = env.bool("FOOTBALL_CAPTURE_ENABLED", default=False)
+FOOTBALL_CAPTURE_WAKE_SECONDS = env.int("FOOTBALL_CAPTURE_WAKE_SECONDS", default=900)
+FOOTBALL_CAPTURE_WINDOWS = env.json(
+    "FOOTBALL_CAPTURE_WINDOWS",
+    default=[
+        {
+            "name": "early",
+            "offset_minutes": 2880,
+            "before_tolerance_minutes": 180,
+            "normal_tolerance_minutes": 60,
+            "late_tolerance_minutes": 360,
+        },
+        {
+            "name": "middle",
+            "offset_minutes": 720,
+            "before_tolerance_minutes": 180,
+            "normal_tolerance_minutes": 60,
+            "late_tolerance_minutes": 360,
+        },
+    ],
+)
+FOOTBALL_CAPTURE_HORIZON_HOURS = env.int("FOOTBALL_CAPTURE_HORIZON_HOURS", default=168)
+FOOTBALL_CAPTURE_MANDATORY_RESERVE = env.int(
+    "FOOTBALL_CAPTURE_MANDATORY_RESERVE", default=10
+)
+FOOTBALL_CAPTURE_MAX_OPERATION_PAGES = env.int(
+    "FOOTBALL_CAPTURE_MAX_OPERATION_PAGES", default=3
+)
+FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS = env.int(
+    "FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS", default=12
+)
+FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS = env.int(
+    "FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS", default=1
+)
+FOOTBALL_CAPTURE_DISCOVERY_ENABLED = env.bool(
+    "FOOTBALL_CAPTURE_DISCOVERY_ENABLED", default=False
+)
+FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES = env.int(
+    "FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES", default=720
+)
+FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD = env.int(
+    "FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD", default=2
+)
+FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED = env.bool(
+    "FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED", default=True
+)
+FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES = env.int(
+    "FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES", default=120
+)
+FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES = env.int(
+    "FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES", default=360
+)
+
 # Read-only Inkabet JSON boundary. These values are local configuration, not
 # browser/session credentials, and are never logged or persisted.
 INKABET_BASE_URL = env(
@@ -209,3 +265,12 @@ if DEBUG:
 # database scheduler, so persisted django-celery-beat rows cannot dispatch the
 # historical betting cycle.
 CELERY_BEAT_SCHEDULE = {}
+if FOOTBALL_CAPTURE_ENABLED:
+    if FOOTBALL_CAPTURE_WAKE_SECONDS < 1:
+        raise ImproperlyConfigured(
+            "FOOTBALL_CAPTURE_WAKE_SECONDS must be positive when capture is enabled."
+        )
+    CELERY_BEAT_SCHEDULE["football-capture-wake"] = {
+        "task": "football.capture.wake",
+        "schedule": FOOTBALL_CAPTURE_WAKE_SECONDS,
+    }
