@@ -136,7 +136,6 @@ class CapturePlanner:
         queryset = Match.objects.filter(
             season__competition__enabled=True,
             kickoff__lte=due_before,
-            kickoff__gte=at - self.config.horizon,
             outcome="",
         ).select_related("season__competition")
         if match_id is not None:

@@ -847,6 +847,37 @@ def test_terminal_no_outcome_is_explicit_and_never_polled():
     **(
         CAPTURE_SETTINGS
         | {
+            "FOOTBALL_CAPTURE_HORIZON_HOURS": 24,
+        }
+    )
+)
+def test_unresolved_result_debt_survives_future_capture_horizon():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39,
+        name="Past League",
+        kickoff=now - timedelta(hours=48),
+    )
+
+    result = run_capture(
+        at=now,
+        dry_run=True,
+        match_id=match.pk,
+        purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+    )
+
+    assert len(result.plan["items"]) == 1
+    item = result.plan["items"][0]
+
+    assert item["match_id"] == match.pk
+    assert item["purpose"] == CaptureWorkItem.Purpose.RESULT_REFRESH
+    assert item["status"] == CaptureWorkItem.Status.PLANNED
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
             "FOOTBALL_CAPTURE_DISCOVERY_ENABLED": True,
             "FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES": 720,
         }
