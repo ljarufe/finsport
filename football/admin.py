@@ -5,6 +5,8 @@ from .models import (
     CapitalExperiment,
     CapitalLedgerEntry,
     CapitalPolicyRun,
+    CaptureRun,
+    CaptureWorkItem,
     Competition,
     CompetitionSourceRef,
     Decision,
@@ -45,6 +47,70 @@ class CapitalPolicyRunInline(ReadOnlyCapitalAuditMixin, admin.TabularInline):
     extra = 0
     can_delete = False
     show_change_link = True
+
+
+class CaptureWorkItemInline(ReadOnlyCapitalAuditMixin, admin.TabularInline):
+    model = CaptureWorkItem
+    extra = 0
+    can_delete = False
+    show_change_link = True
+
+
+@admin.register(CaptureRun)
+class CaptureRunAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "trigger",
+        "status",
+        "planning_at",
+        "started_at",
+        "completed_at",
+        "provider_attempts",
+        "provider_pages",
+        "quota_remaining_before",
+        "quota_remaining_after",
+        "observations_created",
+        "matches_resolved",
+        "skips",
+        "failures",
+    )
+    list_filter = ("trigger", "status", "quota_basis")
+    date_hierarchy = "started_at"
+    inlines = (CaptureWorkItemInline,)
+
+
+@admin.register(CaptureWorkItem)
+class CaptureWorkItemAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "run",
+        "purpose",
+        "status",
+        "match",
+        "intended_window",
+        "target_at",
+        "executed_at",
+        "actual_attempts",
+        "observations_created",
+        "matches_resolved",
+        "reason",
+    )
+    list_filter = (
+        "purpose",
+        "status",
+        "source",
+        "intended_window",
+        "match__season__competition",
+    )
+    search_fields = (
+        "logical_identity",
+        "match__home_team__name",
+        "match__away_team__name",
+        "error_class",
+        "error_message",
+    )
+    raw_id_fields = ("run", "match", "market")
+    date_hierarchy = "target_at"
 
 
 @admin.register(CapitalExperiment)

@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from django.conf import settings
+from django.utils import timezone
 
 
 class APIFootballError(Exception):
@@ -40,6 +41,10 @@ class APIFootballPaginationError(APIFootballError):
     pass
 
 
+class APIFootballOperationBudgetError(APIFootballError):
+    pass
+
+
 class APIFootballClient:
     def __init__(
         self,
@@ -54,6 +59,7 @@ class APIFootballClient:
         opener=None,
         sleep=None,
         monotonic=None,
+        attempt_guard=None,
     ):
         self.api_key = api_key if api_key is not None else settings.API_FOOTBALL_KEY
         if not self.api_key:
@@ -80,13 +86,18 @@ class APIFootballClient:
         self._opener = opener or urlopen
         self._sleep = sleep or time.sleep
         self._monotonic = monotonic or time.monotonic
+        self.attempt_guard = attempt_guard
         self._last_request_at = None
 
         self.calls = 0
+        self.pages = 0
+        self.retries = 0
         self.daily_limit = None
         self.daily_remaining = None
         self.minute_limit = None
         self.minute_remaining = None
+        self.quota_observed_at = None
+        self.quota_observed_calls = 0
 
     def get_all(self, endpoint, params=None):
         params = dict(params or {})
@@ -129,6 +140,10 @@ class APIFootballClient:
         )
 
         for attempt in range(self.max_retries + 1):
+            if self.attempt_guard is not None:
+                self.attempt_guard(self)
+            if attempt > 0:
+                self.retries += 1
             self._guard_daily_reserve()
             self._pace()
             self.calls += 1
@@ -186,6 +201,7 @@ class APIFootballClient:
                 raise APIFootballResponseError(
                     "API-Football returned an unexpected response shape."
                 )
+            self.pages += 1
             return payload
 
         raise APIFootballTransientError("API-Football retry bound was exhausted.")
@@ -228,6 +244,9 @@ class APIFootballClient:
         self.minute_remaining = self._optional_int(
             normalized.get("x-ratelimit-remaining"), self.minute_remaining
         )
+        if "x-ratelimit-requests-remaining" in normalized:
+            self.quota_observed_at = timezone.now()
+            self.quota_observed_calls = self.calls
 
     @staticmethod
     def _optional_int(value, default):

@@ -17,6 +17,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "evaluate_football_predictions",
         "evaluate_capital_policies",
         "predict_football_day",
+        "run_football_capture",
     }
     for name in (
         "get_leagues",
@@ -33,7 +34,14 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
     assert not (ROOT / "common/scrapy_runner.py").exists()
     assert not list((ROOT / "bet/selenium_bots").glob("**/*.py"))
     assert not (ROOT / "bet/tasks.py").exists()
-    assert not (ROOT / "football/tasks.py").exists()
+    football_tasks = (ROOT / "football/tasks.py").read_text()
+    settings_source = (ROOT / "finsport/settings.py").read_text()
+    assert "football.capture.wake" in football_tasks
+    assert "run_capture" in football_tasks
+    assert "run_betting_cycle" not in football_tasks
+    assert "FOOTBALL_CAPTURE_ENABLED" in settings_source
+    assert "default=False" in settings_source
+    assert '"football-capture-wake"' in settings_source
     assert not list((ROOT / "accounts").glob("**/*.py"))
     assert not list((ROOT / "bet/management").glob("**/*.py"))
 

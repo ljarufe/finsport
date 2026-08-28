@@ -459,6 +459,158 @@ class OddsObservation(models.Model):
         ordering = ("-observed_at", "id")
 
 
+class CaptureRun(TimeStampedModel):
+    class Trigger(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        SCHEDULER = "SCHEDULER", "Scheduler"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCESS = "SUCCESS", "Success"
+        PARTIAL = "PARTIAL", "Partial"
+        FAILED = "FAILED", "Failed"
+        NO_WORK = "NO_WORK", "No work"
+        CONCURRENT_EXECUTOR = "CONCURRENT_EXECUTOR", "Concurrent executor"
+
+    trigger = models.CharField(max_length=12, choices=Trigger.choices)
+    status = models.CharField(
+        max_length=24, choices=Status.choices, default=Status.RUNNING
+    )
+    planning_at = models.DateTimeField()
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    config_snapshot = models.JSONField(default=dict)
+    quota_basis = models.CharField(max_length=40, blank=True)
+    quota_limit = models.PositiveIntegerField(null=True, blank=True)
+    quota_remaining_before = models.PositiveIntegerField(null=True, blank=True)
+    quota_remaining_after = models.PositiveIntegerField(null=True, blank=True)
+    quota_observed_at = models.DateTimeField(null=True, blank=True)
+    mandatory_reserve = models.PositiveIntegerField(default=0)
+    provider_attempts = models.PositiveIntegerField(default=0)
+    provider_pages = models.PositiveIntegerField(default=0)
+    provider_retries = models.PositiveIntegerField(default=0)
+    observations_created = models.PositiveIntegerField(default=0)
+    snapshots_changed = models.PositiveIntegerField(default=0)
+    fixtures_changed = models.PositiveIntegerField(default=0)
+    matches_resolved = models.PositiveIntegerField(default=0)
+    skips = models.PositiveIntegerField(default=0)
+    failures = models.PositiveIntegerField(default=0)
+    summary = models.JSONField(default=dict, blank=True)
+    error_class = models.CharField(max_length=120, blank=True)
+    error_message = models.CharField(max_length=500, blank=True)
+
+    def __str__(self):
+        return f"{self.trigger} {self.status} ({self.pk})"
+
+    class Meta:
+        ordering = ("-started_at", "-id")
+
+
+class CaptureWorkItem(models.Model):
+    class Purpose(models.TextChoices):
+        ODDS_CAPTURE = "ODDS_CAPTURE", "Odds capture"
+        FIXTURE_REFRESH = "FIXTURE_REFRESH", "Fixture refresh"
+        RESULT_REFRESH = "RESULT_REFRESH", "Result refresh"
+
+    class Status(models.TextChoices):
+        PLANNED = "PLANNED", "Planned"
+        NOT_DUE = "NOT_DUE", "Not due"
+        ALREADY_FULFILLED = "ALREADY_FULFILLED", "Already fulfilled"
+        STATUS_INELIGIBLE = "STATUS_INELIGIBLE", "Status ineligible"
+        ODDS_NOT_COVERED = "ODDS_NOT_COVERED", "Odds not covered"
+        UNRESOLVED_IDENTITY = "UNRESOLVED_IDENTITY", "Unresolved identity"
+        QUOTA_RESERVE = "QUOTA_RESERVE", "Quota reserve"
+        INSUFFICIENT_WORST_CASE_BUDGET = (
+            "INSUFFICIENT_WORST_CASE_BUDGET",
+            "Insufficient worst-case budget",
+        )
+        MISSED_WINDOW = "MISSED_WINDOW", "Missed window"
+        LATE_CAPTURE = "LATE_CAPTURE", "Late capture"
+        PROVIDER_BACKOFF = "PROVIDER_BACKOFF", "Provider backoff"
+        CONCURRENT_EXECUTOR = "CONCURRENT_EXECUTOR", "Concurrent executor"
+        SUCCESS = "SUCCESS", "Success"
+        SUCCESS_EMPTY = "SUCCESS_EMPTY", "Success empty"
+        PARTIAL_PAGINATION = "PARTIAL_PAGINATION", "Partial pagination"
+        FAILED_PROVIDER = "FAILED_PROVIDER", "Provider failed"
+
+    run = models.ForeignKey(
+        CaptureRun, on_delete=models.CASCADE, related_name="work_items"
+    )
+    purpose = models.CharField(max_length=20, choices=Purpose.choices)
+    status = models.CharField(
+        max_length=40, choices=Status.choices, default=Status.PLANNED
+    )
+    source = models.ForeignKey(
+        Source, on_delete=models.PROTECT, related_name="capture_work_items"
+    )
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name="capture_work_items",
+        null=True,
+        blank=True,
+    )
+    market = models.ForeignKey(
+        OddsMarket,
+        on_delete=models.PROTECT,
+        related_name="capture_work_items",
+        null=True,
+        blank=True,
+    )
+    logical_identity = models.CharField(max_length=500)
+    intended_window = models.CharField(max_length=80, blank=True)
+    target_at = models.DateTimeField(null=True, blank=True)
+    not_before = models.DateTimeField(null=True, blank=True)
+    not_after = models.DateTimeField(null=True, blank=True)
+    priority = models.PositiveIntegerField(default=0)
+    reason = models.CharField(max_length=120, blank=True)
+    estimated_min_cost = models.PositiveIntegerField(default=0)
+    estimated_max_cost = models.PositiveIntegerField(default=0)
+    actual_attempts = models.PositiveIntegerField(default=0)
+    actual_pages = models.PositiveIntegerField(default=0)
+    actual_retries = models.PositiveIntegerField(default=0)
+    observations_created = models.PositiveIntegerField(default=0)
+    snapshots_changed = models.PositiveIntegerField(default=0)
+    fixtures_changed = models.PositiveIntegerField(default=0)
+    matches_resolved = models.PositiveIntegerField(default=0)
+    quota_before = models.JSONField(default=dict, blank=True)
+    quota_after = models.JSONField(default=dict, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    lateness_seconds = models.IntegerField(null=True, blank=True)
+    error_class = models.CharField(max_length=120, blank=True)
+    error_message = models.CharField(max_length=500, blank=True)
+
+    def __str__(self):
+        return f"{self.purpose} {self.status} ({self.pk})"
+
+    class Meta:
+        ordering = ("run_id", "priority", "id")
+        indexes = [
+            models.Index(
+                fields=["purpose", "status", "target_at"],
+                name="football_capture_due_idx",
+            ),
+            models.Index(
+                fields=["logical_identity", "status"],
+                name="football_capture_identity_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["logical_identity"],
+                condition=Q(
+                    status__in=(
+                        "SUCCESS",
+                        "SUCCESS_EMPTY",
+                        "LATE_CAPTURE",
+                    )
+                ),
+                name="football_capture_fulfilled_identity_unique",
+            )
+        ]
+
+
 class PredictionExperiment(TimeStampedModel):
     MODE_BACKTEST = "BACKTEST"
     MODE_PROSPECTIVE = "PROSPECTIVE"
