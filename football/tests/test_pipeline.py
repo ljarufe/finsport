@@ -25,7 +25,12 @@ from football.models import (
     Team,
 )
 from football.pipeline import run_pipeline
-from football.prediction.contracts import ProbabilityResult, UnavailablePrediction
+from football.pipeline.contracts import PhaseResult, PhaseState
+from football.pipeline.service import _phase_status
+from football.prediction.contracts import (
+    ProbabilityResult,
+    UnavailablePrediction,
+)
 from football.prediction.service import (
     ProspectivePredictionResult,
     predict_competition_day,
@@ -519,3 +524,18 @@ def test_beat_enabled_pipeline_is_the_only_automatic_capture_owner(monkeypatch):
             "schedule": configured["FOOTBALL_CAPTURE_WAKE_SECONDS"],
         }
     }
+
+
+def test_failed_phase_requires_real_success_for_degraded_status():
+    phases = {
+        "CAPTURE": PhaseResult(PhaseState.FAILED),
+        "PREDICTION": PhaseResult(PhaseState.NO_WORK),
+        "RESULT_SETTLEMENT": PhaseResult(PhaseState.NO_WORK),
+        "CAPITAL": PhaseResult(PhaseState.NO_WORK),
+    }
+
+    assert _phase_status(phases) == PipelineRun.Status.FAILED
+
+    phases["RESULT_SETTLEMENT"] = PhaseResult(PhaseState.SUCCESS)
+
+    assert _phase_status(phases) == PipelineRun.Status.DEGRADED

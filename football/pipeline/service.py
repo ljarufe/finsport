@@ -158,9 +158,7 @@ def _phase_status(phase_results):
         for name in ("CAPTURE", "PREDICTION", "RESULT_SETTLEMENT", "CAPITAL")
     ]
     if PhaseState.FAILED in domain_states:
-        successful = any(
-            state in (PhaseState.SUCCESS, PhaseState.NO_WORK) for state in domain_states
-        )
+        successful = any(state == PhaseState.SUCCESS for state in domain_states)
         return PipelineRun.Status.DEGRADED if successful else PipelineRun.Status.FAILED
     if PhaseState.DEGRADED in domain_states:
         return PipelineRun.Status.DEGRADED
