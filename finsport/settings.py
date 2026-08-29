@@ -176,6 +176,7 @@ API_FOOTBALL_MINIMUM_INTERVAL = env.float("API_FOOTBALL_MINIMUM_INTERVAL", defau
 # FS-005 temporal capture. These are local research controls, not a frozen
 # market-timing policy. Automatic wakeup is safe/default-off.
 FOOTBALL_CAPTURE_ENABLED = env.bool("FOOTBALL_CAPTURE_ENABLED", default=False)
+FOOTBALL_PIPELINE_ENABLED = env.bool("FOOTBALL_PIPELINE_ENABLED", default=False)
 FOOTBALL_CAPTURE_WAKE_SECONDS = env.int("FOOTBALL_CAPTURE_WAKE_SECONDS", default=900)
 FOOTBALL_CAPTURE_WINDOWS = env.json(
     "FOOTBALL_CAPTURE_WINDOWS",
@@ -265,11 +266,17 @@ if DEBUG:
 # database scheduler, so persisted django-celery-beat rows cannot dispatch the
 # historical betting cycle.
 CELERY_BEAT_SCHEDULE = {}
-if FOOTBALL_CAPTURE_ENABLED:
+if FOOTBALL_PIPELINE_ENABLED or FOOTBALL_CAPTURE_ENABLED:
     if FOOTBALL_CAPTURE_WAKE_SECONDS < 1:
         raise ImproperlyConfigured(
-            "FOOTBALL_CAPTURE_WAKE_SECONDS must be positive when capture is enabled."
+            "FOOTBALL_CAPTURE_WAKE_SECONDS must be positive when football automation is enabled."
         )
+if FOOTBALL_PIPELINE_ENABLED:
+    CELERY_BEAT_SCHEDULE["football-pipeline-wake"] = {
+        "task": "football.pipeline.wake",
+        "schedule": FOOTBALL_CAPTURE_WAKE_SECONDS,
+    }
+elif FOOTBALL_CAPTURE_ENABLED:
     CELERY_BEAT_SCHEDULE["football-capture-wake"] = {
         "task": "football.capture.wake",
         "schedule": FOOTBALL_CAPTURE_WAKE_SECONDS,

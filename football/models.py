@@ -1,4 +1,5 @@
 import math
+import uuid
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -626,6 +627,9 @@ class PredictionExperiment(TimeStampedModel):
     period_start = models.DateField()
     period_end = models.DateField()
     engine_version = models.CharField(max_length=50, default="fs003-v1")
+    logical_identity = models.CharField(max_length=500, blank=True)
+    intended_window = models.CharField(max_length=80, blank=True)
+    target_at = models.DateTimeField(null=True, blank=True)
     config = models.JSONField(default=dict)
     summary = models.JSONField(default=dict, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -637,6 +641,13 @@ class PredictionExperiment(TimeStampedModel):
 
     class Meta:
         ordering = ("-created",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["competition", "logical_identity"],
+                condition=Q(mode="PROSPECTIVE") & ~Q(logical_identity=""),
+                name="football_prospective_identity_unique",
+            )
+        ]
 
 
 class Prediction(TimeStampedModel):
@@ -809,6 +820,7 @@ class CapitalExperiment(TimeStampedModel):
     source_comparator_code = models.CharField(max_length=30, blank=True)
     decision_policy_code = models.CharField(max_length=30)
     decision_policy_variant = models.CharField(max_length=30, blank=True)
+    logical_identity = models.CharField(max_length=64, blank=True)
     engine_version = models.CharField(max_length=50, default="fs004-v1")
     mode = models.CharField(max_length=12, choices=MODES)
     initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
@@ -837,7 +849,49 @@ class CapitalExperiment(TimeStampedModel):
                 condition=Q(initial_bankroll__gt=0),
                 name="football_capital_experiment_positive_bankroll",
             ),
+            models.UniqueConstraint(
+                fields=["logical_identity"],
+                condition=~Q(logical_identity=""),
+                name="football_capital_logical_identity_unique",
+            ),
         ]
+
+
+class PipelineRun(TimeStampedModel):
+    class Trigger(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        SCHEDULER = "SCHEDULER", "Scheduler"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCESS = "SUCCESS", "Success"
+        NO_WORK = "NO_WORK", "No work"
+        DEGRADED = "DEGRADED", "Degraded"
+        FAILED = "FAILED", "Failed"
+
+    cycle_identity = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    trigger = models.CharField(max_length=12, choices=Trigger.choices)
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.RUNNING
+    )
+    planning_at = models.DateTimeField()
+    local_day = models.DateField()
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    phase_states = models.JSONField(default=dict, blank=True)
+    capture_run_ids = models.JSONField(default=list, blank=True)
+    prediction_experiment_ids = models.JSONField(default=list, blank=True)
+    capital_experiment_ids = models.JSONField(default=list, blank=True)
+    warnings = models.JSONField(default=list, blank=True)
+    errors = models.JSONField(default=list, blank=True)
+    config_snapshot = models.JSONField(default=dict, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.trigger} {self.status} ({self.cycle_identity})"
+
+    class Meta:
+        ordering = ("-started_at", "-id")
 
 
 class CapitalPolicyRun(TimeStampedModel):

@@ -3,7 +3,8 @@ from django.conf import settings
 from django.utils import timezone
 
 from football.capture import run_capture
-from football.models import CaptureRun
+from football.models import CaptureRun, PipelineRun
+from football.pipeline import run_pipeline
 
 
 @shared_task(name="football.capture.wake")
@@ -28,4 +29,13 @@ def wake_capture_planner():
             summary={"status": "FAILED", "error": message},
         )
         return {"status": run.status, "run_id": run.pk, "provider_attempts": 0}
+    return result.as_dict()
+
+
+@shared_task(name="football.pipeline.wake")
+def wake_pipeline():
+    """Wake the FS-006 orchestrator; the service owns all phase semantics."""
+    if not settings.FOOTBALL_PIPELINE_ENABLED:
+        return {"status": "DISABLED", "provider_attempts": 0}
+    result = run_pipeline(trigger=PipelineRun.Trigger.SCHEDULER)
     return result.as_dict()

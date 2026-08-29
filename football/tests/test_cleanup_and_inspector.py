@@ -18,6 +18,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "evaluate_capital_policies",
         "predict_football_day",
         "run_football_capture",
+        "run_football_pipeline",
     }
     for name in (
         "get_leagues",
@@ -37,9 +38,11 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
     football_tasks = (ROOT / "football/tasks.py").read_text()
     settings_source = (ROOT / "finsport/settings.py").read_text()
     assert "football.capture.wake" in football_tasks
+    assert "football.pipeline.wake" in football_tasks
     assert "run_capture" in football_tasks
     assert "run_betting_cycle" not in football_tasks
     assert "FOOTBALL_CAPTURE_ENABLED" in settings_source
+    assert "FOOTBALL_PIPELINE_ENABLED" in settings_source
     assert "default=False" in settings_source
     assert '"football-capture-wake"' in settings_source
     assert not list((ROOT / "accounts").glob("**/*.py"))
