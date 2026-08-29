@@ -44,9 +44,9 @@ Redis is persistent and can contain unknown legacy messages. It is not purged. T
 
 The historical worker used Redis DB 0, so the normal worker cannot consume that retained broker state. This isolates old messages without deleting them.
 
-Celery Beat remains available. FS-005 adds one safe optional wake task, but its schedule is absent unless `FOOTBALL_CAPTURE_ENABLED=True`. The normal Beat command uses Celery's file scheduler at an ephemeral `/tmp` path, not `django-celery-beat`'s `DatabaseScheduler`; persisted PostgreSQL schedule rows therefore cannot dispatch the historical betting cycle.
+Celery Beat remains available. The safe football schedules are absent by default. FS-005 capture can be enabled with `FOOTBALL_CAPTURE_ENABLED=True`; FS-006 pipeline automation can be enabled with `FOOTBALL_PIPELINE_ENABLED=True`. When pipeline automation is enabled it is the only scheduled owner that can invoke capture, even if both flags are true. The normal Beat command uses Celery's file scheduler at an ephemeral `/tmp` path, not `django-celery-beat`'s `DatabaseScheduler`; persisted PostgreSQL schedule rows therefore cannot dispatch the historical betting cycle.
 
-The historical `bet.tasks.run_betting_cycle` module and all betting management commands have been removed. The only supported application task is `football.capture.wake`; it delegates to the same read-only capture service used by the operator command and contains no fixture, window, quota, or betting business rules.
+The historical `bet.tasks.run_betting_cycle` module and all betting management commands have been removed. The supported application tasks are `football.capture.wake` and `football.pipeline.wake`. They delegate to reusable read-only/research services and contain no betting business rules. Manual capture remains available when pipeline automation owns the Beat schedule.
 
 ## API-Football Manual Workflow
 
@@ -140,6 +140,45 @@ docker compose logs --tail=80 celery-beat celery
 Then inspect `Football > Capture runs` and `Football > Capture work items` in Admin. Runs expose scheduler/planner/executor activity, quota blocking, missed/late windows, provider attempts, pagination, result failures, and sanitized async errors. Transport startup failures before Django can create a run, Beat/worker process death, and broker-level delivery loss remain log-only; general alerting and cross-pipeline health belong to a future observability ticket.
 
 Inkabet remains secondary, read-only, GET-only, and fail-soft in the existing manual daily workflow. FS-005 does not schedule it and does not apply API-Football quota semantics to it.
+
+## Prospective Multi-League Pipeline
+
+FS-006 composes capture, prospective prediction, canonical settlement, the normalized research capital comparator, cancellation hygiene, and a rolling JSON report without invoking management commands from Python services:
+
+```python
+from football.pipeline import run_pipeline
+
+result = run_pipeline(
+    at=aware_datetime,
+    dry_run=False,
+    max_provider_attempts=None,  # narrows the FS-005 configured bound
+)
+```
+
+The operator entry point requires an explicit offset-aware cutoff:
+
+```bash
+docker compose run --rm django-web \
+  python manage.py run_football_pipeline \
+  --at 2026-08-29T03:00:00-05:00 \
+  --dry-run
+```
+
+Dry-run calls the FS-005 DB-only planner but makes zero provider calls and writes no pipeline audit, prediction, Decision, capital, or cleanup rows. Executed cycles persist a read-only `PipelineRun` audit with phase states, linked run/experiment IDs, warnings/errors, and the `fs006-report-v1` report.
+
+Prospective identity is `competition + America/Lima match day + intended_window + target_at`; the database prevents duplicates for the same logical cutoff while allowing a later FS-005 window. Missing market evidence is explicit and does not suppress fitted non-market arms. Settlement accepts only a canonical finished status plus canonical HOME/DRAW/AWAY outcome and never rewrites the original Decision or selected price.
+
+The capital phase uses only the labeled research comparator `REPLAY / 100 units / FLAT_UNIT {"unit": "1"}` over the frozen Dixon-Coles/MODAL_ALL basis. It records `UNAVAILABLE` without creating a `CapitalExperiment` when outcomes, actionable Decisions, or timestamp-valid prices are absent. This is not a selected production model or capital policy.
+
+Cancellation hygiene triggers only on canonical `status_short == "CANC"`. It preserves Match, MatchSourceRef, CaptureRun, and CaptureWorkItem audit while transactionally removing invalid OddsSnapshot, OddsObservation, Prediction, Decision, and whole dependent CapitalExperiments. `PST`, `SUSP`, `FT`, and ambiguous statuses are not destructive triggers.
+
+Pipeline automation is off by default:
+
+```dotenv
+FOOTBALL_PIPELINE_ENABLED=False
+```
+
+When explicitly changed to `True`, restart the normal stack. Beat registers `football.pipeline.wake` and suppresses the standalone `football.capture.wake` schedule, preserving one automatic provider-calling path. The callable capture task and both manual commands remain available.
 
 ## Checks
 

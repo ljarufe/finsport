@@ -15,6 +15,7 @@ from .models import (
     OddsMarket,
     OddsObservation,
     OddsSnapshot,
+    PipelineRun,
     Prediction,
     PredictionExperiment,
     Season,
@@ -111,6 +112,23 @@ class CaptureWorkItemAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
     )
     raw_id_fields = ("run", "match", "market")
     date_hierarchy = "target_at"
+
+
+@admin.register(PipelineRun)
+class PipelineRunAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "cycle_identity",
+        "trigger",
+        "status",
+        "planning_at",
+        "local_day",
+        "started_at",
+        "completed_at",
+    )
+    list_filter = ("trigger", "status", "local_day")
+    search_fields = ("cycle_identity",)
+    date_hierarchy = "started_at"
 
 
 @admin.register(CapitalExperiment)

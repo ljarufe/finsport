@@ -184,6 +184,7 @@ def run_capital_experiment(
     source_model_code="",
     source_model_variant="",
     source_comparator_code="",
+    logical_identity="",
 ):
     if not isinstance(prediction_experiment, PredictionExperiment):
         prediction_experiment = PredictionExperiment.objects.get(
@@ -206,6 +207,7 @@ def run_capital_experiment(
         source_comparator_code=source_comparator_code,
         decision_policy_code=decision_policy_code,
         decision_policy_variant=decision_policy_variant,
+        logical_identity=logical_identity,
         engine_version=ENGINE_VERSION,
         mode=mode,
         initial_bankroll=initial_bankroll,

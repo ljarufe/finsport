@@ -126,7 +126,7 @@ def create_match(*, league_id, name, kickoff, status="NS"):
 
 @override_settings(**CAPTURE_SETTINGS)
 def test_dry_run_is_write_free_provider_free_and_multi_competition():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
     first, _ = create_match(
         league_id=39, name="First League", kickoff=now + timedelta(hours=1)
     )

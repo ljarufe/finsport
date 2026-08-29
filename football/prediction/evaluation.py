@@ -6,6 +6,7 @@ from django.utils import timezone
 from sklearn.metrics import log_loss
 
 from football.models import Decision, Match, Prediction, PredictionExperiment
+from football.sync import FINISHED_STATUSES
 
 from .constants import (
     CONFIDENCE_GRID,
@@ -47,6 +48,13 @@ def _outcome(match):
     if match.home_score < match.away_score:
         return Match.OUTCOME_AWAY
     return Match.OUTCOME_DRAW
+
+
+def _canonical_outcome(match):
+    valid = {value for value, _ in Match.OUTCOMES}
+    if match.status_short in FINISHED_STATUSES and match.outcome in valid:
+        return match.outcome
+    return None
 
 
 def _validation_loss(adapter_factory, config, training, validation):
@@ -130,8 +138,8 @@ def _persist_prediction(experiment, match, adapter, result, cutoff, *, variant="
         p_away=result.p_away,
         predicted_outcome=result.predicted_outcome,
         diagnostics=result.diagnostics,
-        evaluated_at=timezone.now() if match.status_short == "FT" else None,
-        actual_outcome=_outcome(match) if match.status_short == "FT" else None,
+        evaluated_at=timezone.now() if _canonical_outcome(match) else None,
+        actual_outcome=_canonical_outcome(match),
     )
     prediction.full_clean()
     prediction.save()
@@ -236,7 +244,7 @@ def summarize_experiment(experiment):
         prediction_summary[f"{model_code}:{variant}"] = summary
 
     policy_summary = {}
-    decisions = experiment.decisions.select_related("match").order_by(
+    decisions = experiment.decisions.select_related("match", "prediction").order_by(
         "policy_code",
         "policy_variant",
         "prediction__model_code",
@@ -254,9 +262,9 @@ def summarize_experiment(experiment):
                 "action": decision.action,
                 "reason": decision.reason,
                 "actual_outcome": (
-                    _outcome(decision.match)
-                    if decision.match.status_short == "FT"
-                    else None
+                    decision.prediction.actual_outcome
+                    if decision.prediction_id
+                    else _canonical_outcome(decision.match)
                 ),
                 "selected_price": decision.selected_price,
                 "expected_value": decision.expected_value,
@@ -265,6 +273,33 @@ def summarize_experiment(experiment):
     for key, rows in decision_groups.items():
         policy_summary[":".join(key)] = policy_metrics(rows)
     return {"predictions": prediction_summary, "policies": policy_summary}
+
+
+def refresh_experiment_summary(experiment, *, cancellation_hygiene=None):
+    summary = dict(experiment.summary or {})
+    summary.update(summarize_experiment(experiment))
+    match_ids = set(experiment.predictions.values_list("match_id", flat=True))
+    match_ids.update(experiment.decisions.values_list("match_id", flat=True))
+    summary.update(
+        {
+            "target_count": len(match_ids),
+            "prediction_count": experiment.predictions.count(),
+            "decision_count": experiment.decisions.count(),
+            "resolved_prediction_count": experiment.predictions.filter(
+                actual_outcome__isnull=False
+            ).count(),
+            "unresolved_prediction_count": experiment.predictions.filter(
+                actual_outcome__isnull=True
+            ).count(),
+        }
+    )
+    if cancellation_hygiene is not None:
+        history = list(summary.get("cancellation_hygiene", []))
+        history.append(cancellation_hygiene)
+        summary["cancellation_hygiene"] = history
+    experiment.summary = summary
+    experiment.save(update_fields=["summary", "modified"])
+    return summary
 
 
 @transaction.atomic
