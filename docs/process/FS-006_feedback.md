@@ -1,108 +1,597 @@
-# FS-006 — IMPLEMENTATION SNAPSHOT — MAY BECOME STALE
+# FS-006 — FINAL RECONCILED FEEDBACK
 
 **Ticket:** FS-006 — Automatizar pipeline prospectivo end-to-end multi-liga
-**Branch inspected:** `FS-006-prospective-pipeline`
-**Pass:** implementation
-**Snapshot date:** 2026-08-28
+**Branch:** `FS-006-prospective-pipeline`
+**Fecha de cierre:** 2026-08-28
+**Estado:** TECHNICALLY COMPLETE / READY TO MERGE
 **Runtime boundary:** local-only / demo-only / research-oriented
-**Financial side effects:** none; forbidden paths were not invoked
+**Financial side effects:** none
 
-## Implemented architecture
+## Outcome
 
-- `football.pipeline.run_pipeline` is the reusable orchestration boundary. It calls the FS-005 capture service, the reusable per-competition prediction service, canonical settlement, the FS-004 capital service through a normalized baseline wrapper, cancellation hygiene, and report construction. It does not shell out to management commands.
-- Every cycle exposes `CAPTURE`, `PREDICTION`, `RESULT_SETTLEMENT`, `CAPITAL`, and `REPORT` with explicit `SUCCESS`, `NO_WORK`, `SKIPPED`, `UNAVAILABLE`, `DEGRADED`, or `FAILED` state.
-- `PipelineRun` persists cycle UUID/time, phase results, CaptureRun IDs, PredictionExperiment IDs, CapitalExperiment IDs, warnings/errors, configuration snapshot, and the full `fs006-report-v1` JSON-compatible report.
-- The report is rolling over prospective experiments belonging to enabled domestic League competitions and includes current-cycle created/reused IDs separately.
-- Competition selection remains data-driven through `Competition.enabled`; no league/provider ID is hardcoded in orchestration.
+FS-006 implementó y validó un pipeline prospectivo reutilizable que compone:
 
-## Consolidated pre-UAT correction
+Capture
+→ Prediction
+→ Decision
+→ canonical settlement
+→ normalized research Capital
+→ cancellation hygiene
+→ persisted report
 
-- Pass-1 review found that the pipeline candidate contained exact `match_ids`, but `predict_competition_day` queried every eligible fixture in the same competition/day. A fixture whose own FS-005 `target_at` was later could therefore leak into an earlier logical experiment.
-- `predict_competition_day(..., match_ids=None)` now preserves the existing public all-day behavior when omitted and, when supplied, normalizes IDs, intersects them with the existing prospective eligibility query, and predicts only the resulting rows.
-- Pipeline candidates now normalize duplicated planner representation into sorted unique Match IDs and pass that frozen batch into the prediction service.
-- Each created PredictionExperiment config persists the actual eligible `target_match_ids`; no schema or migration change was needed.
-- The frozen prospective identity itself is unchanged.
+El pipeline quedó demostrado con datos reales de múltiples ligas, provider real, odds reales, scheduler Celery Beat y estados negativos/degradados explícitos.
 
-## Frozen identities and semantics
+Se preserva el invariant:
 
-- Prospective identity: `competition + America/Lima match day + FS-005 intended_window + target_at`. It is persisted on `PredictionExperiment` and protected by a conditional database unique constraint for `PROSPECTIVE` rows. Its content is restricted to the sorted unique Match batch belonging to that exact candidate identity.
-- The prediction cutoff is the first actual aware cycle cutoff that processes that logical identity. Repeated wakes reuse the frozen experiment; later odds never rewrite its Predictions or Decisions. A later FS-005 target/window has a distinct identity.
-- Missing market evidence records the market arm as unavailable while fitted non-market arms continue to persist Predictions and Decisions.
-- Settlement updates only previously unresolved prospective Predictions whose Match has a status in canonical `FINISHED_STATUSES` and a canonical `Match.outcome` in HOME/DRAW/AWAY. It does not derive settlement from scores and does not modify Decision action/reason/price/observation.
-- Capital identity hashes source prospective experiment, frozen input hash, selector, engine, and normalized configuration. Equivalent produced runs are reused; new pipeline-owned runs also have a database-unique identity.
-- The capital measurement basis is explicitly labeled `DIXON_COLES / MODAL_ALL` with `REPLAY`, initial bankroll `100`, and one `FLAT_UNIT {"unit": "1"}` arm. It is a normalized research measurement basis, not a winning model or production policy selection.
+Prediction != Decision != CapitalPolicy != real bet
 
-## CANC lifecycle
+No se añadió ni ejecutó ninguna capacidad de apuesta real.
 
-- `cleanup_cancelled_matches` is transactional, exact-status guarded, dry-runnable, and idempotent.
-- Its only destructive trigger is canonical `Match.status_short == "CANC"`.
-- It preserves Match, MatchSourceRef, CaptureRun, and CaptureWorkItem audit.
-- It deletes OddsSnapshot, OddsObservation, Prediction, and Decision derivatives for affected Matches.
-- Before deleting Decisions it scans every `CapitalExperiment.input_manifest.decision_ids`, deletes each whole affected CapitalExperiment and its dependent policy/ledger rows, and therefore also catches stochastic experiments without ledger rows.
-- It refreshes affected PredictionExperiment prediction/policy summaries and records bounded hygiene metadata there and in the pipeline report.
-- PST, SUSP, FT, and ambiguous statuses are covered as non-destructive cases.
+## Arquitectura implementada
 
-## Migration, interfaces, and settings
+`football.pipeline.run_pipeline` es el boundary reusable principal.
 
-- Migration file: `football/migrations/0005_pipeline_run_and_prospective_identities.py`.
-- New model: `PipelineRun`.
-- New PredictionExperiment fields: `logical_identity`, `intended_window`, `target_at` plus prospective uniqueness constraint.
-- New CapitalExperiment field: `logical_identity` plus conditional uniqueness constraint.
-- New operator command: `run_football_pipeline --at <aware ISO-8601> [--dry-run] [--max-provider-attempts N]`.
-- New Celery task: `football.pipeline.wake`.
-- New setting: `FOOTBALL_PIPELINE_ENABLED`, default `False` in code and `.env.dist`.
-- Scheduler invariant: pipeline enabled registers `football-pipeline-wake`; the standalone capture Beat entry is registered only by the `elif` branch. Manual `run_football_capture` and callable `football.capture.wake` remain present.
-- The read-only Admin inventory now includes PipelineRun.
-- `docs/operations/local_runtime.md` documents the command, service, default-off lifecycle, single-owner rule, baseline label, and CANC boundary.
+El pipeline delega a servicios existentes o especializados y no shell-out a management commands desde Python.
 
-## Automated evidence actually run
+Las fases son:
 
-- Focused FS-006 suite: `16 passed`, including real explicit-target filtering for same-day earlier/later/shared logical targets — `tmp/FS-006_focused_evidence.txt`.
-- Directly affected prediction regression: `25 passed`, with six existing dependency deprecation warnings — `tmp/FS-006_prediction_regression_evidence.txt`.
-- General repository gate: `make check` PASS — Black PASS, Ruff PASS, Django system check PASS, full suite `214 passed`, six dependency deprecation warnings — `tmp/FS-006_make_check_evidence.txt`.
-- Migration drift: `No changes detected` — `tmp/FS-006_migration_evidence.txt`.
-- Scheduler enabled wiring: only `football-pipeline-wake` scheduled while both callable tasks are registered — `tmp/FS-006_scheduler_evidence.txt`.
-- Scheduler normal configuration: pipeline OFF, capture OFF, empty Beat schedule — `tmp/FS-006_scheduler_default_evidence.txt`.
+- CAPTURE
+- PREDICTION
+- RESULT_SETTLEMENT
+- CAPITAL
+- REPORT
+
+Cada fase expone estados explícitos como:
+
+SUCCESS
+NO_WORK
+SKIPPED
+UNAVAILABLE
+DEGRADED
+FAILED
+
+`PipelineRun` persiste:
+
+- cycle UUID;
+- cutoff/planning time;
+- estados de fases;
+- CaptureRun IDs;
+- PredictionExperiment IDs;
+- CapitalExperiment IDs;
+- warnings/errors;
+- config snapshot;
+- `fs006-report-v1`.
+
+## Scheduler
+
+Se añadió:
+
+`FOOTBALL_PIPELINE_ENABLED=False`
+
+por defecto.
+
+Cuando pipeline automation está habilitado:
+
+`football.pipeline.wake`
+
+es el único owner automático que puede entrar al capture path.
+
+Si simultáneamente:
+
+FOOTBALL_PIPELINE_ENABLED=True
+FOOTBALL_CAPTURE_ENABLED=True
+
+Beat registra únicamente:
+
+`football-pipeline-wake`
+
+y no registra el standalone:
+
+`football-capture-wake`
+
+El comando manual `run_football_capture` y la task callable `football.capture.wake` permanecen disponibles.
+
+## Prospective Prediction identity
+
+La identidad persistente final es:
+
+competition
++ America/Lima local day
++ FS-005 intended_window
++ target_at
+
+La DB protege la unicidad de esa identidad para PredictionExperiment prospectivos.
+
+Además, cada experimento congela en config:
+
+`target_match_ids`
+
+con el lote exacto de fixtures elegibles correspondiente a esa identidad temporal.
+
+### Pre-UAT correction
+
+El review de Pass 1 detectó que el pipeline calculaba correctamente el lote de `match_ids`, pero `predict_competition_day()` volvía a consultar todos los fixtures elegibles de la competición/día.
+
+Eso permitía que un fixture cuya propia ventana FS-005 todavía no había llegado apareciera prematuramente en el experimento de otro fixture.
+
+La corrección final:
+
+- añadió `match_ids=None` al boundary reusable;
+- preservó el comportamiento histórico cuando no se suministran IDs;
+- normalizó sorted/unique IDs;
+- intersectó el lote explícito con la elegibilidad prospectiva real;
+- pasó el lote exacto desde el pipeline;
+- congeló `target_match_ids`;
+- añadió una regresión con same competition/day, shared target y later target.
+
+La identidad temporal original no cambió.
+
+## Settlement
+
+El settlement prospectivo es DB-only y canónico.
+
+Sólo resuelve Predictions cuando:
+
+- Match.status_short pertenece a FINISHED_STATUSES;
+- Match.outcome es HOME/DRAW/AWAY.
+
+Actualiza:
+
+- Prediction.actual_outcome;
+- Prediction.evaluated_at;
+- summary del PredictionExperiment.
+
+No reescribe:
+
+- Decision.action;
+- Decision.reason;
+- Decision.selected_price;
+- Decision.selected_odds_observation.
+
+La segunda ejecución es idempotente y devuelve NO_WORK cuando no queda nada nuevo por resolver.
+
+## Capital baseline
+
+FS-006 utiliza exclusivamente el comparator de investigación normalizado:
+
+mode = REPLAY
+initial_bankroll = 100
+policy = FLAT_UNIT
+unit = 1
+
+Basis:
+
+DIXON_COLES / MODAL_ALL
+
+Es una base de medición de research, no una selección de modelo/policy productiva.
+
+Cuando la evidencia es insuficiente:
+
+UNAVAILABLE
+
+se conserva como resultado válido y no se fabrica un CapitalExperiment.
+
+Las ejecuciones equivalentes son idempotentes mediante identidad derivada del experimento fuente, input hash y configuración congelada.
+
+## Cancellation hygiene
+
+El único trigger destructivo es exactamente:
+
+Match.status_short == "CANC"
+
+Se preservan:
+
+- Match;
+- MatchSourceRef;
+- canonical CANC state;
+- CaptureRun;
+- CaptureWorkItem.
+
+Se eliminan los derivados inválidos:
+
+- OddsSnapshot;
+- OddsObservation;
+- Prediction;
+- Decision.
+
+Antes de eliminar Decisions se inspeccionan todos los:
+
+CapitalExperiment.input_manifest.decision_ids
+
+y se invalida/elimina el CapitalExperiment completo cuando depende de una Decision afectada.
+
+Esto incluye experimentos estocásticos sin ledger.
+
+Los summaries de PredictionExperiment afectados se recomputan.
+
+PST, SUSP, FT y estados ambiguos no son triggers destructivos.
+
+La limpieza es transaccional, dry-runnable e idempotente.
+
+## Multi-league operation
+
+El pipeline no hardcodea ligas y trabaja desde:
+
+Competition.enabled
+
+Durante UAT se amplió deliberadamente el pilot operacional a:
+
+- Premier League / API-Football 39
+- Bundesliga / API-Football 78
+- Serie A / API-Football 135
+- La Liga / API-Football 140
+
+Las ligas son configuración/datos operacionales, no constantes del pipeline.
+
+API-Football permanece como autoridad canónica.
+
+Inkabet permanece como fuente secundaria read-only de market evidence.
+
+## Automated evidence
+
+Antes de UAT:
+
+- FS-006 focused suite: 16 passed.
+- Prediction regression directamente afectada: 25 passed.
+- `make check`: PASS.
+- Repository suite pre-review: 214 passed.
+- Black: PASS.
+- Ruff: PASS.
+- Django system check: PASS.
+- Migration drift: `No changes detected`.
 - `git diff --check`: PASS.
-- No live provider call was made. All executed pipeline/capture integration in tests used dry-run or controlled test doubles.
+- Acceptance ledger A01–A47: 47 PASS / 0 PENDING / 0 N/A.
 
-## Acceptance state
+Después de los findings tardíos, los tests focalizados afectados y `make check` completo volvieron a pasar.
 
-- A01–A47 implementation acceptance ledger: `47 PASS / 0 PENDING / 0 N/A` in `tmp/FS-006_acceptance_ledger.md`.
-- Automated multi-competition behavior uses two enabled domestic League fixtures.
-- Automated cancellation UAT uses isolated Django test data only.
-- No manual result was invented and no persistent local data was destructively modified.
+Se mantienen seis warnings existentes de compatibilidad Penaltyblog/NumPy.
 
-## Manual UAT not executed in this pass
+## UAT real
 
-- Bounded real API-Football capture wiring: PENDING, execution-chat owned. Provider calls in this implementation pass were explicitly forbidden.
-- Real multi-league UAT: UNAVAILABLE in the preflight snapshot because only La Liga had enabled/sufficient local history/upcoming data. The automated two-competition proof passes.
-- Persistent local migration application and subsequent operator dry-run: PENDING, maintainer/UAT owned.
-- Full Beat process restart/lifecycle observation: PENDING, execution-chat owned. Settings/task registration and single-owner scheduling are automated and evidenced.
+### A — persistent migration + dry-run
 
-## Warnings and deferred validation
+Se aplicó `football.0005_pipeline_run_and_prospective_identities`.
 
-- The repository emitted six Penaltyblog/NumPy deprecation warnings during the green suite. They are unrelated to FS-006 behavior and were not absorbed.
-- A real provider run can change canonical Match state and can trigger CANC hygiene. It must use the ticket's bounded UAT fixtures/budget and must not sacrifice valuable local prospective observations.
-- The normalized capital baseline requires a fully resolved, actionable, timestamp-valid selected-price stream. `UNAVAILABLE` is expected before honest settlement/price coverage and creates no pipeline baseline CapitalExperiment.
+Dry-run real:
+
+- provider attempts = 0;
+- capture state = SKIPPED;
+- zero pipeline/domain writes;
+- planner encontró trabajo debido de forma read-only.
+
+PASS.
+
+### B — bounded provider execution
+
+Se ejecutó un RESULT_REFRESH real con API-Football.
+
+Resultado:
+
+- provider attempts = 1;
+- provider pages = 1;
+- retries = 0;
+- quota 96 → 95;
+- capture = SUCCESS;
+- settlement = SUCCESS;
+- capital unavailable cuando correspondía.
+
+PASS.
+
+### Bootstrap multiliga
+
+Se refrescó catálogo y se habilitaron las competiciones del pilot.
+
+`sync_football_day --with-odds` produjo datos reales multi-liga y market evidence:
+
+- API-Football;
+- Inkabet fail-soft/read-only.
+
+No se realizó ninguna acción financiera.
+
+### C — real multi-league prospective pipeline
+
+PipelineRun real `id=2`:
+
+- pipeline status = DEGRADED;
+- capture = SUCCESS;
+- prediction = SUCCESS;
+- settlement = SUCCESS;
+- capital = DEGRADED;
+- cuatro PredictionExperiments creados;
+- tres competiciones reales representadas.
+
+Competitions con experimentos:
+
+- Premier League;
+- Bundesliga;
+- La Liga.
+
+La degradación fue honesta: capital produjo resultados para algunos streams y dejó otros UNAVAILABLE.
+
+Se produjeron dos normalized capital baselines reales.
+
+PASS.
+
+### D — controlled settlement + capital
+
+Test DB aislada:
+
+- unresolved → NO_WORK;
+- canonical final → settlement;
+- Decision frozen;
+- exact 100u / FLAT_UNIT 1u;
+- idempotency;
+- unavailable creates no invalid experiment.
+
+3 focused cases passed.
+
+PASS.
+
+### E — synthetic CANC lifecycle
+
+Test DB aislada:
+
+- dry-run;
+- execute;
+- Match/ref/capture audit preserved;
+- odds/prediction/decision derivatives removed;
+- deterministic capital invalidated;
+- stochastic no-ledger dependency invalidated;
+- summary recomputed;
+- rerun NO_WORK;
+- PST/FT/SUSP/UNKNOWN untouched.
+
+5 cases passed.
+
+PASS.
+
+### F — scheduler lifecycle
+
+Se verificó:
+
+default:
+FOOTBALL_PIPELINE_ENABLED=False
+CELERY_BEAT_SCHEDULE={}
+
+enabled with both automation flags:
+only `football-pipeline-wake`
+
+Se arrancó Celery Beat realmente dos veces mediante procesos UAT desechables.
+
+Ambos boots pasaron.
+
+La configuración normal final volvió a:
+
+FOOTBALL_PIPELINE_ENABLED=False
+CELERY_BEAT_SCHEDULE={}
+
+PASS.
+
+### G — persisted report
+
+`PipelineRun.report` persistió correctamente:
+
+schema_version = fs006-report-v1
+
+Incluye:
+
+- phases;
+- competitions;
+- sample sizes;
+- capture/provider evidence;
+- prediction experiments;
+- settlement;
+- capital;
+- cancellation summary;
+- versions/config;
+- warnings.
+
+No se detectaron secret-like keys.
+
+PASS.
+
+## Git / hook findings
+
+### UTC quota test flake
+
+Durante el pre-push hook apareció un failure en:
+
+`test_current_utc_header_and_later_attempts_form_conservative_quota_state`
+
+La implementación productiva era correcta.
+
+La fixture usaba:
+
+`timezone.now() - 10 minutes`
+
+y el push se ejecutó pocos minutos después de las 00:00 UTC.
+
+La supuesta observación "current UTC epoch" quedó accidentalmente en el día UTC anterior, por lo que el sistema correctamente eligió `BOUNDED_BOOTSTRAP`.
+
+El test fue corregido para usar un instante aware determinista.
+
+Aprendizaje:
+
+tests cuyo contrato depende de day/epoch/reset boundaries no deben depender del wall clock real.
+
+Usar:
+
+- aware fixed datetime para escenarios simples;
+- time freezing cuando múltiples capas consultan el reloj o se necesita avanzar el tiempo.
+
+### PR review finding
+
+GitHub/Codex review encontró un finding P2 válido en `_phase_status`.
+
+La implementación trataba:
+
+FAILED + NO_WORK
+
+como recuperación parcial y clasificaba el pipeline `DEGRADED`.
+
+Semántica corregida:
+
+FAILED + only NO_WORK
+→ FAILED
+
+FAILED + actual SUCCESS
+→ DEGRADED
+
+Se añadió regresión focalizada y el gate final volvió a pasar.
+
+## Runtime / environment finding
+
+Al arrancar el stack después de la implementación, el worker Celery existente falló durante autodiscovery:
+
+`ModuleNotFoundError: No module named 'numpy'`
+
+El nuevo import graph:
+
+football.tasks
+→ football.pipeline
+→ football.capital
+→ metrics
+→ numpy
+
+hizo visible que la imagen local persistente estaba stale.
+
+`make build` seguido de `make up` resolvió el runtime.
+
+Los boots posteriores de Celery Beat pasaron.
+
+Aprendizaje durable para UAT/handoff:
+
+cuando el delta cambia dependencies, Docker image contents, schema o el import graph de servicios persistentes, la preparación operacional necesaria debe indicarse explícitamente.
+
+Patrón esperado cuando aplique:
+
+make build
+→ migrate
+→ make up
+→ smoke de procesos persistentes
+
+No asumir que un contenedor previamente construido representa el checkout actual.
+
+## Reconciliation observation
+
+Después de incorporar Inkabet aparecieron cuatro CompetitionSourceRef PENDING.
+
+No se habían creado nuevas Competition desde Inkabet:
+
+- `competition` era null;
+- sólo existía `proposed_competition`.
+
+Tres referencias revisadas por el maintainer fueron reconciliadas manualmente.
+
+Una propuesta incorrecta `Serie C → Serie A` fue eliminada.
+
+No se cambia FS-006 para este caso.
 
 ## New Work Discovered
 
-### NWD-1 — Real multi-league local evidence is not yet available
+### NWD-1 — durable maintainer-ignore state
 
-- Evidence: `tmp/FS-006_preflight_inventory.txt` and `tmp/FS-006_multileague_candidates.txt` show one enabled/supported domestic League candidate with sufficient local evidence (La Liga).
-- Impact: real two-league UAT cannot be claimed in this implementation pass.
-- Recommendation: execution chat should bootstrap/enable the already frozen pilot leagues only under a separate bounded provider-authorized UAT, then rerun the pipeline report inspection.
+El reconciliador secundario necesita eventualmente un estado durable equivalente a:
 
-### NWD-2 — Dependency deprecation warnings
+IGNORED_BY_MAINTAINER
 
-- Evidence: the green focused regression and `make check` runs report six warnings from Penaltyblog code assigning NumPy array shapes.
-- Impact: no current failure; a future NumPy/Penaltyblog upgrade could turn this compatibility warning into breakage.
-- Recommendation: track dependency compatibility separately; do not expand FS-006 into dependency maintenance.
+para una entidad externa ya revisada y deliberadamente fuera de scope.
 
-## Explicit exclusions confirmed
+Objetivo:
 
-- No bookmaker authentication, cookies, browser, or Selenium path was added or executed.
-- No real betting, financial external write, CapitalPolicy promotion, winner selection, dashboard, generic provider abstraction, generic observability platform, or retention framework was added.
-- The maintainer-owned `docs/research/FS-006_cancelled_match_lifecycle_research.md` was read as reference and not modified.
-- No commit, push, PR, merge, Planka action, destructive Git command, PostgreSQL volume operation, Redis purge, or live provider request occurred.
+- conservar external identity/evidence;
+- no convertirla de nuevo en PENDING;
+- no generar reconciliation noise repetidamente;
+- permitir una futura reapertura explícita.
+
+No crear este ticket automáticamente.
+
+### NWD-2 — shared quota state/provenance
+
+Durante bootstrap/UAT se observaron snapshots de cuota inconsistentes entre manual sync y capture planning.
+
+Ejemplos observados incluyeron un `daily_remaining` reportado por sync diferente del quota snapshot leído posteriormente por capture, hasta recibir un nuevo header real del proveedor.
+
+No se produjo sobreconsumo y el provider response posterior volvió a dar evidencia real de cuota.
+
+Investigar en trabajo futuro:
+
+- provenance del quota snapshot;
+- manual sync entry points;
+- capture entry point;
+- epoch/reset semantics;
+- necesidad de una fuente compartida de quota state.
+
+No asumir todavía una causa concreta.
+
+### NWD-3 — Penaltyblog / NumPy compatibility
+
+La suite verde mantiene seis DeprecationWarnings procedentes de Penaltyblog bajo NumPy 2.5.
+
+Actualmente no son failures.
+
+Investigar separadamente:
+
+- upgrade compatible de Penaltyblog;
+- upstream fix;
+- dependency pin sólo si fuera necesario.
+
+No silenciar warnings como solución.
+
+## Safety / exclusions
+
+Confirmado durante implementación y UAT:
+
+- no real betting;
+- no bookmaker authentication;
+- no cookies de bookmaker;
+- no Selenium betting;
+- no external financial write;
+- no CapitalPolicy promotion;
+- no winner selection;
+- no generic observability platform;
+- no generic provider framework;
+- no destructive PostgreSQL reset;
+- no Redis purge.
+
+El pipeline permanece research-oriented.
+
+## Source reconciliation required after merge
+
+El chat principal debe proyectar selectivamente los hechos durables.
+
+F003:
+- PipelineRun;
+- pipeline orchestration boundary;
+- prospective identity;
+- settlement/capital/hygiene boundaries;
+- single automatic scheduler ownership.
+
+F004:
+- operator pipeline command;
+- `FOOTBALL_PIPELINE_ENABLED`;
+- build/migrate/start/smoke requirement when runtime image/import graph/schema changes;
+- multi-league operational bootstrap boundary;
+- quota-state observation as open operational work.
+
+F006:
+- FS-006 → COMPLETED;
+- real multi-league pipeline demonstrated;
+- register/defer NWD maintainer-ignore;
+- register/defer shared quota state;
+- retain dependency compatibility work.
+
+F009:
+- consider promoting explicit runtime-preparation instructions after dependency/import/schema deltas;
+- promote deterministic clock policy for tests involving temporal reset boundaries if considered generally durable;
+- preserve low-noise handling of pre-commit staged/unstaged auto-fixes.
+
+No product/domain source change is required solely from FS-006.
+
+## Final state
+
+FS-006 satisfies its approved functional and safety outcome.
+
+All material implementation, UAT, hook and review findings were resolved or explicitly deferred as New Work Discovered.
+
+The ticket is ready for squash merge.
