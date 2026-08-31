@@ -1,7 +1,7 @@
-# FS-007 — FINAL-STATE FEEDBACK BEFORE EXECUTION-CHAT RE-UAT
+# FS-007 — FINAL IMPLEMENTATION / UAT FEEDBACK
 
-> **IMPLEMENTATION + POST-UAT CORRECTION COMPLETE**
-> **EXECUTION-CHAT RE-UAT AND FINAL SHIPPING DECISION PENDING**
+> **IMPLEMENTATION + POST-UAT CORRECTION + EXECUTION-CHAT RE-UAT COMPLETE**
+> **PR REVIEW CORRECTION INCLUDED; FINAL REVIEW / MERGE STILL PENDING**
 
 Este documento reconcilia acumulativamente el estado de FS-007 después de la
 implementación, la UAT original y la corrección post-UAT. No declara el ticket
@@ -11,21 +11,24 @@ merged ni completado, y no presume GitHub CI o review.
 
 ```text
 implementation: complete
-post-UAT correction: complete
-technical gates: green
+post-UAT causal correction: complete
 original UAT B–J: complete
-UAT A historical degraded finding: documented and corrected
-UAT A post-fix real healthy pipeline: demonstrated
-execution-chat re-UAT: pending
-final shipping decision: pending
-GitHub CI/review: not yet claimed
+execution-chat re-UAT: complete
+technical acceptance: 58/58 PASS
+blocking pending: 0
+GitHub PR review: one P2 Alloy rotated-spool finding corrected
+final PR re-review / merge: pending
 ```
 
-La ejecución histórica de UAT A reveló una pérdida causal real. La corrección
-resultante cambió materialmente los boundaries de providers, captura, pipeline,
-tasks y sincronización. Una segunda ejecución real produjo un pipeline saludable,
-pero todavía corresponde al execution chat repetir/reconciliar UAT antes de la
-decisión final de shipping.
+La UAT histórica A reveló una pérdida causal real en el boundary de
+API-Football. La corrección post-UAT amplió de forma material los diagnostics de
+providers, captura, pipeline, tasks y sincronización. La re-UAT posterior
+demostró un pipeline real saludable, adquisición real de odds, Inkabet read-only
+y propagación de un fallo de transporte controlado hasta Loki.
+
+Durante el review de GitHub apareció además un finding P2 localizado en la
+discovery de spools rotados de Alloy. La corrección forma parte del estado actual
+del ticket y se documenta en la sección dedicada al review.
 
 ## 2. Implementación acumulativa
 
@@ -54,11 +57,10 @@ Finsport structured JSONL
   20 MiB para cuatro identidades.
 - El envelope de planificación total es aproximadamente 2 GiB. No es una cuota
   física del filesystem.
-- El smoke inicial/estabilizado de Grafana, Loki y Alloy midió aproximadamente
-  354.4 MiB RSS combinado. Un snapshot posterior durante UAT midió
-  aproximadamente 388.62 MiB RSS de observabilidad. Ambas mediciones permanecen
-  por debajo del criterio de aceptación de 2 GiB; ese envelope continúa siendo
-  una referencia de planificación, no una cuota física del filesystem.
+- El smoke inicial estabilizado de Grafana, Loki y Alloy midió aproximadamente
+  354.4 MiB RSS combinado. Una captura UAT posterior midió aproximadamente
+  388.62 MiB para observabilidad. Ambas mediciones quedan muy por debajo del
+  envelope de aceptación de 2 GiB; la segunda es la observación más reciente.
 - No se añadieron Prometheus, OpenTelemetry, Tempo, Sentry, Flower ni APM.
 
 La interfaz operacional host-only quedó en el `Makefile`; `.env.dist` documenta
@@ -357,6 +359,47 @@ attempts
 El canary, payload completo y secretos no aparecieron; PipelineRun/CaptureRun IDs
 fueron correctos y hubo un solo traceback causal.
 
+### Re-UAT final del execution chat
+
+La re-UAT independiente posterior a la correction confirmó:
+
+```text
+PipelineRun 16 → SUCCESS
+CaptureRun 39 → SUCCESS
+CaptureWorkItem 370 → SUCCESS
+provider attempts/pages/retries → 1 / 1 / 0
+OddsObservations creadas → 13
+Loki PIPELINE_SUCCEEDED para pipeline_run_id=16 → exactamente 1
+```
+
+Inkabet volvió a ejercitarse de forma real y read-only con dos GET: categories y
+MW3W. Osasuna–Getafe fue localizado y el mercado MW3W volvió válido. No hubo
+login, auth de bookmaker, apuesta ni mutación financiera.
+
+También se ejercitó un fallo de transporte determinista redirigiendo únicamente
+el proceso UAT de API-Football a un endpoint local cerrado. El resultado fue:
+
+```text
+APIFootballTransientError
+failure_kind=provider_transport
+endpoint_family=fixtures
+transport_category=unreachable
+SOURCE_EVENT_COUNT=1
+LOKI_EVENT_COUNT=1
+same event_id in source and Loki
+```
+
+La primera consulta inmediata a Loki devolvió cero porque Alloy ingiere de forma
+asíncrona. Un recheck con espera acotada encontró el mismo evento una vez en el
+source JSONL y una vez en Loki. Se clasifica como **HARNESS RACE / EVENTUAL
+CONSISTENCY**, no como defecto de producto.
+
+Un probe adicional que anteriormente reproducía una denegación de plan ya no la
+reprodujo: API-Football respondió normalmente y no se emitió
+`PROVIDER_OPERATION_FAILED`, que fue el comportamiento correcto. Las failure
+classes que no dependen de una coincidencia externa quedan cubiertas por tests y
+controlled UAT determinista.
+
 ## 12. Disposición de EVENT_COUNT=0
 
 ```text
@@ -387,9 +430,13 @@ git diff --check → PASS
 La suite completa conserva seis warnings conocidos de Penaltyblog/NumPy. No se
 demostró impacto funcional y quedan fuera del alcance de FS-007.
 
-Alloy y Compose no se modificaron durante la corrección post-UAT, por lo que no
-se declara una revalidación nueva de ellos en esa pasada. Sus validaciones y UAT
-anteriores siguen siendo la evidencia aplicable al delta sin cambios.
+La corrección causal post-UAT original no modificó Alloy ni Compose. La re-UAT
+posterior sí confirmó nuevamente el transporte JSONL → Alloy → Loki para el
+pipeline saludable y para `provider_transport`. Posteriormente, el review de
+GitHub introdujo un delta localizado únicamente en la discovery de archivos de
+Alloy para incluir backups rotados; ese delta exige validación nativa de Alloy y
+un UAT específico de recuperación de rotated spool antes del push/merge. Compose
+no cambió por ese finding.
 
 ## 14. Seguridad y defaults
 
@@ -415,35 +462,132 @@ PostgreSQL ni volúmenes.
   alerting mientras provisioning y dashboard funcionaron. **Impacto:** no se
   demostró impacto funcional. **Recomendación:** investigar sólo si reaparece con
   efecto observable; no ampliar FS-007 preventivamente.
+- **Candidato futuro de refactor:** propagación de contexto causal mediante un
+  `causal_trail` estructurado y acotado. El estado actual transporta una causa
+  primaria rica desde provider → capture → pipeline → evento terminal y conserva
+  un único traceback operacional. Sin embargo, si un ciclo contiene varias
+  causas independientes, el terminal prioriza la primera causa completa y las
+  restantes pueden quedar representadas sólo por conteo/audit de dominio. Un
+  futuro refactor podría conservar `primary_cause` + una lista compacta de 3–5
+  causas secundarias (`component`, `operation`, `failure_kind`, `provider`,
+  `exception_type`, `safe_summary`) sin duplicar tracebacks ni introducir
+  OpenTelemetry salvo que tracing distribuido se vuelva un requisito demostrado.
 
-No se inventan tickets ni prioridades para estos hallazgos.
+No se inventan tickets ni prioridades para estos hallazgos. El candidato de
+`causal_trail` se entrega al roadmap/handoff para evaluación futura.
 
 ## 16. Aprendizajes del proceso
 
-1. El estado de falla del provider por sí solo es insuficiente; los datos causales
-   deben originarse en el provider boundary.
-2. Las capas superiores no pueden reconstruir información descartada abajo.
-3. La UAT real encontró una rama de pérdida diagnóstica que los tests sintéticos
-   no habían cubierto.
-4. La calidad del Incident Packet debe probarse con fallas reales de provider,
-   además de fallas controladas.
-5. Las suposiciones sobre paths host son inseguras cuando los logs viven en un
-   named Docker volume.
-6. La salida UAT larga debe redirigirse a `tmp/` desde el comienzo.
-7. Una corrección post-UAT material obliga a regenerar el diff-review y
-   reconciliar feedback antes de shipping; no es trabajo ceremonial.
+1. El estado terminal del provider no basta: los datos causales deben originarse
+   en el boundary más bajo que todavía conoce la causa concreta.
+2. Las capas superiores enriquecen contexto; no deben reconstruir información
+   que una capa inferior descartó.
+3. Una misma causa debe tener un único owner operacional y, cuando corresponda,
+   un solo traceback. Evitar provider → capture → pipeline → task duplicando la
+   misma excepción.
+4. La UAT real puede invalidar confianza sintética: FS-007 encontró una pérdida
+   causal que los tests iniciales no habían detectado.
+5. La calidad del Incident Packet debe probarse tanto con happy paths reales como
+   con failures controladas representativas.
+6. Las failures controladas deben ser deterministas cuando sea posible; no se
+   debe depender de que un provider externo reproduzca casualmente un error
+   histórico.
+7. La cuota real de providers es un recurso de diagnóstico cuando el maintainer
+   autoriza su uso. Debe usarse de forma acotada y útil, no minimizarse por
+   ceremonia ni gastarse sin objetivo.
+8. Cualquier comando con salida potencialmente larga debe redirigir a `tmp/`
+   desde el comienzo. No se repite una operación cara sólo para recuperar output
+   perdido.
+9. Los artefactos `tmp/**` son efímeros. No se reconstruyen ni mantienen mediante
+   pasadas exclusivas de Codex, y nunca justifican una pasada de código adicional.
+10. Toda pasada real de Codex que cambie código debe entregar en esa misma pasada
+    el diff actual, el estado UAT correspondiente y el acceptance ledger si éste
+    sigue siendo útil durante desarrollo. Pass 1 crea el ledger para tickets
+    materiales; las pasadas posteriores lo reconcilian mientras exista.
+11. El presupuesto normal es de hasta cuatro pasadas de código Codex:
+    implementation, correction pre-UAT, correction post-UAT y correction PR/CI.
+    Una pasada puramente documental está prohibida.
+12. La documentación versionable que pertenece a una implementación/correction se
+    genera en esa misma pasada. El feedback final versionado se entrega al final
+    desde execution chat, sin gastar Codex únicamente para documentación.
+13. Una corrección material invalida sólo las UAT/gates de las superficies que
+    cambió. Debe hacerse delta-UAT; no repetir toda la ceremonia.
+14. Antes de UAT deben declararse explícitamente servicios, perfiles, credenciales,
+    env vars, estado persistente y cualquier otra precondición.
+15. Hay que entender la topología Docker real antes de declarar evidencia ausente:
+    en FS-007 el spool vive en un named volume, no en `./logs/observability` del
+    host.
+16. JSONL → Alloy → Loki es eventualmente consistente. Un query inmediatamente
+    posterior a la emisión puede devolver cero; el harness correcto espera/pollinea
+    con timeout acotado antes de clasificar una pérdida de ingestión.
+17. Debe distinguirse siempre **Product Finding** de **Harness Finding**. FS-007
+    tuvo ambos: pérdida causal y regex Alloy fueron producto; path host incorrecto
+    y query demasiado temprano fueron harness.
+18. Mediciones sucesivas no se reemplazan silenciosamente: registrar smoke inicial
+    y UAT posterior, usando la medición más reciente para claims de estado actual.
+19. Una corrección post-UAT material obliga a que el diff y el feedback versionable
+    representen el comportamiento nuevo antes del shipping; esto no implica crear
+    una pasada documental separada.
+20. El cierre mantiene la secuencia: UAT → gates invalidados → stage explícito →
+    commit → push → PR/CI/review → correction localizada si aparece → feedback
+    final/handoff → merge → sync/cleanup → Planka Done.
 
-## 17. Disposición actual
+## 17. Finding de GitHub review — rotated spools no descubiertos por Alloy
+
+GitHub review detectó un finding P2 válido en `config/alloy/config.alloy`. La
+discovery original sólo incluía:
 
 ```text
-implementation + post-UAT correction complete
-technical gates green
-original UAT B–J complete
-historical UAT A degraded finding documented
-post-fix real UAT A healthy evidence available
-execution-chat re-UAT still pending
-final shipping decision still pending
+/app/logs/observability/*.jsonl
 ```
 
-No se realizó commit, push, PR, merge ni acción Planka. No se declara todavía
-GitHub CI/review.
+pero la rotación de Finsport renombra backups retenidos como:
+
+```text
+<service>.jsonl.1
+<service>.jsonl.2
+<service>.jsonl.3
+<service>.jsonl.4
+```
+
+Si Alloy permanecía detenido o suficientemente rezagado mientras el spool
+rotaba, al reiniciar descubría el archivo corriente pero no los backups que
+contenían backlog aún retenido. `tail_from_end=false` sólo podía ayudar para
+archivos que Alloy efectivamente descubriera.
+
+La corrección amplía la discovery para incluir current + backups y excluye los
+lock files:
+
+```alloy
+local.file_match "finsport_events" {
+  path_targets = [{
+    "__path__"         = "/app/logs/observability/*.jsonl*"
+    "__path_exclude__" = "/app/logs/observability/*.jsonl.lock"
+  }]
+  sync_period = "5s"
+}
+```
+
+El cambio mantiene la política de rotación existente y no añade Docker socket,
+nuevo storage ni cambios de runtime Python. El shipping gate específico de este
+delta es validar la config de Alloy y demostrar recuperación de un evento que
+existe únicamente en un backup rotado durante un periodo con Alloy detenido.
+
+Este finding debe preservarse como aprendizaje: **storage bounded y collector
+discovery deben diseñarse conjuntamente**. Retener backups no garantiza
+observabilidad si el collector no puede redescubrirlos después de downtime.
+
+## 18. Disposición actual
+
+```text
+implementation complete
+post-UAT causal correction complete
+execution-chat re-UAT complete
+technical acceptance 58/58 PASS
+0 blocking pending
+GitHub review P2 rotated-spool correction included in current worktree
+final PR re-review / merge pending
+```
+
+No se declara todavía merge ni Planka Done. El posible `causal_trail` queda como
+New Work Discovered para roadmap futuro, no como blocker de FS-007.

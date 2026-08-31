@@ -1,5 +1,8 @@
 local.file_match "finsport_events" {
-  path_targets = [{ "__path__" = "/app/logs/observability/*.jsonl" }]
+  path_targets = [{
+    "__path__"         = "/app/logs/observability/*.jsonl*",
+    "__path_exclude__" = "/app/logs/observability/*.jsonl.lock",
+  }]
   sync_period = "5s"
 }
 
