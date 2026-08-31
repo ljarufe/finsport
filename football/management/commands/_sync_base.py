@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from football.api_football import APIFootballClient, APIFootballError
 from football.api_inkabet import InkabetError
+from football.observability.events import emit_event
 from football.sync import FootballSyncError, SyncStats
 
 
@@ -20,6 +21,21 @@ class SyncCommand(BaseCommand):
             self.stats = self.run_sync(client=client, **options)
         except (APIFootballError, InkabetError, FootballSyncError) as error:
             error_message = str(error)
+            provider = getattr(error, "provider", "")
+            emit_event(
+                event_code=(
+                    "PROVIDER_OPERATION_FAILED" if provider else "SYNC_OPERATION_FAILED"
+                ),
+                severity="ERROR",
+                component="provider" if provider else "synchronization",
+                operation=self.__class__.__module__.rsplit(".", 1)[-1],
+                outcome="FAILED",
+                failure_kind=getattr(error, "failure_kind", "sync_contract"),
+                human_summary="A football synchronization command failed.",
+                provider=provider,
+                exception=error,
+                context=getattr(error, "diagnostic_context", {}),
+            )
         self._report(self.stats, client, error_message)
         if error_message:
             raise CommandError(error_message)

@@ -1,13 +1,24 @@
 import requests
 from django.conf import settings
 
+from football.observability.events import sanitize_text
+
 
 class InkabetError(Exception):
     """Base error for the read-only Inkabet JSON boundary."""
 
+    provider = "Inkabet"
+    failure_kind = "provider_request"
+
+    def __init__(self, message, *, failure_kind=None, diagnostic_context=None):
+        super().__init__(message)
+        if failure_kind:
+            self.failure_kind = failure_kind
+        self.diagnostic_context = diagnostic_context or {}
+
 
 class InkabetConfigurationError(InkabetError):
-    pass
+    failure_kind = "provider_configuration"
 
 
 class InkabetResponseError(InkabetError):
@@ -15,7 +26,7 @@ class InkabetResponseError(InkabetError):
 
 
 def _safe_metadata(value):
-    return " ".join(str(value or "unknown").split())[:120]
+    return " ".join(sanitize_text(value or "unknown", 120).split())
 
 
 class InkabetClient:
@@ -65,9 +76,34 @@ class InkabetClient:
                 timeout=self.timeout,
             )
         except requests.Timeout as error:
-            raise InkabetResponseError("Inkabet request timed out.") from error
+            raise InkabetResponseError(
+                "Inkabet request timed out.",
+                failure_kind="provider_transport",
+                diagnostic_context={
+                    "endpoint_family": endpoint,
+                    "transport_category": "timeout",
+                },
+            ) from error
         except requests.RequestException as error:
-            raise InkabetResponseError("Inkabet was unreachable.") from error
+            raise InkabetResponseError(
+                "Inkabet was unreachable.",
+                failure_kind="provider_transport",
+                diagnostic_context={
+                    "endpoint_family": endpoint,
+                    "transport_category": "unreachable",
+                },
+            ) from error
+
+        response_metadata = {
+            "endpoint_family": endpoint,
+            "http_status": response.status_code,
+            "content_type": _safe_metadata(response.headers.get("content-type")),
+            "response_size": self._response_size(response),
+            "provider_request_id": sanitize_text(
+                response.headers.get("x-request-id", ""),
+                200,
+            ),
+        }
 
         if response.status_code >= 400:
             content_type = _safe_metadata(response.headers.get("content-type"))
@@ -85,21 +121,53 @@ class InkabetClient:
                 f"content_type={content_type}, "
                 f"server={server}, "
                 f"cache={cache}, "
-                f"pop={pop})."
+                f"pop={pop}).",
+                failure_kind="provider_http",
+                diagnostic_context=response_metadata,
             )
 
         try:
             payload = response.json()
         except ValueError as error:
-            raise InkabetResponseError("Inkabet returned invalid JSON.") from error
+            raise InkabetResponseError(
+                "Inkabet returned invalid JSON.",
+                failure_kind="provider_schema_drift",
+                diagnostic_context={
+                    **response_metadata,
+                    "expected_category": "JSON object",
+                    "actual_category": "invalid JSON",
+                    "json_path": "$",
+                },
+            ) from error
 
         if not isinstance(payload, dict) or not isinstance(
             payload.get("data"),
             dict,
         ):
-            raise InkabetResponseError("Inkabet returned an unexpected response shape.")
+            raise InkabetResponseError(
+                "Inkabet returned an unexpected response shape.",
+                failure_kind="provider_schema_drift",
+                diagnostic_context={
+                    **response_metadata,
+                    "expected_category": "object with data object",
+                    "actual_category": type(payload).__name__,
+                    "json_path": "$.data",
+                    "top_level_keys": (
+                        sorted(str(key) for key in payload)[:20]
+                        if isinstance(payload, dict)
+                        else []
+                    ),
+                },
+            )
 
         return payload
+
+    @staticmethod
+    def _response_size(response):
+        content = getattr(response, "content", None)
+        if content is not None:
+            return len(content)
+        return len(str(getattr(response, "text", "")).encode())
 
     def categories(self):
         return self.get_json("widgets/categories/v2")

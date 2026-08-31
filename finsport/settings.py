@@ -144,7 +144,19 @@ COUNTRIES_OVERRIDE = {
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "operational_errors": {
+            "class": "football.observability.runtime.OperationalErrorHandler"
+        },
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["console", "operational_errors"],
+            "level": "ERROR",
+            "propagate": False,
+        }
+    },
     "root": {
         "handlers": ["console"],
         "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
@@ -178,6 +190,24 @@ API_FOOTBALL_MINIMUM_INTERVAL = env.float("API_FOOTBALL_MINIMUM_INTERVAL", defau
 FOOTBALL_CAPTURE_ENABLED = env.bool("FOOTBALL_CAPTURE_ENABLED", default=False)
 FOOTBALL_PIPELINE_ENABLED = env.bool("FOOTBALL_PIPELINE_ENABLED", default=False)
 FOOTBALL_CAPTURE_WAKE_SECONDS = env.int("FOOTBALL_CAPTURE_WAKE_SECONDS", default=900)
+OBSERVABILITY_EVENTS_ENABLED = env.bool("OBSERVABILITY_EVENTS_ENABLED", default=True)
+OBSERVABILITY_SERVICE_NAME = env("OBSERVABILITY_SERVICE_NAME", default="django-web")
+OBSERVABILITY_EVENT_DIR = env(
+    "OBSERVABILITY_EVENT_DIR", default="/app/logs/observability"
+)
+OBSERVABILITY_PIPELINE_GRACE_SECONDS = 900
+OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS = env.int(
+    "OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS", default=60
+)
+OBSERVABILITY_WATCHDOG_STATE_FILE = env(
+    "OBSERVABILITY_WATCHDOG_STATE_FILE",
+    default="/app/logs/observability/watchdog-state.json",
+)
+FINSPORT_GIT_COMMIT = env("FINSPORT_GIT_COMMIT", default="unknown")
+if OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS must be positive."
+    )
 FOOTBALL_CAPTURE_WINDOWS = env.json(
     "FOOTBALL_CAPTURE_WINDOWS",
     default=[

@@ -8,21 +8,35 @@ from urllib.request import Request, urlopen
 from django.conf import settings
 from django.utils import timezone
 
+from football.observability.events import (
+    safe_provider_error_diagnostic,
+    sanitize_text,
+)
+
 
 class APIFootballError(Exception):
     """Base error for the read-only API-Football boundary."""
 
+    provider = "API-Football"
+    failure_kind = "provider_request"
+
+    def __init__(self, message, *, failure_kind=None, diagnostic_context=None):
+        super().__init__(message)
+        if failure_kind:
+            self.failure_kind = failure_kind
+        self.diagnostic_context = diagnostic_context or {}
+
 
 class APIFootballConfigurationError(APIFootballError):
-    pass
+    failure_kind = "provider_configuration"
 
 
 class APIFootballAuthenticationError(APIFootballError):
-    pass
+    failure_kind = "provider_authentication"
 
 
 class APIFootballRateLimitError(APIFootballError):
-    pass
+    failure_kind = "provider_rate_limit"
 
 
 class APIFootballResponseError(APIFootballError):
@@ -34,15 +48,15 @@ class APIFootballTransientError(APIFootballError):
 
 
 class APIFootballQuotaReserveError(APIFootballError):
-    pass
+    failure_kind = "provider_quota"
 
 
 class APIFootballPaginationError(APIFootballError):
-    pass
+    failure_kind = "provider_pagination"
 
 
 class APIFootballOperationBudgetError(APIFootballError):
-    pass
+    failure_kind = "provider_budget"
 
 
 class APIFootballClient:
@@ -109,7 +123,8 @@ class APIFootballClient:
         if total > self.max_pages:
             raise APIFootballPaginationError(
                 f"Provider pagination requires {total} pages; configured bound is "
-                f"{self.max_pages}."
+                f"{self.max_pages}.",
+                diagnostic_context={"endpoint_family": endpoint.strip("/")},
             )
         while current < total:
             current += 1
@@ -123,7 +138,8 @@ class APIFootballClient:
             reported_total = self._positive_int(page_paging.get("total"), default=total)
             if reported_current != current or reported_total != total:
                 raise APIFootballPaginationError(
-                    "Provider pagination changed unexpectedly during synchronization."
+                    "Provider pagination changed unexpectedly during synchronization.",
+                    diagnostic_context={"endpoint_family": endpoint.strip("/")},
                 )
         return response
 
@@ -141,79 +157,173 @@ class APIFootballClient:
 
         for attempt in range(self.max_retries + 1):
             if self.attempt_guard is not None:
-                self.attempt_guard(self)
+                try:
+                    self.attempt_guard(self)
+                except APIFootballError as error:
+                    error.diagnostic_context = {
+                        "endpoint_family": endpoint,
+                        **error.diagnostic_context,
+                    }
+                    raise
             if attempt > 0:
                 self.retries += 1
-            self._guard_daily_reserve()
+            self._guard_daily_reserve(endpoint)
             self._pace()
             self.calls += 1
+            response_metadata = {"endpoint_family": endpoint}
             try:
                 with self._opener(request, timeout=self.timeout) as response:
                     self._read_quota_headers(response.headers)
-                    payload = json.loads(response.read().decode("utf-8"))
+                    raw_payload = response.read()
+                    response_metadata = self._response_metadata(
+                        endpoint,
+                        response.headers,
+                        http_status=getattr(response, "status", 200),
+                        response_size=len(raw_payload),
+                    )
+                    payload = json.loads(raw_payload.decode("utf-8"))
             except HTTPError as error:
                 self._read_quota_headers(error.headers)
+                diagnostic_context = self._response_metadata(
+                    endpoint,
+                    error.headers,
+                    http_status=error.code,
+                )
                 if error.code in (401, 403):
                     raise APIFootballAuthenticationError(
-                        f"API-Football rejected authentication (HTTP {error.code})."
+                        f"API-Football rejected authentication (HTTP {error.code}).",
+                        diagnostic_context=diagnostic_context,
                     ) from error
                 if error.code == 429:
                     raise APIFootballRateLimitError(
-                        "API-Football rate limit reached (HTTP 429)."
+                        "API-Football rate limit reached (HTTP 429).",
+                        diagnostic_context=diagnostic_context,
                     ) from error
                 if 500 <= error.code < 600:
                     if attempt < self.max_retries:
                         continue
                     raise APIFootballTransientError(
-                        f"API-Football failed after bounded retries (HTTP {error.code})."
+                        f"API-Football failed after bounded retries (HTTP {error.code}).",
+                        failure_kind="provider_http",
+                        diagnostic_context=diagnostic_context,
                     ) from error
                 raise APIFootballResponseError(
-                    f"API-Football request failed (HTTP {error.code})."
+                    f"API-Football request failed (HTTP {error.code}).",
+                    failure_kind="provider_http",
+                    diagnostic_context=diagnostic_context,
                 ) from error
             except (TimeoutError, socket.timeout, URLError) as error:
                 if attempt < self.max_retries:
                     continue
+                transport_category = (
+                    "timeout"
+                    if isinstance(error, (TimeoutError, socket.timeout))
+                    else "unreachable"
+                )
                 raise APIFootballTransientError(
-                    "API-Football timed out or was unreachable after bounded retries."
+                    "API-Football timed out or was unreachable after bounded retries.",
+                    failure_kind="provider_transport",
+                    diagnostic_context={
+                        "endpoint_family": endpoint,
+                        "transport_category": transport_category,
+                    },
                 ) from error
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise APIFootballResponseError(
-                    "API-Football returned an invalid JSON response."
+                    "API-Football returned an invalid JSON response.",
+                    failure_kind="provider_schema_drift",
+                    diagnostic_context={
+                        **response_metadata,
+                        "expected_category": "JSON object",
+                        "actual_category": "invalid JSON",
+                        "json_path": "$",
+                    },
                 ) from error
 
             errors = payload.get("errors") if isinstance(payload, dict) else None
             if errors:
-                error_summary = json.dumps(errors).casefold()
+                provider_diagnostic = safe_provider_error_diagnostic(errors)
+                diagnostic_context = {
+                    **response_metadata,
+                    **provider_diagnostic,
+                }
+                error_summary = provider_diagnostic["provider_error_summary"]
                 if (
-                    "free plans do not have access" in error_summary
-                    or "limited to" in error_summary
+                    "free plans do not have access" in error_summary.casefold()
+                    or "limited to" in error_summary.casefold()
                 ):
                     raise APIFootballResponseError(
                         "API-Football denied the requested season/date under "
-                        "the current plan."
+                        "the current plan.",
+                        failure_kind="provider_access_denied",
+                        diagnostic_context=diagnostic_context,
+                    )
+                message = "API-Football returned a provider application error."
+                if error_summary:
+                    message = sanitize_text(
+                        f"API-Football reported: {error_summary}",
+                        500,
                     )
                 raise APIFootballResponseError(
-                    "API-Football returned a provider error response."
+                    message,
+                    failure_kind="provider_application_error",
+                    diagnostic_context=diagnostic_context,
                 )
             if not isinstance(payload, dict) or not isinstance(
-                payload.get("response", []), list
+                payload.get("response"), list
             ):
                 raise APIFootballResponseError(
-                    "API-Football returned an unexpected response shape."
+                    "API-Football returned an unexpected response shape.",
+                    failure_kind="provider_schema_drift",
+                    diagnostic_context={
+                        **response_metadata,
+                        "expected_category": "object with response array",
+                        "actual_category": type(payload).__name__,
+                        "json_path": "$.response",
+                        "top_level_keys": (
+                            sorted(str(key) for key in payload)[:20]
+                            if isinstance(payload, dict)
+                            else []
+                        ),
+                    },
                 )
             self.pages += 1
             return payload
 
         raise APIFootballTransientError("API-Football retry bound was exhausted.")
 
-    def _guard_daily_reserve(self):
+    @staticmethod
+    def _response_metadata(endpoint, headers, *, http_status, response_size=None):
+        headers = headers or {}
+        content_length = APIFootballClient._optional_int(
+            headers.get("content-length"),
+            response_size,
+        )
+        metadata = {
+            "endpoint_family": endpoint,
+            "http_status": http_status,
+            "content_type": sanitize_text(
+                headers.get("content-type", "unknown"),
+                120,
+            ),
+            "provider_request_id": sanitize_text(
+                headers.get("x-request-id", ""),
+                200,
+            ),
+        }
+        if content_length is not None:
+            metadata["response_size"] = max(0, content_length)
+        return metadata
+
+    def _guard_daily_reserve(self, endpoint):
         if (
             self.daily_remaining is not None
             and self.daily_remaining <= self.daily_reserve
         ):
             raise APIFootballQuotaReserveError(
                 f"Daily quota reserve reached ({self.daily_remaining} remaining; "
-                f"reserve {self.daily_reserve})."
+                f"reserve {self.daily_reserve}).",
+                diagnostic_context={"endpoint_family": endpoint},
             )
 
     def _pace(self):

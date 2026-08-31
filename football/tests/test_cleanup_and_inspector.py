@@ -19,6 +19,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "predict_football_day",
         "run_football_capture",
         "run_football_pipeline",
+        "observe_pipeline",
     }
     for name in (
         "get_leagues",

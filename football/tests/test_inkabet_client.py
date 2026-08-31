@@ -102,8 +102,9 @@ def test_client_requests_only_categories_and_mw3w_contracts():
 
 
 def test_client_rejects_missing_configuration():
-    with pytest.raises(InkabetConfigurationError, match="are required"):
+    with pytest.raises(InkabetConfigurationError, match="are required") as captured:
         InkabetClient(brand_id="", market_code="")
+    assert captured.value.failure_kind == "provider_configuration"
 
 
 @pytest.mark.parametrize(
@@ -117,9 +118,15 @@ def test_client_rejects_missing_configuration():
 def test_client_rejects_invalid_json_and_shapes(response, message):
     client = client_with(Session(response))
 
-    with pytest.raises(InkabetResponseError, match=message):
+    with pytest.raises(InkabetResponseError, match=message) as captured:
         client.categories()
 
+    assert captured.value.failure_kind == "provider_schema_drift"
+    assert captured.value.diagnostic_context["endpoint_family"] == (
+        "widgets/categories/v2"
+    )
+    assert captured.value.diagnostic_context["http_status"] == 200
+    assert "json_path" in captured.value.diagnostic_context
     assert client.calls == 1
 
 
@@ -146,6 +153,14 @@ def test_client_sanitizes_http_maintenance_diagnostics():
     assert "kind=maintenance" in message
     assert "content_type=text/html unsafe" in message
     assert "must-not-leak" not in message
+    assert captured.value.failure_kind == "provider_http"
+    assert captured.value.diagnostic_context == {
+        "endpoint_family": "widgets/categories/v2",
+        "http_status": 503,
+        "content_type": "text/html unsafe",
+        "response_size": len("Maintenance page private-token=must-not-leak".encode()),
+        "provider_request_id": "",
+    }
     assert client.calls == 1
 
 
@@ -167,6 +182,11 @@ def test_client_reports_sanitized_non_maintenance_http_diagnostics():
     assert "HTTP 403" in message
     assert "kind=http" in message
     assert "must-not-leak" not in message
+    assert captured.value.failure_kind == "provider_http"
+    assert captured.value.diagnostic_context["endpoint_family"] == (
+        "widgets/categories/v2"
+    )
+    assert captured.value.diagnostic_context["http_status"] == 403
 
 
 @pytest.mark.parametrize(
@@ -179,7 +199,15 @@ def test_client_reports_sanitized_non_maintenance_http_diagnostics():
 def test_client_sanitizes_transport_errors_and_counts_calls(error, message):
     client = client_with(Session(error))
 
-    with pytest.raises(InkabetResponseError, match=message):
+    with pytest.raises(InkabetResponseError, match=message) as captured:
         client.categories()
 
+    assert captured.value.failure_kind == "provider_transport"
+    assert captured.value.diagnostic_context["endpoint_family"] == (
+        "widgets/categories/v2"
+    )
+    assert captured.value.diagnostic_context["transport_category"] in {
+        "timeout",
+        "unreachable",
+    }
     assert client.calls == 1

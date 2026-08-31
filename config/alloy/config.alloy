@@ -1,0 +1,49 @@
+local.file_match "finsport_events" {
+  path_targets = [{ "__path__" = "/app/logs/observability/*.jsonl" }]
+  sync_period = "5s"
+}
+
+loki.source.file "finsport_events" {
+  targets       = local.file_match.finsport_events.targets
+  forward_to    = [loki.process.finsport_events.receiver]
+  tail_from_end = false
+}
+
+loki.process "finsport_events" {
+  stage.drop {
+    expression          = `(?i)(authorization|cookie|api[_-]?key|apikey|token|access[_-]?token|password|passwd|secret|database[_-]?url|dsn)["']?\s*[:=]\s*["']?(bearer\s+)?[A-Za-z0-9._~+/=-]+`
+    drop_counter_reason = "suspected_secret_defense_in_depth"
+  }
+
+  stage.json {
+    expressions = {
+      schema       = "schema",
+      service_name = "service_name",
+      severity     = "severity",
+      event_code   = "event_code",
+      component    = "component",
+    }
+  }
+
+  stage.labels {
+    values = {
+      schema       = "",
+      service_name = "",
+      severity     = "",
+      event_code   = "",
+      component    = "",
+    }
+  }
+
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

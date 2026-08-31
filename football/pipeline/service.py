@@ -21,6 +21,9 @@ from football.models import (
     PipelineRun,
     PredictionExperiment,
 )
+from football.observability.events import emit_event
+from football.observability.pipeline import emit_pipeline_terminal, exception_diagnostic
+from football.observability.reconciliation import emit_reconciliation_pending
 from football.prediction.constants import ENGINE_VERSION as PREDICTION_ENGINE_VERSION
 from football.prediction.service import predict_competition_day
 from football.prediction.settlement import settle_prospective_predictions
@@ -315,6 +318,7 @@ def run_pipeline(
     warnings = []
     capture_data = {"provider_attempts": 0, "plan": {"items": []}}
     capture_result = None
+    operational_causes = []
     try:
         capture_result = run_capture(
             at=at,
@@ -327,12 +331,21 @@ def run_pipeline(
             max_provider_attempts=max_provider_attempts,
         )
         capture_data = capture_result.as_dict()
+        if capture_result.operational_cause:
+            operational_causes.append(capture_result.operational_cause)
         phases["CAPTURE"] = PhaseResult(
             _capture_state(capture_result, dry_run=dry_run),
             details=capture_data,
             reason="DRY_RUN" if dry_run else "",
         )
     except Exception as error:
+        operational_causes.append(
+            {
+                **exception_diagnostic(error),
+                "component": "capture",
+                "operation": "run_capture",
+            }
+        )
         message = f"{type(error).__name__}:{error}"[:500]
         errors.append({"phase": "CAPTURE", "error": message})
         phases["CAPTURE"] = PhaseResult(PhaseState.FAILED, reason=message)
@@ -381,6 +394,13 @@ def run_pipeline(
                     _experiment_report(outcome.experiment, created=outcome.created)
                 )
             except Exception as error:
+                operational_causes.append(
+                    {
+                        **exception_diagnostic(error),
+                        "component": "prediction",
+                        "operation": "predict_competition_day",
+                    }
+                )
                 message = f"{type(error).__name__}:{error}"[:500]
                 prediction_errors.append(
                     {
@@ -416,6 +436,13 @@ def run_pipeline(
     try:
         cancellation_data = cleanup_cancelled_matches(dry_run=dry_run).as_dict()
     except Exception as error:
+        operational_causes.append(
+            {
+                **exception_diagnostic(error),
+                "component": "settlement",
+                "operation": "cleanup_cancelled_matches",
+            }
+        )
         message = f"{type(error).__name__}:{error}"[:500]
         result_errors.append({"operation": "CANC_HYGIENE", "error": message})
     try:
@@ -424,6 +451,13 @@ def run_pipeline(
             dry_run=dry_run,
         ).as_dict()
     except Exception as error:
+        operational_causes.append(
+            {
+                **exception_diagnostic(error),
+                "component": "settlement",
+                "operation": "settle_prospective_predictions",
+            }
+        )
         message = f"{type(error).__name__}:{error}"[:500]
         result_errors.append({"operation": "SETTLEMENT", "error": message})
     if dry_run:
@@ -473,6 +507,13 @@ def run_pipeline(
             try:
                 capital_results.append(run_research_baseline(experiment).as_dict())
             except Exception as error:
+                operational_causes.append(
+                    {
+                        **exception_diagnostic(error),
+                        "component": "capital",
+                        "operation": "run_research_baseline",
+                    }
+                )
                 capital_errors.append(
                     {
                         "prediction_experiment_id": experiment.pk,
@@ -579,6 +620,24 @@ def run_pipeline(
                 "modified",
             ]
         )
+        emit_pipeline_terminal(run, causes=operational_causes)
+        try:
+            emit_reconciliation_pending(
+                pipeline_run_id=run.pk,
+                capture_run_id=(run.capture_run_ids or [None])[0],
+            )
+        except Exception as error:
+            emit_event(
+                event_code="RECONCILIATION_CHECK_FAILED",
+                severity="ERROR",
+                component="reconciliation",
+                operation="aggregate_pending_source_refs",
+                outcome="FAILED",
+                failure_kind="database_dependency",
+                human_summary="Pending reconciliation could not be aggregated.",
+                pipeline_run_id=run.pk,
+                exception=error,
+            )
     return PipelineResult(
         run_id=run.pk if run else None,
         cycle_identity=cycle_identity,

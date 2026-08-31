@@ -5,6 +5,7 @@ from unittest import mock
 import pytest
 from django_countries.fields import Country
 
+from football.api_inkabet import InkabetResponseError
 from football.country_mapping import country_code
 from football.inkabet import (
     parse_categories,
@@ -248,6 +249,31 @@ def test_mw3w_parser_uses_only_strict_home_draw_away_templates():
         "selectionTemplateId"
     ] = "HOME_HANDICAP"
     assert parse_mw3w(payload) is None
+
+
+def test_categories_and_mw3w_parser_drift_are_safe_provider_errors():
+    with pytest.raises(InkabetResponseError) as categories_error:
+        reconcile_categories(["unexpected"], [])
+    assert categories_error.value.failure_kind == "provider_schema_drift"
+    assert categories_error.value.diagnostic_context == {
+        "endpoint_family": "categories",
+        "http_status": 200,
+        "expected_category": "categories index object",
+        "actual_category": "NoneType",
+        "json_path": "$.data.items.indexBySlug",
+        "top_level_keys": [],
+    }
+
+    payload = inkabet_mw3w_payload()
+    payload["data"]["accordions"]["MW3W"]["selections"][0]["odds"] = "invalid-decimal"
+    match_ref = mock.Mock(match_id=1)
+    with pytest.raises(InkabetResponseError) as mw3w_error:
+        sync_mw3w_payload(payload, match_ref)
+    assert mw3w_error.value.failure_kind == "provider_schema_drift"
+    assert mw3w_error.value.diagnostic_context["endpoint_family"] == "match_winner"
+    assert mw3w_error.value.diagnostic_context["json_path"] == (
+        "$.data.accordions.MW3W"
+    )
 
 
 def test_inkabet_pending_discovery_never_creates_canonical_entities():
