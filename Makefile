@@ -2,13 +2,17 @@ IN_CONTAINER := $(shell test -f /.dockerenv && echo 1 || echo 0)
 COMPOSE = docker compose
 PYTEST_CACHE_DIR = /tmp/finsport-pytest-cache
 
-.PHONY: build up down logs shell migrate makemigrations createsuperuser test coverage lint format format-check django-check check hooks
+.PHONY: build up down logs observability-up observability-stop observability-logs shell migrate makemigrations createsuperuser test coverage lint format format-check django-check check hooks
 
 ifeq ($(IN_CONTAINER),1)
 APP =
 
 build up down logs:
 	@echo "This target controls Docker Compose and must run on the host."
+	@exit 1
+
+observability-up observability-stop observability-logs:
+	@echo "Observability Compose targets must run on the host."
 	@exit 1
 
 hooks:
@@ -28,6 +32,16 @@ down:
 
 logs:
 	$(COMPOSE) logs -f
+
+observability-up:
+	@grep -Eq '^GRAFANA_ADMIN_PASSWORD=.+$$' .env || (echo "Set a non-empty GRAFANA_ADMIN_PASSWORD in the ignored .env file." && exit 1)
+	$(COMPOSE) --profile observability up -d
+
+observability-stop:
+	$(COMPOSE) --profile observability stop observability-watch alloy loki grafana
+
+observability-logs:
+	$(COMPOSE) --profile observability logs -f observability-watch alloy loki grafana
 
 hooks:
 	pre-commit install --install-hooks

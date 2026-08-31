@@ -269,6 +269,7 @@ class CaptureResult:
     failed_work: list[dict] = field(default_factory=list)
     completed_work: list[dict] = field(default_factory=list)
     plan: dict = field(default_factory=dict)
+    operational_cause: dict = field(default_factory=dict, repr=False)
 
     def as_dict(self):
         return {

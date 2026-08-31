@@ -456,6 +456,9 @@ def test_day_inkabet_categories_failure_is_fail_soft():
             "inkabet_client_class",
             FakeInkabetClient,
         ),
+        mock.patch(
+            "football.management.commands.sync_football_day.emit_event"
+        ) as operational_event,
     ):
         call_command(
             "sync_football_day",
@@ -473,6 +476,9 @@ def test_day_inkabet_categories_failure_is_fail_soft():
     assert "inkabet_calls=1" in report
     assert "inkabet_errors=1" in report
     assert "error=none" in report
+    operational_event.assert_called_once()
+    assert operational_event.call_args.kwargs["event_code"] == "PROVIDER_DEGRADED"
+    assert operational_event.call_args.kwargs["severity"] == "WARNING"
 
 
 @override_settings(
@@ -572,3 +578,62 @@ def test_day_malformed_inkabet_categories_is_fail_soft():
     assert "inkabet_calls=1" in report
     assert "inkabet_errors=1" in report
     assert "error=none" in report
+
+
+@override_settings(
+    INKABET_BRAND_ID="local-brand",
+    INKABET_MARKET_CODE="local-market",
+)
+def test_day_malformed_inkabet_mw3w_is_diagnostic_and_fail_soft():
+    tracked = competition()
+    catalog_season(tracked)
+    sync_catalog_payloads([], [{"id": 1, "name": "Match Winner"}])
+    FakeClient.responses = {
+        "fixtures": [fixture_payload()],
+        "odds": [odds_payload()],
+    }
+    FakeInkabetClient.categories_payload = inkabet_categories_payload()
+    FakeInkabetClient.mw3w_payload = {
+        "data": {
+            "accordions": {
+                "MW3W": {
+                    "markets": ["invalid-market-shape"],
+                    "selections": [],
+                }
+            }
+        }
+    }
+    output = StringIO()
+
+    with (
+        mock.patch.object(DayCommand, "client_class", FakeClient),
+        mock.patch.object(
+            DayCommand,
+            "inkabet_client_class",
+            FakeInkabetClient,
+        ),
+        mock.patch(
+            "football.management.commands.sync_football_day.emit_event"
+        ) as operational_event,
+    ):
+        call_command(
+            "sync_football_day",
+            date="2025-08-24",
+            with_odds=True,
+            stdout=output,
+        )
+
+    report = output.getvalue()
+    assert "INKABET_DEGRADED" in report
+    assert "unexpected MW3W payload shape" in report
+    assert "inkabet_calls=2" in report
+    assert "inkabet_errors=1" in report
+    assert "error=none" in report
+    operational_event.assert_called_once()
+    event = operational_event.call_args.kwargs
+    assert event["event_code"] == "PROVIDER_DEGRADED"
+    assert event["provider"] == "Inkabet"
+    assert event["failure_kind"] == "provider_schema_drift"
+    assert event["operation"] == "match_winner"
+    assert event["context"]["endpoint_family"] == "match_winner"
+    assert event["context"]["json_path"] == "$.data.accordions.MW3W"

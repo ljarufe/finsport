@@ -85,6 +85,7 @@ Every command reports created, updated, unchanged/skipped, reconciliation-pendin
 
 - [Dev Container and VS Code workflow](docs/development/devcontainer.md)
 - [Safe local runtime](docs/operations/local_runtime.md)
+- [Local observability and incident triage](docs/operations/observability_incident_triage.md)
 - [FS-001 feedback](docs/process/FS-001_feedback.md)
 - [FS-002 feedback](docs/process/FS-002_feedback.md)
 

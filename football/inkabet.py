@@ -211,11 +211,22 @@ def parse_categories(payload):
 
 
 def parse_mw3w(payload):
-    accordions = (payload.get("data") or {}).get("accordions") or {}
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        raise TypeError("Inkabet MW3W data must be an object.")
+    accordions = data.get("accordions") or {}
+    if not isinstance(accordions, dict):
+        raise TypeError("Inkabet MW3W accordions must be an object.")
     accordion = accordions.get(MW3W) or {}
+    if not isinstance(accordion, dict):
+        raise TypeError("Inkabet MW3W accordion must be an object.")
     markets = accordion.get("markets") or []
     if isinstance(markets, dict):
         markets = list(markets.values())
+    if not isinstance(markets, list) or not all(
+        isinstance(market, dict) for market in markets
+    ):
+        raise TypeError("Inkabet MW3W markets must contain objects.")
     if not any(
         market.get("marketTemplateId") == MW3W
         and str(market.get("status") or "").casefold() == "open"
@@ -225,6 +236,10 @@ def parse_mw3w(payload):
     selections = accordion.get("selections") or []
     if isinstance(selections, dict):
         selections = list(selections.values())
+    if not isinstance(selections, list) or not all(
+        isinstance(selection, dict) for selection in selections
+    ):
+        raise TypeError("Inkabet MW3W selections must contain objects.")
     by_template = {
         selection.get("selectionTemplateId"): selection for selection in selections
     }
@@ -235,8 +250,8 @@ def parse_mw3w(payload):
             Decimal(str(by_template[template]["odds"]))
             for template in ("HOME", "DRAW", "AWAY")
         )
-    except (InvalidOperation, KeyError, TypeError):
-        return None
+    except (InvalidOperation, KeyError, TypeError) as error:
+        raise ValueError("Inkabet MW3W prices must be valid decimals.") from error
     return {
         "prices": prices,
         "home": by_template["HOME"],
@@ -261,8 +276,23 @@ def reconcile_categories(payload, relevant_matches):
     try:
         competitions, events = parse_categories(payload)
     except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        items = data.get("items") if isinstance(data, dict) else None
         raise InkabetResponseError(
-            "Inkabet returned an unexpected categories payload shape."
+            "Inkabet returned an unexpected categories payload shape.",
+            failure_kind="provider_schema_drift",
+            diagnostic_context={
+                "endpoint_family": "categories",
+                "http_status": 200,
+                "expected_category": "categories index object",
+                "actual_category": type(items).__name__,
+                "json_path": "$.data.items.indexBySlug",
+                "top_level_keys": (
+                    sorted(str(key) for key in payload)[:20]
+                    if isinstance(payload, dict)
+                    else []
+                ),
+            },
         ) from error
     relevant_by_country = {}
     for match in relevant_matches:
@@ -347,7 +377,28 @@ def reconcile_categories(payload, relevant_matches):
 
 @transaction.atomic
 def sync_mw3w_payload(payload, match_ref):
-    parsed = parse_mw3w(payload)
+    try:
+        parsed = parse_mw3w(payload)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        accordions = data.get("accordions") if isinstance(data, dict) else None
+        accordion = accordions.get(MW3W) if isinstance(accordions, dict) else None
+        raise InkabetResponseError(
+            "Inkabet returned an unexpected MW3W payload shape.",
+            failure_kind="provider_schema_drift",
+            diagnostic_context={
+                "endpoint_family": "match_winner",
+                "http_status": 200,
+                "expected_category": "MW3W accordion with market/selection objects",
+                "actual_category": type(accordion).__name__,
+                "json_path": "$.data.accordions.MW3W",
+                "top_level_keys": (
+                    sorted(str(key) for key in payload)[:20]
+                    if isinstance(payload, dict)
+                    else []
+                ),
+            },
+        ) from error
     stats = SyncStats()
     if parsed is None or not match_ref.match_id:
         stats.skipped += 1

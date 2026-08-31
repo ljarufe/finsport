@@ -1,0 +1,75 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "title": "Django Admin domain audit",
+      "type": "link",
+      "url": "http://localhost:8001/"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {"type": "loki", "uid": "finsport-loki"},
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "dedupStrategy": "signature",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "finsport-loki"},
+          "editorMode": "code",
+          "expr": "{schema=\"finsport.observability.v1\", severity=~\"WARNING|ERROR\"} | json",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent actionable incidents",
+      "type": "logs"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "finsport-loki"},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+      "id": 2,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "finsport-loki"},
+          "editorMode": "code",
+          "expr": "{schema=\"finsport.observability.v1\", event_code=\"PIPELINE_OVERDUE\"} | json",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Pipeline overdue",
+      "type": "logs"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["finsport", "operations"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "Finsport Operational Incidents",
+  "uid": "finsport-operations",
+  "version": 1
+}

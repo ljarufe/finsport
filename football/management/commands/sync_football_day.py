@@ -8,6 +8,7 @@ from football.inkabet import (
     sync_mw3w_payload,
 )
 from football.models import CompetitionSourceRef, OddsMarket, ReconciliationStatus
+from football.observability.events import emit_event
 from football.sync import (
     FootballSyncError,
     sync_fixture_payloads,
@@ -97,16 +98,20 @@ class Command(SyncCommand):
             )
         except InkabetError as error:
             self.inkabet_errors += 1
+            self._emit_inkabet_degraded(error, operation="categories")
             self.stdout.write(self.style.WARNING(f"INKABET_DEGRADED: {error}"))
             return stats
 
         stats.merge(discovery_stats)
 
+        inkabet_failures = []
         for match_ref in resolved_match_refs_for(accepted.values()):
             try:
                 payload = self.inkabet_client.match_winner(match_ref.external_id)
+                match_stats = sync_mw3w_payload(payload, match_ref)
             except InkabetError as error:
                 self.inkabet_errors += 1
+                inkabet_failures.append((error, match_ref.match_id))
                 self.stdout.write(
                     self.style.WARNING(
                         "INKABET_DEGRADED " f"event={match_ref.external_id}: {error}"
@@ -114,6 +119,34 @@ class Command(SyncCommand):
                 )
                 continue
 
-            stats.merge(sync_mw3w_payload(payload, match_ref))
+            stats.merge(match_stats)
+
+        if inkabet_failures:
+            error, match_id = inkabet_failures[0]
+            self._emit_inkabet_degraded(
+                error,
+                operation="match_winner",
+                match_id=match_id,
+                occurrence_count=len(inkabet_failures),
+            )
 
         return stats
+
+    @staticmethod
+    def _emit_inkabet_degraded(error, *, operation, match_id=None, occurrence_count=1):
+        emit_event(
+            event_code="PROVIDER_DEGRADED",
+            severity="WARNING",
+            component="capture",
+            operation=operation,
+            outcome="DEGRADED",
+            failure_kind=getattr(error, "failure_kind", "provider_request"),
+            human_summary="Inkabet evidence was incomplete; canonical work continued.",
+            provider="Inkabet",
+            match_id=match_id,
+            exception=error,
+            context={
+                **getattr(error, "diagnostic_context", {}),
+                "occurrence_count": occurrence_count,
+            },
+        )

@@ -11,6 +11,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import override_settings
 
+from football.api_football import APIFootballResponseError
 from football.capital.baseline import run_research_baseline
 from football.capture.contracts import CaptureResult
 from football.models import (
@@ -24,6 +25,7 @@ from football.models import (
     Season,
     Team,
 )
+from football.observability.pipeline import exception_diagnostic
 from football.pipeline import run_pipeline
 from football.pipeline.contracts import PhaseResult, PhaseState
 from football.pipeline.service import _phase_status
@@ -176,6 +178,57 @@ def test_pipeline_dry_run_is_provider_and_write_free(monkeypatch):
         "decisions": Decision.objects.count(),
         "capital": CapitalExperiment.objects.count(),
     }
+
+
+def test_capture_provider_cause_reaches_single_pipeline_terminal_event(monkeypatch):
+    at = datetime(2026, 8, 31, 4, 30, tzinfo=dt_timezone.utc)
+    try:
+        raise APIFootballResponseError(
+            "API-Football reported: fixture: Invalid fixture parameter 1550103",
+            failure_kind="provider_application_error",
+            diagnostic_context={
+                "endpoint_family": "odds",
+                "http_status": 200,
+                "provider_request_id": "request-pipeline",
+                "provider_error_category": "object",
+                "provider_error_keys": ["fixture"],
+                "provider_error_summary": "fixture: Invalid fixture parameter 1550103",
+                "attempts": 1,
+            },
+        )
+    except APIFootballResponseError as error:
+        cause = {
+            **exception_diagnostic(error),
+            "component": "capture",
+            "operation": "odds_capture",
+        }
+    capture = CaptureResult(
+        run_id=38,
+        status="FAILED",
+        planning_at=at,
+        quota_before={},
+        quota_after={},
+        operational_cause=cause,
+    )
+    monkeypatch.setattr(
+        "football.pipeline.service.run_capture", lambda **kwargs: capture
+    )
+
+    with mock.patch("football.observability.pipeline.emit_event") as emitter:
+        result = run_pipeline(at=at)
+
+    emitter.assert_called_once()
+    event = emitter.call_args.kwargs
+    assert event["event_code"] == "PIPELINE_FAILED"
+    assert event["pipeline_run_id"] == result.run_id
+    assert event["capture_run_id"] == 38
+    assert event["provider"] == "API-Football"
+    assert event["failure_kind"] == "provider_application_error"
+    assert event["operation"] == "odds_capture"
+    assert event["context"]["provider_error_summary"] == (
+        "fixture: Invalid fixture parameter 1550103"
+    )
+    assert event["traceback_text"].count("Traceback (most recent call last)") == 1
 
 
 def test_pipeline_command_prints_json_and_rejects_naive_cutoff(monkeypatch):

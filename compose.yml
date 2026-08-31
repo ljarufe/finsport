@@ -1,9 +1,16 @@
 name: finsport
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   redis:
     image: redis:7
     restart: always
+    logging: *default-logging
     ports:
       - "6379:6379"
     volumes:
@@ -27,6 +34,7 @@ services:
   db:
     image: postgres:17
     restart: always
+    logging: *default-logging
     ports:
       - "${DATABASE_PORT:-5432}:5432"
     volumes:
@@ -62,6 +70,9 @@ services:
       - logs_volume:/app/logs
     env_file:
       - .env
+    environment:
+      OBSERVABILITY_SERVICE_NAME: django-web
+    logging: *default-logging
 
   celery:
     build: .
@@ -69,11 +80,15 @@ services:
     command: celery -A finsport worker -l info -Q finsport.local.safe
     volumes:
       - .:/app
+      - logs_volume:/app/logs
     depends_on:
       - redis
       - django-web
     env_file:
       - .env
+    environment:
+      OBSERVABILITY_SERVICE_NAME: celery-worker
+    logging: *default-logging
 
   celery-beat:
     build: .
@@ -81,11 +96,15 @@ services:
     command: celery -A finsport beat -l info --schedule=/tmp/finsport-celerybeat-schedule
     volumes:
       - .:/app
+      - logs_volume:/app/logs
     depends_on:
       - redis
       - django-web
     env_file:
       - .env
+    environment:
+      OBSERVABILITY_SERVICE_NAME: celery-beat
+    logging: *default-logging
 
   nginx:
     image: nginx:1.29
@@ -96,9 +115,82 @@ services:
       - static_volume:/app/staticfiles
     depends_on:
       - django-web
+    logging: *default-logging
+
+  observability-watch:
+    build: .
+    restart: unless-stopped
+    command: python manage.py observe_pipeline
+    profiles: ["observability"]
+    volumes:
+      - .:/app
+      - logs_volume:/app/logs
+    depends_on:
+      init-logs:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      OBSERVABILITY_SERVICE_NAME: observability-watch
+    logging: *default-logging
+
+  loki:
+    image: grafana/loki:3.7.6
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    profiles: ["observability"]
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    logging: *default-logging
+
+  alloy:
+    image: grafana/alloy:v1.19.0
+    restart: unless-stopped
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    profiles: ["observability"]
+    volumes:
+      - ./config/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - logs_volume:/app/logs:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+      - init-logs
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    logging: *default-logging
 
 volumes:
   postgres_data:
   static_volume:
   logs_volume:
   redis_data:
+  loki_data:
+  alloy_data:
+  grafana_data:

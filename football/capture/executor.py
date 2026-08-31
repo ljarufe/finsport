@@ -20,6 +20,7 @@ from football.models import (
     ReconciliationStatus,
     Source,
 )
+from football.observability.pipeline import exception_diagnostic
 from football.sync import FINISHED_STATUSES, sync_fixture_payloads, sync_odds_payloads
 
 from .contracts import CaptureResult
@@ -234,6 +235,11 @@ class CaptureExecutor:
                 daily_reserve=0,
             )
         except Exception as error:
+            result.operational_cause = {
+                **exception_diagnostic(error),
+                "component": "capture",
+                "operation": "create_provider_client",
+            }
             for item, row in zip(plan.items, work_rows, strict=True):
                 if item.status != CaptureWorkItem.Status.PLANNED:
                     continue
@@ -339,9 +345,15 @@ class CaptureExecutor:
                 item.as_dict() | {"status": row.status, "effects": effects}
             )
         except APIFootballRateLimitError as error:
+            self._remember_operational_cause(
+                result, item, error, attempts=client.calls - calls_before
+            )
             self._fail_row(row, CaptureWorkItem.Status.PROVIDER_BACKOFF, error)
             result.failed_work.append(item.as_dict() | {"status": row.status})
         except (APIFootballPaginationError, APIFootballOperationBudgetError) as error:
+            self._remember_operational_cause(
+                result, item, error, attempts=client.calls - calls_before
+            )
             attempted = client.calls > calls_before
             status = (
                 CaptureWorkItem.Status.PARTIAL_PAGINATION
@@ -356,6 +368,9 @@ class CaptureExecutor:
             target = result.failed_work if attempted else result.skipped_work
             target.append(item.as_dict() | {"status": row.status})
         except APIFootballQuotaReserveError as error:
+            self._remember_operational_cause(
+                result, item, error, attempts=client.calls - calls_before
+            )
             attempted = client.calls > calls_before
             status = (
                 CaptureWorkItem.Status.PARTIAL_PAGINATION
@@ -370,9 +385,15 @@ class CaptureExecutor:
             target = result.failed_work if attempted else result.skipped_work
             target.append(item.as_dict() | {"status": row.status})
         except APIFootballError as error:
+            self._remember_operational_cause(
+                result, item, error, attempts=client.calls - calls_before
+            )
             self._fail_row(row, CaptureWorkItem.Status.FAILED_PROVIDER, error)
             result.failed_work.append(item.as_dict() | {"status": row.status})
         except Exception as error:  # Async/operator audit must not lose local failures.
+            self._remember_operational_cause(
+                result, item, error, attempts=client.calls - calls_before
+            )
             self._fail_row(row, CaptureWorkItem.Status.FAILED_PROVIDER, error)
             result.failed_work.append(item.as_dict() | {"status": row.status})
         finally:
@@ -396,6 +417,20 @@ class CaptureExecutor:
         row.reason = _sanitize(error, 120)
         row.error_class = error.__class__.__name__[:120]
         row.error_message = _sanitize(error)
+
+    @staticmethod
+    def _remember_operational_cause(result, item, error, *, attempts=0):
+        if result.operational_cause:
+            return
+        result.operational_cause = {
+            **exception_diagnostic(error),
+            "component": "capture",
+            "operation": item.purpose.casefold(),
+            "context": {
+                **getattr(error, "diagnostic_context", {}),
+                "attempts": max(0, attempts),
+            },
+        }
 
     @staticmethod
     def _perform(client, item):

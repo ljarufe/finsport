@@ -426,6 +426,47 @@ def test_partial_or_failed_provider_never_fabricates_observation(
     assert not OddsSnapshot.objects.filter(match=match).exists()
 
 
+@override_settings(**CAPTURE_SETTINGS)
+def test_provider_diagnostic_context_reaches_capture_operational_cause_and_audit():
+    now = timezone.now().replace(microsecond=0)
+    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    error = APIFootballResponseError(
+        "API-Football reported: fixture: Invalid fixture parameter 39001",
+        failure_kind="provider_application_error",
+        diagnostic_context={
+            "endpoint_family": "odds",
+            "http_status": 200,
+            "provider_error_category": "object",
+            "provider_error_keys": ["fixture"],
+            "provider_error_summary": "fixture: Invalid fixture parameter 39001",
+        },
+    )
+
+    class FailingClient(FakeCaptureClient):
+        def get_all(self, endpoint, params=None):
+            self.attempt_guard(self)
+            self.calls += 1
+            raise error
+
+    result = run_capture(at=now, allow_bootstrap=True, client_factory=FailingClient)
+
+    run = CaptureRun.objects.get()
+    work = run.work_items.get(status=CaptureWorkItem.Status.FAILED_PROVIDER)
+    cause = result.operational_cause
+    assert result.provider_attempts == 1
+    assert cause["exception"] is error
+    assert cause["provider"] == "API-Football"
+    assert cause["failure_kind"] == "provider_application_error"
+    assert cause["operation"] == "odds_capture"
+    assert cause["context"]["endpoint_family"] == "odds"
+    assert cause["context"]["provider_error_summary"] == (
+        "fixture: Invalid fixture parameter 39001"
+    )
+    assert cause["context"]["attempts"] == 1
+    assert "Invalid fixture parameter 39001" in work.error_message
+    assert run.error_message == work.error_message
+
+
 @override_settings(
     **(
         CAPTURE_SETTINGS
