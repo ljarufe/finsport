@@ -1,336 +1,552 @@
 # FS-008 Feedback
 
-Status: **PRE-UAT / MAY BECOME STALE**
-Updated: 2026-08-31
+Status: **FINAL RECONCILED FEEDBACK**
+Updated: 2026-09-01
 Branch: `FS-008-maintenance-refactor-cleanup`
-Base/HEAD during implementation: `23a36fdcdd2354145360f1ab6b488ab4c5d1c838`
+PR: `https://github.com/ljarufe/finsport/pull/13`
+Base: `master` at `23a36fdcdd2354145360f1ab6b488ab4c5d1c838`
+Latest review-correction head before this final-feedback commit: `df38557cc67c9d8ee61e1e10fbb53d2f39d1a148`
 
-This document records automated implementation evidence only. Maintainer UAT,
-CI, review, persistent migration, and the guarded FS004 synthetic cleanup have
-not been claimed as passed.
+## 1. Outcome
 
-## Current implementation
+FS-008 reached technical close successfully.
 
-- Removed the legacy `bet` application/API, DRF, unused Celery database
-  integrations, obsolete serializers, and obsolete pylint configuration.
-- Added irreversible migration `football.0006_remove_legacy_bet_tables`, scoped
-  to the two superseded bet tables, plus `football.0007_maintenancerun` for
-  persistent daily/weekly due and audit state.
-- Refreshed every retained direct dependency to the selected current supported
-  release. Django remains on supported 5.2 LTS at 5.2.17. NumPy 2.4.6 is the
-  documented compatibility exception for Penaltyblog 1.12.0 warning hygiene.
-- Added `pip check` and pip-audit of the complete installed environment to the
-  local/CI `make check` gate.
-- `make up` starts core, worker, Beat, watchdog, Loki, Alloy, and Grafana across
-  both profiles. `make dev-up` starts no Beat. `make status` is profile-aware
-  and includes automation, maintenance due/last state, worker/queue, and DB-run
-  state. `make safe-down` stops dispatchers first, drains with a bound, and
-  removes every profile without `-v`.
-- Activated `MODERNIZED_R45` in chronological backtests and prospective
-  Prediction/Decision production. Selection is inner walk-forward; fitting and
-  market evidence are strictly before the target cutoff. Factual insufficiency
-  remains explicit `UNAVAILABLE`.
-- Activated secondary, read-only, fail-soft Inkabet MW3W on successfully
-  completed due odds windows. One categories discovery serves the run; only
-  resolved relevant events receive MW3W requests. Manual and automatic paths
-  now share one acquisition service.
-- Added once-per-Lima-day catalogue maintenance, once-per-Lima-day DB season
-  eligibility, and provider bootstrap only for enabled/current/resolved Seasons
-  with no canonical Matches. Quota/reserve checks precede lower-priority
-  maintenance and retries are bounded.
-- Added weekly chronological evaluation and hyperparameter/config reselection
-  under the same pipeline-owned maintenance cycle. An unchanged resolved
-  evidence signature produces `NO_WORK` and preserves the prior selection.
-- Inkabet extended statistics remain exactly `NOT_IMPLEMENTED`.
-- Hardened watchdog DB reconnection and the guarded FS004 cleanup external-
-  reference audit. No cleanup or persistent migration was executed.
+The baseline is smaller, more explicit operationally, and safer to maintain:
 
-## Scheduling and audit contract
+- legacy `bet` runtime and its two superseded tables are removed;
+- unused DRF, `django-celery-beat`, and `django-celery-results` runtime dependencies are removed;
+- retained dependencies were refreshed and `pip-audit` became part of the reproducible gate;
+- avoidable Penaltyblog/NumPy warning noise was removed without global warning suppression;
+- branch coverage remains above the required 80% floor;
+- `MODERNIZED_R45` is ACTIVE with chronological/leak-safe availability semantics;
+- automatic Inkabet MW3W capture is ACTIVE only on successful due `ODDS_CAPTURE` work and remains read-only/fail-soft;
+- daily catalogue maintenance, daily new-season eligibility detection, and weekly backtest/config reselection are ACTIVE under one pipeline-owned scheduler;
+- runtime ownership is explicit through `make up`, `make dev-up`, `make status`, and `make safe-down`;
+- watchdog DB recovery is bounded and survives a real PostgreSQL interruption without restart/error storm;
+- the exact reviewed FS-004 synthetic UAT graph was removed safely while preserving known real pipeline/capture evidence.
 
-There is one file-backed Celery Beat owner. With pipeline automation enabled it
-registers `football.pipeline.wake` and suppresses the standalone capture wake.
-The frequent wake runs immediate prospective phases first, then consults
-persistent `MaintenanceRun` identities. Daily/weekly work is not repeated every
-15 minutes and the first eligible wake after downtime can execute overdue work.
+No real betting, bookmaker authentication, or financial external side effect was added.
 
-Actual due maintenance emits one bounded terminal event and persists identity,
-attempts, status, quota evidence, configuration, summary, selected experiment
-IDs, and sanitized errors. `CaptureRun.summary.secondary.inkabet` records
-Inkabet effects/failures. R45 Predictions persist model version, variant,
-configuration, cutoff, probabilities, and diagnostics.
+## 2. Final capability disposition
 
-## Dependency and automated evidence
+| Capability | Final FS-008 disposition |
+| --- | --- |
+| `MODERNIZED_R45` | **ACTIVE** |
+| `LEGACY_R45` active runtime | **REMOVED / not an active runtime arm** |
+| API-Football prospective capture | **ACTIVE under existing bounded pipeline ownership** |
+| Inkabet MW3W prospective capture | **ACTIVE secondary/read-only/fail-soft on due odds captures** |
+| Inkabet extended statistics | **NOT_IMPLEMENTED; no ingestion path exists in FS-008** |
+| Catalogue refresh | **ACTIVE once per America/Lima local day when due** |
+| New-season eligibility detection | **ACTIVE daily; provider bootstrap only for eligible current empty seasons** |
+| Backtest/config reselection | **ACTIVE weekly plus manual on-demand** |
+| Automatic scheduler | **one owner: `football.pipeline.wake` through Celery Beat** |
+| Development runtime | **safe no-Beat runtime through `make dev-up`** |
 
-- Clean image rebuild: PASS.
-- `pip check`: PASS, no broken requirements.
-- `pip-audit --local`: PASS, no known vulnerabilities.
-- Black 26.5.1: PASS.
-- Ruff 0.16.5: PASS.
-- Django 5.2.17 system check: PASS, 0 silenced.
-- Migration drift: PASS, no changes detected.
-- Focused Pass-2 suite: PASS, 68 tests.
-- Final runtime-control focus: PASS, 4 tests.
-- Final `make check`: PASS, 271 tests, 86.41% branch coverage.
-- Avoidable runtime/test warnings: none reported.
-- Compose base/profile configuration: PASS; all-profile service list includes
-  Beat, watchdog, Loki, Alloy, and Grafana.
-- Read-only pre-migration `make status`: PASS; it saw the running DB/Redis across
-  the complete project, reported zero queue/known running jobs, represented the
-  not-yet-migrated MaintenanceRun table as `null`, and did not claim dispatch.
-- `git diff --check`: recorded in the final acceptance artifact.
+These dispositions supersede earlier FS-006/ticket language that described R45 activation, Inkabet automation, new-season bootstrap, or automatic retraining as future/deferred work.
 
-The full pytest database proves the fresh migration path. The Pass-1 disposable
-PostgreSQL validation proved both fresh and existing upgrade behavior for 0006.
-Migration 0007 has schema/drift/fresh-test evidence; applying 0006/0007 to the
-maintainer database remains explicitly pending.
+## 3. Dependency / tooling result
 
-## Behavior-preserving refactor review
+Removed from active runtime because no current consumer remained:
 
-| Problem | Change | Equivalence/safety | Evidence |
-| --- | --- | --- | --- |
-| Manual and automatic Inkabet paths could duplicate categories/reconciliation/MW3W/error handling | Both use `capture_inkabet_matches` | Same read-only provider calls and canonical persistence; automatic-only enable flag does not disable the manual override | Command, automatic, schema-drift, fail-soft, and idempotency tests pass |
-| Capture quota state knew only CaptureRun attempts | Combined CaptureRun and MaintenanceRun evidence in one quota calculation | Existing capture priorities/reserves remain; maintenance cannot hide headerless attempts | Capture/quota and daily-maintenance tests pass |
-| Modernized R45 helpers existed without runtime ownership | Factored reusable grid/select/fit/predict helpers into backtest and prospective services | Existing probability/Decision semantics are unchanged; only a formerly disconnected arm is produced when evidence is valid | Positive persistence and strict-cutoff tests pass |
-| Long-running watchdog could retain a failed DB wrapper | Refresh old connections and close a failed wrapper | Liveness semantics/event suppression remain unchanged | Failure/recovery tests pass |
-| Runtime profile inspection could hide profiled containers | One all-profile Compose boundary serves status and shutdown | Same project/volumes; broader correct visibility only | Runtime-control tests and Compose service inventory pass |
-| New maintenance paths repeated provider/error/audit concerns | Central persistent MaintenanceRun lifecycle and terminal event helper | Capability-specific due/call logic remains explicit; no extra scheduler | Daily/weekly idempotency tests pass |
+- `djangorestframework`;
+- `django-celery-beat`;
+- `django-celery-results`;
+- legacy `bet` app/runtime;
+- obsolete serializer/Pylint surfaces associated with the removed baseline.
 
-Repository-wide inspection covered capture, pipeline, prediction, capital,
-sync/reconciliation, both provider clients, management commands, observability,
-settings/tooling, and the complete test tree. No product-semantic capital,
-Decision, outcome, price, or betting changes were absorbed.
+Retained dependencies were audited deliberately rather than mass-upgraded blindly.
 
-## Test-suite maintenance review
+Final known dependency evidence:
 
-- Removed tests for deleted legacy bet/serializer runtime.
-- Replaced legacy R45 inert-accounting assertions with active persistence and
-  anti-leakage contracts.
-- Reused the existing football factories/helpers for maintenance, R45, capture,
-  and Inkabet coverage rather than adding a second model factory layer.
-- Consolidated manual/automatic Inkabet behavior behind one implementation
-  while preserving command/provider contract tests.
-- Added focused profile visibility/quiescence, daily catalogue, season
-  eligibility, weekly no-new-evidence, automatic Inkabet, and watchdog recovery
-  tests.
-- Kept branch coverage global; no functional code was excluded to raise it.
+- `pip check`: PASS;
+- `pip-audit --local`: PASS, no known vulnerabilities;
+- Django system check: PASS;
+- migration drift: PASS;
+- Black/Ruff: PASS;
+- `make check`: PASS after the final PR-review corrections, maintainer-reported;
+- pre-review final full suite: 271 tests, 86.41% branch coverage;
+- required global branch-coverage floor: satisfied;
+- avoidable Penaltyblog/NumPy/test warnings: none reported.
 
-## Product Findings
+NumPy remains on the documented compatibility version selected for Penaltyblog warning hygiene rather than being blindly advanced to the incompatible warning-producing combination.
 
-- Active experimentation now has an evidence-generation lifecycle, but no model
-  or policy has been selected as a winner.
-- Provider quota on the free plan is shared by immediate capture and maintenance;
-  maintenance correctly runs after immediate work and can defer.
-- A current Season with zero canonical Matches is the auditable bootstrap signal.
-  A valid empty provider response remains incomplete and may retry on a later
-  daily cycle; a populated successful Season is never fetched again.
-- Inkabet remains useful only as secondary market evidence. It is not canonical
-  football identity/outcome authority.
+## 4. Persistent migration and cleanup UAT
 
-## Harness Findings
+The maintainer persistent database was backed up before destructive UAT.
 
-- Buildx needs to update state under `~/.docker`; the sandboxed rebuild fails
-  before compilation and requires approved Docker execution.
-- pip-audit 2.10.1 rejects the older `--disable-pip` invocation without a hashed
-  requirements file. Auditing the complete installed image with `--local` is the
-  compatible reproducible gate.
-- Compose-run checks start DB/Redis dependencies but do not migrate the normal
-  persistent database. CI therefore uses profile-aware `compose down` for its
-  disposable cleanup; operator `safe-down` checks whatever run tables exist and
-  reports a missing new maintenance table until migration.
+Safety dump:
 
-## New Work Discovered
+- `tmp/FS-008-pre-uat-cleanup.dump`;
+- created before applying cleanup;
+- local/ephemeral only.
 
-- PRODUCT: FS-009 still owns presentation/reporting over persisted experiments;
-  FS-010 still owns comparative model/policy evaluation. Neither is part of
-  FS-008.
-- PRODUCT: Inkabet extended-statistics ingestion remains unimplemented and needs
-  a separate explicit product decision.
-- HARNESS: a future lockfile/hashes decision could make requirement-file
-  pip-audit independent of the built environment; the current installed-image
-  audit is complete and green.
-- OPERATIONS: provider-denied or genuinely empty new Seasons need observation in
-  real UAT to calibrate daily bounds; no automatic expansion is justified yet.
+Persistent migrations:
 
-## Pending / blocked
+- applied successfully;
+- Django integrity check PASS;
+- migration drift PASS;
+- PostgreSQL unvalidated FK query returned 0.
 
-PENDING maintainer control:
+The exact synthetic FS-004 UAT graph was classified as unambiguous and deleted only after a dry-run manifest showed zero unexpected related rows.
 
-- review the complete diff and artifacts;
-- back up and migrate the persistent database;
-- run real provider/R45/maintenance UAT;
-- run operational, dev, shutdown, Grafana, and watchdog interruption UAT;
-- review and optionally apply the exact FS004 synthetic cleanup;
-- CI and maintainer review.
+Deleted exact synthetic graph:
 
-BLOCKED: none in implementation. Live/persistent/destructive evidence is
-intentionally maintainer-owned.
+- Source: `3`
+- Competition: `2508`
+- Season: `21200`
+- Teams: `25`, `26`
+- Matches: `1144`–`1153`
+- Bookmaker: `16`
+- OddsMarket: `3`
+- OddsObservation: `60`–`68`
+- PredictionExperiment: `4`
+- Predictions: `1155`–`1164`
+- Decisions: `10757`–`10766`
+- CapitalExperiments: `1`–`6`
+- CapitalPolicyRuns: `1`–`42`
+- CapitalLedgerEntries: `1`–`70`
 
-## Exact maintainer UAT order
+Post-cleanup verification found no remaining rows for those exact candidates.
 
-Use the new image and the ignored local `.env`; never add bookmaker credentials.
-Replace only the explicitly marked research IDs/dates after inspecting the
-queries.
+Known real evidence was preserved, including:
 
-### 1. Quiesce, back up, and migrate the existing database
+- CaptureRuns `40`–`47`;
+- PipelineRuns `17`–`24`.
+
+Post-cleanup DB counts recorded during UAT:
+
+- Source: 2
+- Competition: 1241
+- Season: 8674
+- Team: 72
+- Match: 1547
+- Bookmaker: 15
+- OddsMarket: 2
+- OddsObservation: 321
+- PredictionExperiment: 9
+- Prediction: 1174
+- Decision: 10920
+- CapitalExperiment: 5
+- CapitalPolicyRun: 5
+- CapitalLedgerEntry: 6
+- CaptureRun: 47
+- PipelineRun: 20
+- MaintenanceRun: 0
+
+## 5. Weekly maintenance / reselection UAT
+
+A forced real weekly maintenance cycle executed successfully.
+
+Persisted maintenance audit:
+
+- catalogue run `1`: `SKIPPED_QUOTA` under the then-conservative local quota state;
+- weekly evaluation run `2`: `SUCCESS`;
+- same-day repeat: daily catalogue `NOT_DUE` / `QUOTA_RETRY_NOT_DUE`;
+- same-day weekly repeat: `NOT_DUE` / `WEEKLY_INTERVAL_NOT_ELAPSED`.
+
+The weekly evaluation found a complete chronological population for La Liga 2022–2024 and produced backtest experiment `11` for the 2024 outer season.
+
+Selected hyperparameters included:
+
+- Dixon-Coles: `xi=0.0`;
+- Independent Poisson: selected using the Dixon-Coles selection basis;
+- Elo multinomial logit: `C=0.1`, `k=10`.
+
+Backtest experiment `11`:
+
+- Predictions: 1138;
+- Decisions: 10242;
+- `MODERNIZED_R45` predictions: 0;
+- `MODERNIZED_R45` decisions: 0;
+- `MODERNIZED_R45`: `UNAVAILABLE` with `INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE`;
+- `MARKET_CONSENSUS`: `UNAVAILABLE` with `INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS`.
+
+This is an accepted factual negative result, not dormant wiring: the arm is ACTIVE but historical market evidence is insufficient.
+
+Premier League, Bundesliga, and Serie A initially remained unavailable for this weekly backtest because the persistent DB lacked three populated consecutive historical seasons.
+
+## 6. Real post-cleanup pipeline UAT
+
+A bounded real pipeline was executed after cleanup:
+
+- PipelineRun: `25`;
+- trigger: `MANUAL`;
+- status: `SUCCESS`;
+- CaptureRun: `48`;
+- provider attempts: exactly `1`;
+- provider pages: `1`;
+- fixtures changed: `1`;
+- matches resolved: `1`;
+- observations created: `0`;
+- Inkabet secondary status: `NO_WORK` because this run executed `RESULT_REFRESH`, not a due `ODDS_CAPTURE`;
+- errors: none.
+
+The completed real work resolved Match `1554`.
+
+The provider response established current quota headers and changed the runtime quota view from the previous conservative bootstrap estimate to:
+
+- basis: `HEADER_CURRENT_UTC_EPOCH`;
+- daily limit: `100`;
+- remaining after the call: `99`.
+
+This confirms provider headers are the current quota authority once observed.
+
+## 7. Prospective Prediction → Decision evidence
+
+Real resolved prospective evidence was verified without fabricating historical timestamps.
+
+Prediction `1181`:
+
+- experiment: `8`;
+- competition: La Liga (`1278`);
+- match: `1156`, Levante vs Real Betis;
+- model: `MARKET_CONSENSUS`;
+- cutoff: `2026-08-29T00:01:19+00:00`;
+- predicted outcome: `AWAY`;
+- actual outcome: `HOME`;
+- evaluated at: `2026-08-31T02:43:45.659310+00:00`.
+
+Associated actionable Decision `10895`:
+
+- policy: `MODAL_ALL`;
+- action: `AWAY`;
+- decision time equals the prediction cutoff;
+- selected price: `2.2800`;
+- selected OddsObservation: `197`;
+- expected value: approximately `-0.02064646`.
+
+Additional selective-confidence decisions were persisted, including explicit `NO_BET` outcomes above their thresholds.
+
+No CapitalLedger trace was fabricated for this selected decision. Existing capital replay correctly reported factual unavailability where no selected decision basis or resolved canonical outcome was available.
+
+## 8. Scheduler / observability UAT
+
+Scheduler ownership:
+
+- pipeline automation enabled;
+- capture standalone automation disabled;
+- registered Beat schedule contains only `football-pipeline-wake` → `football.pipeline.wake`;
+- no second independent maintenance/Inkabet scheduler exists.
+
+Grafana health:
+
+- database: `ok`;
+- Grafana version observed: `13.2.0`.
+
+Scheduler terminal correlation:
+
+- PipelineRun `22`;
+- persisted status: `FAILED`;
+- exactly one Loki `PIPELINE_FAILED`;
+- correlated by `pipeline_run_id=22`;
+- capture_run_id: `45`;
+- incident fingerprint: `8237c8f971ba52dbbc3c9e26`.
+
+Healthy terminal correlation:
+
+- PipelineRun `25`;
+- exactly one Loki `PIPELINE_SUCCEEDED`;
+- outcome `SUCCESS`;
+- capture_run_id: `48`;
+- incident fingerprint: `e8b78eae4dc72a46138e6811`.
+
+## 9. Watchdog controlled-failure UAT
+
+A real controlled PostgreSQL interruption was executed.
+
+Before failure:
+
+- watchdog container ID: `016524213d7169609e84338e9fad0d8fddfbe0d1e79b23f30ba1846f034ad9f4`;
+- restart count: 0;
+- status: running.
+
+During DB failure Loki contained exactly one new incident:
+
+- event: `OBSERVABILITY_WATCHDOG_FAILED`;
+- severity: `ERROR`;
+- component: `observability-watchdog`;
+- operation: `query_pipeline_liveness`;
+- failure kind: `database_dependency`;
+- exception: `OperationalError`;
+- incident fingerprint: `cb109b86d0e3caa6c3e9824c`.
+
+After PostgreSQL recovery:
+
+- same watchdog container ID;
+- restart count remained 0;
+- watchdog still running;
+- total failure events since test start remained exactly 1.
+
+Result:
+
+```text
+DB failure
+→ one actionable bounded incident
+→ no error storm
+→ PostgreSQL restored
+→ same watchdog reconnects without container restart
+```
+
+PASS.
+
+## 10. Runtime lifecycle UAT
+
+`make up`:
+
+- complete operational/observability topology runs together;
+- scheduled dispatch is possible;
+- one Beat owner only.
+
+`make safe-down`:
+
+- drained with zero active/reserved/scheduled Celery work;
+- zero running CaptureRun/MaintenanceRun/PipelineRun;
+- removed all project containers;
+- Grafana port 3000 became unreachable;
+- did not use `down -v`.
+
+Named volumes before and after were identical:
+
+- `finsport_postgres_data`;
+- `finsport_redis_data`;
+- `finsport_loki_data`;
+- `finsport_alloy_data`;
+- `finsport_grafana_data`.
+
+`make dev-up`:
+
+- starts db, Redis, Django, Celery worker, Nginx;
+- does not start Celery Beat;
+- does not start watchdog, Loki, Alloy, or Grafana;
+- `scheduled_dispatch_possible=false`;
+- queue depth 0;
+- no active/reserved/scheduled Celery work.
+
+PASS.
+
+## 11. Unit-test provider isolation
+
+During FS-008 execution a harness defect was found: old capture tests could inherit operational `INKABET_AUTOMATIC_ENABLED=True` and therefore construct the real Inkabet client, causing unintended external HTTP during pytest.
+
+Correction:
+
+- capture-test defaults explicitly disable automatic Inkabet unless the test enables it;
+- automatic Inkabet tests inject a fake client;
+- an autouse test guard fails fast on unmocked API-Football/requests provider HTTP.
+
+A first direct test override introduced duplicate `override_settings` keys and caused collection failure; this was corrected with dictionary-merge overrides.
+
+Focused capture result after correction:
+
+- 35 passed;
+- approximately 2.68 seconds;
+- no real provider delay.
+
+This is a HARNESS finding, not a product failure.
+
+## 12. GitHub review findings
+
+Codex review on PR #13 produced three P2 findings. All three were verified as valid and corrected in the review-fix commit pushed at head `df38557cc67c9d8ee61e1e10fbb53d2f39d1a148`.
+
+### P2 — bounded maintenance bootstrap
+
+Problem:
+
+- headerless `BOUNDED_BOOTSTRAP` used bootstrap availability but still subtracted the normal capture reserve;
+- with bootstrap `2` and reserve `10`, maintenance could reject itself before making the bounded call needed to establish real quota headers.
+
+Fix:
+
+- unknown-reserve bootstrap admission now waives the reserve for that bounded bootstrap admission, matching the established capture-executor principle;
+- once real headers are known, normal provider reserve enforcement remains active.
+
+### P2 — weekly evidence signature omitted market observations
+
+Problem:
+
+- weekly change detection only included resolved Match evidence;
+- adding new historical `OddsObservation` rows without modifying Matches could incorrectly produce `NO_WORK`;
+- `MARKET_CONSENSUS` / `MODERNIZED_R45` could remain stale after legitimate market evidence arrived.
+
+Fix:
+
+- weekly evidence signature now includes relevant historical odds-observation count/freshness/identity evidence;
+- regression coverage proves new market evidence makes the next due weekly cycle execute.
+
+### P2 — Inkabet snapshot update metric
+
+Problem:
+
+- `snapshots_changed` compared row counts only;
+- changing prices on an existing Inkabet `OddsSnapshot` preserved the row count and incorrectly reported zero changes.
+
+Fix:
+
+- Inkabet snapshots are compared by before/after value state, analogous to the primary API-Football path;
+- regression coverage proves a later price update counts as a changed snapshot.
+
+Focused tests and `make check` passed before the review-fix push.
+
+## 13. Product findings
+
+1. `MODERNIZED_R45` can be operationally ACTIVE while producing an honest `UNAVAILABLE` result for a specific population. Lack of evidence must not be confused with dormant code.
+2. Historical fixture/results coverage and historical market-price coverage are separate problems. Existing results are not sufficient for market-consensus/R45 backtesting.
+3. Provider quota headers are authoritative once observed; conservative bootstrap state is only a safe temporary estimate.
+4. Periodic maintenance is evidence-generation infrastructure and belongs under the same pipeline scheduler ownership rather than under a second scheduler.
+5. Inkabet is secondary market evidence only; it is not canonical identity/outcome authority.
+6. New historical market evidence is a real input to weekly evaluation and therefore must invalidate the unchanged-evidence signature.
+
+## 14. Harness / process findings
+
+1. The initial FS-008 Codex prompt incorrectly prohibited the versioned feedback file, repeating the FS-007 orchestration regression. Correct durable sequence:
+
+   ```text
+   implementation/correction pass
+   → create/update factual PRE-UAT feedback snapshot in the same pass
+   → execution chat reconciles final feedback after UAT + PR review
+   → never spend a separate Codex pass only on feedback
+   ```
+
+2. The first complete-diff artifact omitted a safety-critical cleanup script; relevant versionable/untracked implementation surfaces must be represented during real diff review.
+3. A free-plan fixture discovery horizon of 2 days attempted an unsupported provider date; corrected baseline is 1 day ahead.
+4. `make dev-up` originally did not fail closed against prior profiled runtime/stale Redis work; it now tears down prior project services and guards the persistent safe queue before starting the development runtime.
+5. Prospective R45 summary originally treated an available fit as `PRODUCED` even when no R45 Prediction persisted; status now follows actual persistence.
+6. Unit tests accidentally allowed real Inkabet HTTP; provider HTTP is now fail-fast unless explicitly mocked/injected.
+7. Several execution-chat probes were wrong but did not indicate product defects:
+   - queried nonexistent `CaptureRun.operational_cause`;
+   - broad legacy `git grep` matched intentional test literals;
+   - stdout was incorrectly treated as watchdog observability authority before querying Loki.
+8. Interactive-shell command blocks must not use `exit` in a way that can close the maintainer terminal. This is already covered by F009 and was violated once during UAT orchestration.
+9. `tmp/**` artifacts are ephemeral and must not be regenerated/frozen for closure ceremony after the relevant diff/evidence has already been reviewed. This is already covered by F009 and was violated once in the proposed UAT flow.
+10. Long/critical output should state in advance exactly what evidence must be retained; use `tee tmp/...` from the first run when the output can scroll away.
+
+## 15. New Work Discovered / follow-up
+
+These are follow-ups, not blockers to FS-008 and not automatically approved tickets.
+
+### A. Complete historical fixture/results populations
+
+Current persistent historical population found during UAT:
+
+- Premier League: 2024 complete; 2022/2023 missing;
+- Bundesliga: 2022/2023/2024 missing;
+- Serie A: 2022/2023/2024 missing;
+- La Liga: 2022/2023/2024 already populated.
+
+When API-Football quota is available, ingest only the eight missing season populations using the existing `sync_football_season` command and stop on the first provider/quota/access error.
+
+This improves ordinary model/backtest evidence but does **not** solve historical market evidence.
+
+### B. Research a historical-odds source
+
+The current DB has historical results but lacks historical `OddsObservation` populations for the seasons needed by market-dependent evaluation.
+
+A future F010 research task should identify a lawful/usable source that can provide:
+
+- historical prematch 1X2 / MW3W odds;
+- bookmaker-level values where possible;
+- real historical observation/provider timestamps;
+- Premier League, Bundesliga, Serie A, and La Liga coverage;
+- at least the historical seasons used by backtests;
+- documented ToS/licensing;
+- cost/quota/access constraints;
+- a provenance-preserving ingestion path into canonical `OddsObservation`.
+
+Do **not** synthesize historical prices or backdate current snapshots.
+
+The PR-review correction to the weekly evidence signature means that a legitimate future odds backfill will now trigger the next due evaluation instead of being ignored as unchanged evidence.
+
+### C. Historical-ingest operator recipe
+
+Run only after checking quota and only with the scheduler stopped:
 
 ```bash
 cd ~/Projects/finsport
-git branch --show-current
-git status --short
+
 make safe-down
 docker compose up -d --wait db
-mkdir -p tmp
-docker compose exec -T db sh -c \
-  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
-  > tmp/FS-008-pre-uat-cleanup.dump
-test -s tmp/FS-008-pre-uat-cleanup.dump
-docker compose run --rm --no-deps django-web \
-  python manage.py showmigrations football
-docker compose run --rm --no-deps django-web \
-  python manage.py migrate --noinput
-docker compose run --rm --no-deps django-web \
-  python manage.py showmigrations football
+
+for spec in \
+  "1273 2022" \
+  "1273 2023" \
+  "1274 2022" \
+  "1274 2023" \
+  "1274 2024" \
+  "1275 2022" \
+  "1275 2023" \
+  "1275 2024"
+do
+  set -- $spec
+  competition="$1"
+  season="$2"
+
+  count=$(
+    docker compose run --rm --no-deps -T django-web \
+      python manage.py shell -c \
+      "from football.models import Match; print(Match.objects.filter(season__competition_id=$competition, season__year=$season).count())" \
+      | tail -n 1
+  )
+
+  if [ "$count" != "0" ]; then
+    echo "SKIP competition=$competition season=$season existing_matches=$count"
+    continue
+  fi
+
+  echo "=== SYNC competition=$competition season=$season ==="
+
+  docker compose run --rm --no-deps django-web \
+    python manage.py sync_football_season \
+    "$competition" "$season" || break
+done
 ```
 
-### 2. Prove the fresh migration/test path and cleanup dry run
+Afterward verify exact Match counts before running focused backtests.
 
-```bash
-make check
-docker compose run --rm --no-deps -T django-web \
-  python manage.py shell < tmp/FS-008_uat_cleanup.py
+No historical odds sweep is implied by this command.
+
+## 16. Durable source reconciliation for Main Chat
+
+Recommended source projection after merge:
+
+- **F001**: reflect materially active capability state if it currently still describes R45/Inkabet/maintenance as deferred.
+- **F003**: incorporate `MaintenanceRun`, pipeline-owned periodic maintenance, active R45 path, and automatic Inkabet MW3W boundary.
+- **F004**: incorporate final operator contract for `make up`, `make dev-up`, `make status`, `make safe-down`, single Beat owner, persistent queue guard, and watchdog reconnect behavior.
+- **F006**: mark FS-008 completed; replace stale deferred language for R45/Inkabet/new-season/weekly reselection; record historical results enrichment and historical-odds research as discovered future work without inventing priority.
+- **F008/F009**: do not version-bump for ticket-specific bugs or individual review comments. Most execution problems found here are already covered by F009 v1.7. Main Chat should only consider clarifying the feedback-sequencing rule if the current wording still permits an implementation prompt to prohibit the versioned factual feedback snapshot.
+- **F010**: use for the future historical-odds source investigation; no methodology change was established by FS-008 itself.
+
+## 17. Acceptance status
+
+Technical acceptance: **PASS**
+
+Blocking PENDING items: **0**
+
+Permitted factual limitations:
+
+- historical market evidence is insufficient for market-dependent historical arms;
+- some enabled leagues do not yet have complete 2022–2024 Match populations;
+- Inkabet extended statistics are not implemented.
+
+These limitations are explicit and do not invalidate FS-008.
+
+## 18. Operational close
+
+At final feedback generation:
+
+- PR #13 is open and mergeable;
+- review-fix code is pushed;
+- final feedback still needs one versioned documentation commit because the last review correction was already committed without the reconciled final feedback;
+- merge must wait for the latest GitHub checks required by the repository to be green.
+
+After that:
+
+```text
+final feedback commit
+→ push
+→ squash merge PR #13
+→ sync local master
+→ delete ticket branch
+→ delete FS-008 tmp artifacts
+→ move Planka Review → Done
+→ handoff to Main Chat
 ```
-
-Review that JSON. Do not set `FS008_APPLY` yet.
-
-### 3. Discover an eligible real research population
-
-```bash
-docker compose run --rm --no-deps django-web python manage.py shell -c \
-  "from django.db.models import Count; from football.models import Competition, Season; print(list(Season.objects.filter(competition__enabled=True, competition__competition_type='League').annotate(matches_count=Count('matches')).values('competition_id','competition__name','year','is_current','matches_count').order_by('competition_id','year')))"
-```
-
-Set these task-specific values from reviewed canonical rows:
-
-```bash
-export FS008_COMPETITION_ID=<local-competition-id>
-export FS008_OUTER_SEASON=<outer-season-year-with-two-prior-seasons>
-export FS008_TARGET_DATE=<YYYY-MM-DD-with-eligible-upcoming-match>
-export FS008_CUTOFF=<offset-aware-ISO-8601-before-kickoff>
-export FS008_MATCH_ID=<eligible-local-match-id>
-```
-
-### 4. Run daily maintenance and weekly evaluation/reselection now
-
-This performs bounded read-only provider work when due.
-
-```bash
-docker compose run --rm django-web \
-  python manage.py run_football_maintenance --force-weekly
-docker compose run --rm django-web \
-  python manage.py run_football_maintenance
-docker compose run --rm --no-deps django-web python manage.py shell -c \
-  "from football.models import MaintenanceRun; print(list(MaintenanceRun.objects.values('id','capability','logical_identity','status','attempt_count','provider_attempts','next_eligible_at','completed_at','summary').order_by('-id')[:20]))"
-```
-
-The second same-day call must show daily `NOT_DUE`; weekly must not recompute.
-Catalogue/season failures must be factual `SKIPPED_QUOTA`, `DEGRADED`, or
-`FAILED`, never silent repeated calls.
-
-### 5. Prove MODERNIZED_R45 backtest selection and persistence
-
-```bash
-docker compose run --rm --no-deps django-web \
-  python manage.py evaluate_football_predictions \
-  --competition "$FS008_COMPETITION_ID" --season "$FS008_OUTER_SEASON"
-docker compose run --rm --no-deps django-web python manage.py shell -c \
-  "from football.models import PredictionExperiment, Prediction; e=PredictionExperiment.objects.filter(competition_id=$FS008_COMPETITION_ID, mode='BACKTEST', completed_at__isnull=False).latest('completed_at'); print({'experiment':e.id,'config':e.config.get('selected_hyperparameters',{}).get('modernized_r45'),'summary':e.summary,'r45_predictions':e.predictions.filter(model_code=Prediction.MODERNIZED_R45).count(),'r45_decisions':e.decisions.filter(prediction__model_code=Prediction.MODERNIZED_R45).count()})"
-```
-
-### 6. Prove bounded prospective API-Football + Inkabet + R45
-
-```bash
-docker compose run --rm django-web python manage.py run_football_capture \
-  --at "$FS008_CUTOFF" --match-id "$FS008_MATCH_ID" \
-  --purpose ODDS_CAPTURE --max-provider-attempts 2 --dry-run
-docker compose run --rm django-web python manage.py run_football_pipeline \
-  --at "$FS008_CUTOFF" --max-provider-attempts 2
-docker compose run --rm --no-deps django-web python manage.py shell -c \
-  "from football.models import CaptureRun, OddsObservation, Prediction, Decision; print({'capture':CaptureRun.objects.latest('id').summary,'inkabet_observations':list(OddsObservation.objects.filter(match_id=$FS008_MATCH_ID,source__code='inkabet').values('id','observed_at','home','draw','away')),'r45_predictions':list(Prediction.objects.filter(match_id=$FS008_MATCH_ID,model_code=Prediction.MODERNIZED_R45).values('id','experiment_id','variant','model_version','model_config','cutoff','diagnostics')),'r45_decisions':list(Decision.objects.filter(match_id=$FS008_MATCH_ID,prediction__model_code=Prediction.MODERNIZED_R45).values('id','policy_code','action','selected_odds_observation_id'))})"
-```
-
-If no odds window is actually due, preserve the `NO_WORK` evidence and choose a
-real eligible row; do not move timestamps or fabricate provider data.
-
-### 7. Operational stack, scheduler, maintenance state, and Grafana
-
-```bash
-make up
-make status
-docker compose --profile operational --profile observability ps
-docker compose logs --tail=120 celery-beat celery observability-watch
-curl --fail --silent --show-error http://127.0.0.1:3000/api/health
-```
-
-Verify exactly one pipeline Beat entry and no second maintenance/Inkabet
-scheduler. Inspect `Football > Maintenance runs`, Capture runs, Prediction
-experiments, Predictions, and Decisions in Admin.
-
-### 8. Watchdog PostgreSQL interruption/recovery
-
-```bash
-docker compose stop db
-sleep 75
-docker compose logs --tail=120 observability-watch
-docker compose start db
-docker compose up -d --wait db
-sleep 75
-docker compose logs --tail=120 observability-watch
-```
-
-Expect one bounded actionable dependency incident, successful reconnection
-without restarting the watchdog, and no error storm.
-
-### 9. Profile-complete safe shutdown and volume preservation
-
-```bash
-docker volume inspect finsport_postgres_data finsport_redis_data \
-  finsport_loki_data finsport_alloy_data finsport_grafana_data \
-  > tmp/FS-008-volumes-before.json
-make safe-down
-docker compose --profile operational --profile observability ps -a
-if curl --fail --silent http://127.0.0.1:3000/api/health; then exit 1; fi
-docker volume inspect finsport_postgres_data finsport_redis_data \
-  finsport_loki_data finsport_alloy_data finsport_grafana_data \
-  > tmp/FS-008-volumes-after.json
-```
-
-### 10. Development-safe stack with operational `.env` unchanged
-
-```bash
-make dev-up
-make status
-docker compose --profile operational --profile observability ps
-if docker compose --profile operational --profile observability ps --services \
-  | grep -E 'celery-beat|observability-watch|loki|alloy|grafana'; then exit 1; fi
-make safe-down
-```
-
-`scheduled_dispatch_possible` must be false and Beat must be absent.
-
-### 11. Optional maintainer-owned synthetic cleanup, only after review
-
-```bash
-docker compose up -d --wait db
-test -s tmp/FS-008-pre-uat-cleanup.dump
-docker compose run --rm --no-deps -T \
-  -e FS008_APPLY=DELETE_FS004_SYNTHETIC_GRAPH \
-  -e FS008_SAFETY_DUMP=/app/tmp/FS-008-pre-uat-cleanup.dump \
-  django-web python manage.py shell < tmp/FS-008_uat_cleanup.py
-docker compose run --rm --no-deps django-web python manage.py check
-docker compose run --rm --no-deps django-web python manage.py migrate --check
-make dev-up
-make status
-```
-
-This final apply remains optional and destructive. Stop and investigate any
-manifest mismatch or external-reference finding; never weaken the guard.
