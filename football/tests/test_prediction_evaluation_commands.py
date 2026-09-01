@@ -74,10 +74,7 @@ def test_bounded_backtest_persists_predictions_decisions_and_unavailable_arms(
         experiment.predictions.filter(model_code=Prediction.MARKET_CONSENSUS).count()
         == 1
     )
-    assert (
-        experiment.decisions.filter(policy_code="LEGACY_R45", prediction=None).count()
-        == 4
-    )
+    assert not experiment.decisions.filter(prediction=None).exists()
     assert experiment.decisions.filter(action=Decision.ACTION_NO_BET).exists()
     assert experiment.decisions.filter(
         policy_code="MODAL_ALL", selected_odds_observation__isnull=False
@@ -88,7 +85,7 @@ def test_bounded_backtest_persists_predictions_decisions_and_unavailable_arms(
     ] == {"4": 1}
     assert tuning_inputs["years"] == {2022, 2023}
     assert experiment.summary["unavailable_arms"]["MODERNIZED_R45"] == (
-        "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS"
+        "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
     )
     training_counts = {
         row.diagnostics["training_matches"]
@@ -186,21 +183,82 @@ def test_predict_day_history_respects_explicit_cutoff(monkeypatch):
     assert all(before_cutoff.id in history for history in fitted_histories)
     assert all(after_cutoff.id not in history for history in fitted_histories)
     experiment = experiments[0]
-    assert experiment.summary["r45_arms"]["MODERNIZED_R45"] == {
-        "status": "UNAVAILABLE",
-        "reason": "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS",
-        "historical_temporal_market_matches": 0,
-    }
-    assert experiment.summary["r45_arms"]["LEGACY_R45"] == {
-        "status": "UNAVAILABLE",
-        "reason": "EXACT_LEGACY_CONTEXT_UNAVAILABLE",
-        "decision_count": 1,
-        "prediction_count": 0,
-    }
-    decision = experiment.decisions.get(policy_code="LEGACY_R45")
-    assert decision.prediction is None
-    assert decision.action == Decision.ACTION_NO_BET
-    assert decision.reason == "EXACT_LEGACY_CONTEXT_UNAVAILABLE"
+    assert experiment.summary["r45_arms"]["MODERNIZED_R45"]["status"] == ("UNAVAILABLE")
+    assert experiment.summary["r45_arms"]["MODERNIZED_R45"]["classification"] == (
+        "ACTIVE"
+    )
+    assert not experiment.decisions.filter(prediction=None).exists()
     assert not experiment.predictions.filter(
         model_code=Prediction.MODERNIZED_R45
     ).exists()
+
+
+def test_modernized_r45_backtest_and_prospective_paths_persist(monkeypatch):
+    competition, seasons, _ = create_synthetic_league()
+    training = list(seasons[0].matches.order_by("kickoff", "id"))
+    validation = list(seasons[1].matches.order_by("kickoff", "id"))
+    outer = list(seasons[2].matches.order_by("kickoff", "id"))[:4]
+    create_synthetic_odds([*training, *validation, *outer])
+    original_eligible = evaluation.eligible_finished_matches
+
+    def bounded_eligible(target_competition, *, season_year=None, before=None):
+        rows = list(
+            original_eligible(
+                target_competition, season_year=season_year, before=before
+            )
+        )
+        return rows[:4] if season_year == seasons[2].year else rows
+
+    selected = {
+        "dixon_coles": {"xi": 0.001},
+        "independent_poisson": {"xi": 0.001},
+        "elo_multinomial_logit": {"k": 20, "C": 1.0},
+    }
+    modernized = {"variant": "M0", "c": 1.0, "prior_strength": 20}
+    monkeypatch.setattr(evaluation, "eligible_finished_matches", bounded_eligible)
+    monkeypatch.setattr(evaluation, "select_hyperparameters", lambda *_: selected)
+    monkeypatch.setattr(
+        evaluation, "select_modernized_config", lambda *_: (0.75, modernized)
+    )
+
+    backtest = evaluation.run_backtest(competition, seasons[2])
+
+    r45_predictions = backtest.predictions.filter(model_code=Prediction.MODERNIZED_R45)
+    assert r45_predictions.count() == 4
+    assert set(r45_predictions.values_list("variant", flat=True)) == {"M0"}
+    assert (
+        backtest.config["selected_hyperparameters"]["modernized_r45"]["selection"]
+        == "inner_walk_forward"
+    )
+    assert backtest.decisions.filter(prediction__in=r45_predictions).exists()
+
+    target = outer[-1]
+    target.status_short = "NS"
+    target.status_long = "Not Started"
+    target.outcome = ""
+    target.home_score = None
+    target.away_score = None
+    target.save(
+        update_fields=[
+            "status_short",
+            "status_long",
+            "outcome",
+            "home_score",
+            "away_score",
+            "modified",
+        ]
+    )
+    cutoff = target.kickoff - timedelta(hours=1)
+
+    prospective = service.predict_competition_day(
+        competition,
+        target.kickoff.date(),
+        cutoff,
+        match_ids=[target.pk],
+    ).experiment
+
+    prediction = prospective.predictions.get(model_code=Prediction.MODERNIZED_R45)
+    assert prediction.variant == "M0"
+    assert prediction.cutoff == cutoff
+    assert prediction.diagnostics["history_max_kickoff"] < cutoff.isoformat()
+    assert prospective.decisions.filter(prediction=prediction).exists()

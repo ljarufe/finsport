@@ -27,6 +27,9 @@ dist/
 *.egg-info/
 node_modules/
 staticfiles/
+.app/staticfiles/
+app/staticfiles/
+logs/
 media/
 .DS_Store
 .idea/

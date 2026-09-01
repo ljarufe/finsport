@@ -10,6 +10,7 @@ from .models import (
     Competition,
     CompetitionSourceRef,
     Decision,
+    MaintenanceRun,
     Match,
     MatchSourceRef,
     OddsMarket,
@@ -129,6 +130,24 @@ class PipelineRunAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
     list_filter = ("trigger", "status", "local_day")
     search_fields = ("cycle_identity",)
     date_hierarchy = "started_at"
+
+
+@admin.register(MaintenanceRun)
+class MaintenanceRunAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "capability",
+        "status",
+        "period_start",
+        "subject_type",
+        "subject_id",
+        "attempt_count",
+        "last_attempt_at",
+        "completed_at",
+    )
+    list_filter = ("capability", "status", "period_start")
+    search_fields = ("logical_identity", "error_class", "error_message")
+    date_hierarchy = "last_attempt_at"
 
 
 @admin.register(CapitalExperiment)

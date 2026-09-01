@@ -1,74 +1,19 @@
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import timedelta
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 
-from .constants import MODERNIZED_R45_VERSION, R45_VARIANTS
+from .constants import (
+    LOGISTIC_C_GRID,
+    MODERNIZED_R45_VERSION,
+    PRIOR_STRENGTH_GRID,
+    R45_VARIANTS,
+)
 from .contracts import ProbabilityResult, UnavailablePrediction
 from .datasets import daily_batches
 from .market import MarketConsensusAdapter
-
-LEGACY_REPLAY_REASONS = (
-    "MISSING_HISTORICAL_PREKICKOFF_R45_ODDS",
-    "MISSING_HISTORICAL_LEAGUE_DRAW_PERCENTAGE",
-)
-
-
-@dataclass(frozen=True)
-class LegacyCandidate:
-    identity: object
-    kickoff: object
-    home_odd: float
-    draw_odd: float
-    away_odd: float
-    league_draw_percentage: float
-
-
-def legacy_reject_reason(candidate, *, now):
-    if (
-        not now + timedelta(minutes=5)
-        <= candidate.kickoff
-        <= now + timedelta(minutes=35)
-    ):
-        return "OUTSIDE_ORIGINAL_KICKOFF_WINDOW"
-    if abs(candidate.home_odd - candidate.away_odd) > 3:
-        return "HOME_AWAY_DIFFERENCE_ABOVE_3"
-    if not 2.8 <= candidate.draw_odd <= 4.2:
-        return "DRAW_ODD_OUTSIDE_2_8_4_2"
-    if candidate.league_draw_percentage < 25:
-        return "LEAGUE_DRAW_PERCENTAGE_BELOW_25"
-    if candidate.home_odd < 1.5 or candidate.away_odd < 1.5:
-        return "HOME_OR_AWAY_ODD_BELOW_1_5"
-    return ""
-
-
-def legacy_score(candidate, *, max_league_draw_percentage):
-    denominator = max_league_draw_percentage - 25
-    if denominator <= 0:
-        raise ValueError("max_league_draw_percentage must be greater than 25")
-    team_difference_score = 5 * (1 - abs(candidate.home_odd - candidate.away_odd) / 3)
-    draw_score = 2 * candidate.draw_odd - 6
-    league_score = 2 * (candidate.league_draw_percentage - 25) / denominator
-    return team_difference_score + draw_score + league_score
-
-
-def select_legacy_r45(candidates, *, now, max_league_draw_percentage):
-    eligible = [
-        candidate
-        for candidate in candidates
-        if not legacy_reject_reason(candidate, now=now)
-    ]
-    if not eligible:
-        return None
-    return max(
-        eligible,
-        key=lambda candidate: legacy_score(
-            candidate, max_league_draw_percentage=max_league_draw_percentage
-        ),
-    )
 
 
 def logit(probability, epsilon=1e-6):
@@ -120,13 +65,17 @@ def build_modernized_feature_rows(matches, *, variant, prior_strength):
             for year, (_, count) in completed_by_season.items()
             if year < season_year
         )
-        if prior_matches:
+        if prior_matches or variant in ("M0", "M1"):
             current_draws, current_matches = completed_by_season[season_year]
-            draw_rate = shrunk_draw_rate(
-                current_draws,
-                current_matches,
-                prior_draws / prior_matches,
-                prior_strength,
+            draw_rate = (
+                shrunk_draw_rate(
+                    current_draws,
+                    current_matches,
+                    prior_draws / prior_matches,
+                    prior_strength,
+                )
+                if prior_matches
+                else 0.0
             )
             for match in batch:
                 market = market_adapter.predict(match, match.kickoff)
@@ -249,4 +198,81 @@ def select_modernized_config(training_matches, validation_matches, configs):
         )
         if results
         else None
+    )
+
+
+def modernized_config_grid():
+    return [
+        {"variant": variant, "c": c, "prior_strength": prior_strength}
+        for variant in R45_VARIANTS
+        for c in LOGISTIC_C_GRID
+        for prior_strength in PRIOR_STRENGTH_GRID
+    ]
+
+
+def fit_modernized(history, cutoff, config):
+    """Fit the selected arm from strictly prior resolved/market evidence."""
+    if any(match.kickoff >= cutoff for match in history):
+        raise ValueError("Modernized R45 history must be strictly before cutoff.")
+    rows, unavailable = build_modernized_feature_rows(
+        history,
+        variant=config["variant"],
+        prior_strength=config["prior_strength"],
+    )
+    adapter = ModernizedR45Adapter(
+        variant=config["variant"],
+        c=config["c"],
+        prior_strength=config["prior_strength"],
+    )
+    fitted = adapter.fit_features(
+        [row.features for row in rows], [row.is_draw for row in rows]
+    )
+    if isinstance(fitted, UnavailablePrediction):
+        return fitted, unavailable
+    return adapter, unavailable
+
+
+def draw_rate_for_target(history, target, prior_strength):
+    prior = [match for match in history if match.season.year < target.season.year]
+    if not prior:
+        return UnavailablePrediction("NO_PRIOR_SEASON_DRAW_RATE")
+    current = [match for match in history if match.season.year == target.season.year]
+    prior_draws = sum(match.home_score == match.away_score for match in prior)
+    current_draws = sum(match.home_score == match.away_score for match in current)
+    return shrunk_draw_rate(
+        current_draws,
+        len(current),
+        prior_draws / len(prior),
+        prior_strength,
+    )
+
+
+def predict_modernized(adapter, history, match, cutoff):
+    if match.kickoff < cutoff:
+        raise ValueError("Modernized R45 target cannot precede its cutoff.")
+    market = MarketConsensusAdapter().predict(match, cutoff)
+    if isinstance(market, UnavailablePrediction):
+        return market
+    draw_rate = draw_rate_for_target(history, match, adapter.prior_strength)
+    if isinstance(draw_rate, UnavailablePrediction):
+        if adapter.variant in ("M0", "M1"):
+            draw_rate = 0.0
+        else:
+            return draw_rate
+    result = adapter.predict_from_market(market, draw_rate)
+    if isinstance(result, UnavailablePrediction):
+        return result
+    return ProbabilityResult(
+        result.p_home,
+        result.p_draw,
+        result.p_away,
+        diagnostics={
+            **result.diagnostics,
+            "market_cutoff": cutoff.isoformat(),
+            "history_max_kickoff": (
+                max((row.kickoff for row in history), default=None).isoformat()
+                if history
+                else None
+            ),
+        },
     )

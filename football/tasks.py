@@ -3,6 +3,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from football.capture import run_capture
+from football.maintenance import run_periodic_maintenance
 from football.models import CaptureRun, PipelineRun
 from football.observability.events import emit_event, sanitize_text
 from football.observability.pipeline import exception_diagnostic
@@ -94,4 +95,6 @@ def wake_pipeline():
             context=cause["context"],
         )
         raise
-    return result.as_dict()
+    payload = result.as_dict()
+    payload["maintenance"] = run_periodic_maintenance()
+    return payload

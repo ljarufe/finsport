@@ -958,3 +958,54 @@ class CapitalLedgerEntry(models.Model):
                 name="football_capital_ledger_run_decision_unique",
             )
         ]
+
+
+class MaintenanceRun(TimeStampedModel):
+    """Persistent due/idempotency audit for pipeline-owned maintenance."""
+
+    class Capability(models.TextChoices):
+        CATALOGUE = "CATALOGUE", "Catalogue"
+        SEASON_BOOTSTRAP = "SEASON_BOOTSTRAP", "Season bootstrap"
+        WEEKLY_EVALUATION = "WEEKLY_EVALUATION", "Weekly evaluation"
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING", "Running"
+        SUCCESS = "SUCCESS", "Success"
+        NO_WORK = "NO_WORK", "No work"
+        SKIPPED_QUOTA = "SKIPPED_QUOTA", "Skipped due to quota"
+        DEGRADED = "DEGRADED", "Degraded"
+        FAILED = "FAILED", "Failed"
+
+    capability = models.CharField(max_length=30, choices=Capability.choices)
+    logical_identity = models.CharField(max_length=200, unique=True)
+    period_start = models.DateField()
+    subject_type = models.CharField(max_length=40, blank=True)
+    subject_id = models.PositiveBigIntegerField(null=True, blank=True)
+    status = models.CharField(
+        max_length=24, choices=Status.choices, default=Status.RUNNING
+    )
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    started_at = models.DateTimeField(default=timezone.now)
+    last_attempt_at = models.DateTimeField(default=timezone.now)
+    next_eligible_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    provider_attempts = models.PositiveIntegerField(default=0)
+    quota_limit = models.PositiveIntegerField(null=True, blank=True)
+    quota_remaining_after = models.PositiveIntegerField(null=True, blank=True)
+    quota_observed_at = models.DateTimeField(null=True, blank=True)
+    config_snapshot = models.JSONField(default=dict, blank=True)
+    summary = models.JSONField(default=dict, blank=True)
+    error_class = models.CharField(max_length=120, blank=True)
+    error_message = models.CharField(max_length=500, blank=True)
+
+    def __str__(self):
+        return f"{self.capability} {self.status} ({self.logical_identity})"
+
+    class Meta:
+        ordering = ("-started_at", "-id")
+        indexes = [
+            models.Index(
+                fields=["capability", "status", "period_start"],
+                name="football_maintenance_due_idx",
+            )
+        ]

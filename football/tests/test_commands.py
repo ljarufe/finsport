@@ -456,9 +456,7 @@ def test_day_inkabet_categories_failure_is_fail_soft():
             "inkabet_client_class",
             FakeInkabetClient,
         ),
-        mock.patch(
-            "football.management.commands.sync_football_day.emit_event"
-        ) as operational_event,
+        mock.patch("football.inkabet_capture.emit_event") as operational_event,
     ):
         call_command(
             "sync_football_day",
@@ -612,9 +610,7 @@ def test_day_malformed_inkabet_mw3w_is_diagnostic_and_fail_soft():
             "inkabet_client_class",
             FakeInkabetClient,
         ),
-        mock.patch(
-            "football.management.commands.sync_football_day.emit_event"
-        ) as operational_event,
+        mock.patch("football.inkabet_capture.emit_event") as operational_event,
     ):
         call_command(
             "sync_football_day",

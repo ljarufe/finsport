@@ -136,5 +136,9 @@ dmypy.json
 # Project
 selenium-data/*
 tmp/
+logs/
+staticfiles/
+.app/staticfiles/
+app/staticfiles/
 
 # End of https://www.gitignore.io/api/python,django,pycharm

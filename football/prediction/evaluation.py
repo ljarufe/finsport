@@ -12,7 +12,6 @@ from .constants import (
     CONFIDENCE_GRID,
     ELO_K_GRID,
     ENGINE_VERSION,
-    LEGACY_R45_VERSION,
     LOGISTIC_C_GRID,
     MINIMUM_EV_GRID,
     OUTCOMES,
@@ -32,7 +31,12 @@ from .policies import (
     selective_confidence,
     value_policy,
 )
-from .r45 import LEGACY_REPLAY_REASONS
+from .r45 import (
+    fit_modernized,
+    modernized_config_grid,
+    predict_modernized,
+    select_modernized_config,
+)
 
 
 def dependency_versions():
@@ -204,13 +208,12 @@ def persist_standard_policies(experiment, match, prediction, result, cutoff):
             )
 
 
-def _unavailable_summary(*, market_available):
-    unavailable = {
-        "MODERNIZED_R45": "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS",
-        "LEGACY_R45": list(LEGACY_REPLAY_REASONS),
-    }
+def _unavailable_summary(*, market_available, modernized_available):
+    unavailable = {}
     if not market_available:
         unavailable["MARKET_CONSENSUS"] = "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS"
+    if not modernized_available:
+        unavailable["MODERNIZED_R45"] = "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
     return unavailable
 
 
@@ -317,6 +320,18 @@ def run_backtest(competition, season):
             "Backtest requires non-empty train, validation, and outer seasons."
         )
     selected = select_hyperparameters(inner_training, inner_validation)
+    modernized_selection = select_modernized_config(
+        inner_training,
+        inner_validation,
+        modernized_config_grid(),
+    )
+    if modernized_selection is not None:
+        validation_loss, modernized_config = modernized_selection
+        selected["modernized_r45"] = {
+            **modernized_config,
+            "validation_log_loss": validation_loss,
+            "selection": "inner_walk_forward",
+        }
     experiment = PredictionExperiment.objects.create(
         competition=competition,
         mode=PredictionExperiment.MODE_BACKTEST,
@@ -362,6 +377,18 @@ def run_backtest(competition, season):
                 )
             else:
                 fitted_adapters.append(adapter)
+        modernized = None
+        if "modernized_r45" in selected:
+            modernized, fit_unavailable = fit_modernized(
+                history,
+                batch_cutoff,
+                selected["modernized_r45"],
+            )
+            for reason, count in fit_unavailable.items():
+                unavailable_counts[f"MODERNIZED_R45:{reason}"] += count
+            if isinstance(modernized, UnavailablePrediction):
+                unavailable_counts[f"MODERNIZED_R45:{modernized.reason}"] += len(batch)
+                modernized = None
         market = MarketConsensusAdapter()
         for match in batch:
             cutoff = match.kickoff
@@ -382,24 +409,24 @@ def run_backtest(competition, season):
                     experiment, match, market, result, cutoff
                 )
                 persist_standard_policies(experiment, match, prediction, result, cutoff)
+            if modernized is not None:
+                result = predict_modernized(modernized, history, match, cutoff)
+                if isinstance(result, UnavailablePrediction):
+                    unavailable_counts[f"MODERNIZED_R45:{result.reason}"] += 1
+                else:
+                    prediction = _persist_prediction(
+                        experiment,
+                        match,
+                        modernized,
+                        result,
+                        cutoff,
+                        variant=modernized.variant,
+                    )
+                    persist_standard_policies(
+                        experiment, match, prediction, result, cutoff
+                    )
         # Reveal every result in the batch only after every prediction is frozen.
         history.extend(batch)
-
-    for match in outer:
-        decision = Decision(
-            experiment=experiment,
-            match=match,
-            prediction=None,
-            policy_code="LEGACY_R45",
-            policy_variant="",
-            policy_version=LEGACY_R45_VERSION,
-            policy_config={"unavailable_reasons": list(LEGACY_REPLAY_REASONS)},
-            decision_time=match.kickoff,
-            action=Decision.ACTION_NO_BET,
-            reason="UNAVAILABLE_FOR_REPLAY",
-        )
-        decision.full_clean()
-        decision.save()
 
     experiment.summary = {
         **summarize_experiment(experiment),
@@ -412,7 +439,10 @@ def run_backtest(competition, season):
         "unavailable_arms": _unavailable_summary(
             market_available=experiment.predictions.filter(
                 model_code=Prediction.MARKET_CONSENSUS
-            ).exists()
+            ).exists(),
+            modernized_available=experiment.predictions.filter(
+                model_code=Prediction.MODERNIZED_R45
+            ).exists(),
         ),
         "unavailable_counts": dict(unavailable_counts),
     }

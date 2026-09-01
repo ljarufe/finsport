@@ -18,6 +18,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "evaluate_capital_policies",
         "predict_football_day",
         "run_football_capture",
+        "run_football_maintenance",
         "run_football_pipeline",
         "observe_pipeline",
     }
@@ -34,8 +35,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         assert name not in commands
     assert not list((ROOT / "bet_scraper").glob("**/*.py"))
     assert not (ROOT / "common/scrapy_runner.py").exists()
-    assert not list((ROOT / "bet/selenium_bots").glob("**/*.py"))
-    assert not (ROOT / "bet/tasks.py").exists()
+    assert not (ROOT / "bet").exists()
     football_tasks = (ROOT / "football/tasks.py").read_text()
     settings_source = (ROOT / "finsport/settings.py").read_text()
     assert "football.capture.wake" in football_tasks
@@ -47,7 +47,6 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
     assert "default=False" in settings_source
     assert '"football-capture-wake"' in settings_source
     assert not list((ROOT / "accounts").glob("**/*.py"))
-    assert not list((ROOT / "bet/management").glob("**/*.py"))
 
 
 def test_removed_dependencies_and_services_have_no_runtime_configuration():
@@ -67,14 +66,29 @@ def test_removed_dependencies_and_services_have_no_runtime_configuration():
     assert '"accounts"' not in settings
     assert "django-countries" in requirements
     assert '"django_countries"' in settings
+    for removed in (
+        "djangorestframework",
+        "django-celery-beat",
+        "django_celery_results",
+    ):
+        assert removed not in requirements
+    for removed in (
+        '"bet"',
+        '"rest_framework"',
+        '"rest_framework.authtoken"',
+        '"django_celery_beat"',
+        '"django_celery_results"',
+    ):
+        assert removed not in settings
+    assert not (ROOT / "football/serializers.py").exists()
+    assert not (ROOT / ".pylintrc").exists()
     assert "DJANGO_SETTINGS_MODULE = finsport.settings" in pytest_configuration
     assert not (ROOT / "finsport/test_settings.py").exists()
 
 
 def test_offline_dump_inspector_reports_only_safe_research_data(tmp_path):
     dump = tmp_path / "legacy.sql"
-    dump.write_text(
-        """CREATE TABLE public.football_match (
+    dump.write_text("""CREATE TABLE public.football_match (
 );
 CREATE TABLE public.accounts_account (
 );
@@ -94,8 +108,7 @@ COPY public.django_migrations (id, app, name, applied) FROM stdin;
 COPY public.accounts_account (id, username, password, token) FROM stdin;
 1\tprivate-user\tprivate-password\tprivate-token
 \\.
-"""
-    )
+""")
 
     report = inspect_dump(dump)
     serialized = json.dumps(report)

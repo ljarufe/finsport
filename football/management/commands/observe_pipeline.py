@@ -5,6 +5,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db import close_old_connections, connections
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -28,7 +29,10 @@ class Command(BaseCommand):
             raise CommandError("--at requires --once.")
         forced_now = self._parse_at(options["at"]) if options["at"] else None
         while True:
-            self._check(forced_now or timezone.now())
+            self._check(
+                forced_now or timezone.now(),
+                prepare_connection=not options["once"],
+            )
             if options["once"]:
                 return
             time.sleep(settings.OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS)
@@ -40,7 +44,7 @@ class Command(BaseCommand):
             raise CommandError("--at must be an offset-aware ISO-8601 instant.")
         return parsed
 
-    def _check(self, now):
+    def _check(self, now, *, prepare_connection=True):
         path = Path(settings.OBSERVABILITY_WATCHDOG_STATE_FILE)
         state = self._load_state(path)
         enabled = settings.FOOTBALL_PIPELINE_ENABLED
@@ -57,6 +61,8 @@ class Command(BaseCommand):
                 "overdue": False,
             }
         monitoring_since = datetime.fromisoformat(state["monitoring_started_at"])
+        if prepare_connection:
+            close_old_connections()
         try:
             liveness = evaluate_liveness(
                 now=now,
@@ -66,6 +72,10 @@ class Command(BaseCommand):
                 monitoring_since=monitoring_since,
             )
         except Exception as error:
+            # A long-running management command must discard a connection that
+            # failed mid-query so the next iteration can reconnect after a DB
+            # restart instead of reusing a broken wrapper indefinitely.
+            connections["default"].close()
             if not state.get("check_failed"):
                 emit_event(
                     event_code="OBSERVABILITY_WATCHDOG_FAILED",

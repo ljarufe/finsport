@@ -1,9 +1,5 @@
-from datetime import datetime, timedelta
-
 import pytest
-from django.utils import timezone
 
-from football.prediction.constants import LEGACY_R45_VERSION
 from football.prediction.contracts import ProbabilityResult
 from football.prediction.metrics import (
     calibration_data,
@@ -12,13 +8,10 @@ from football.prediction.metrics import (
     prediction_metrics,
 )
 from football.prediction.r45 import (
-    LegacyCandidate,
     ModernizedR45Adapter,
     build_modernized_feature_rows,
-    legacy_reject_reason,
-    legacy_score,
+    fit_modernized,
     modernized_features,
-    select_legacy_r45,
     select_modernized_config,
     shrunk_draw_rate,
 )
@@ -106,57 +99,6 @@ def test_policy_metrics_reports_only_no_bet_reason_distribution():
     }
 
 
-def candidate(now, **changes):
-    values = {
-        "identity": "candidate",
-        "kickoff": now + timedelta(minutes=20),
-        "home_odd": 1.5,
-        "draw_odd": 2.8,
-        "away_odd": 4.5,
-        "league_draw_percentage": 25,
-    }
-    values.update(changes)
-    return LegacyCandidate(**values)
-
-
-def test_legacy_r45_exact_boundaries_score_top_one_and_draw_semantics():
-    now = timezone.make_aware(datetime(2026, 1, 1, 12))
-    accepted = candidate(now)
-    assert legacy_reject_reason(accepted, now=now) == ""
-    assert legacy_reject_reason(candidate(now, away_odd=4.51), now=now)
-    assert legacy_reject_reason(candidate(now, home_odd=1.49), now=now)
-    assert legacy_reject_reason(candidate(now, away_odd=1.49), now=now)
-    assert legacy_reject_reason(candidate(now, draw_odd=4.2), now=now) == ""
-    assert legacy_reject_reason(candidate(now, draw_odd=4.21), now=now)
-    assert legacy_reject_reason(candidate(now, league_draw_percentage=24.99), now=now)
-    assert (
-        legacy_reject_reason(
-            candidate(now, kickoff=now + timedelta(minutes=5)), now=now
-        )
-        == ""
-    )
-    assert (
-        legacy_reject_reason(
-            candidate(now, kickoff=now + timedelta(minutes=35)), now=now
-        )
-        == ""
-    )
-    assert legacy_reject_reason(
-        candidate(now, kickoff=now + timedelta(minutes=36)), now=now
-    )
-    assert legacy_score(accepted, max_league_draw_percentage=35) == pytest.approx(-0.4)
-
-    better = candidate(now, identity="better", home_odd=2, away_odd=2, draw_odd=4)
-    selected = select_legacy_r45(
-        [accepted, better], now=now, max_league_draw_percentage=35
-    )
-    assert selected.identity == "better"
-    assert not hasattr(selected, "p_draw")
-    assert LEGACY_R45_VERSION == (
-        "R45-refund-stop@ef861a4897e4bfdff938e8541e8185f731ddaa5c"
-    )
-
-
 @pytest.mark.parametrize("variant,length", [("M0", 1), ("M1", 2), ("M2", 2), ("M3", 3)])
 def test_modernized_r45_variants_preserve_home_away_ratio(variant, length):
     market = ProbabilityResult(0.45, 0.30, 0.25)
@@ -209,3 +151,17 @@ def test_modernized_feature_rows_freeze_daily_draw_rate_and_select_config():
     )
     assert selected is not None
     assert selected[1] == {"variant": "M3", "c": 1.0, "prior_strength": 20}
+
+
+@pytest.mark.django_db
+def test_modernized_fit_rejects_history_at_or_after_cutoff():
+    _, seasons, _ = create_synthetic_league()
+    history = list(seasons[0].matches.order_by("kickoff", "id"))
+    cutoff = history[-1].kickoff
+
+    with pytest.raises(ValueError, match="strictly before cutoff"):
+        fit_modernized(
+            history,
+            cutoff,
+            {"variant": "M0", "c": 1.0, "prior_strength": 20},
+        )
