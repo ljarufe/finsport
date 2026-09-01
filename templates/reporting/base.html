@@ -1,0 +1,27 @@
+{% load static %}<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Finsport{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'reporting/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% static 'reporting/finsport.css' %}">
+</head>
+<body>
+  <nav class="navbar navbar-expand-md border-bottom bg-white" aria-label="Navegación principal">
+    <div class="container-fluid reporting-shell flex-wrap gap-2">
+      <a class="navbar-brand fw-semibold" href="{% url 'reporting-home' %}">Finsport · evidencia</a>
+      <div class="d-flex flex-wrap gap-3">
+        <a class="nav-link p-0" href="{% url 'reporting-daily' %}">Partidos por día</a>
+        <a class="nav-link p-0" href="/admin/">Administración</a>
+        <a class="nav-link p-0" href="http://localhost:3000/">Diagnóstico operativo</a>
+      </div>
+    </div>
+  </nav>
+  <main class="container-fluid reporting-shell py-4">
+    {% if errors %}<div class="alert alert-warning" role="alert"><h2 class="h6">No se aplicaron los filtros</h2>{% for error in errors %}<div>{{ error }}</div>{% endfor %}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="container-fluid reporting-shell pb-4 text-muted small">Finsport local · reporting descriptivo · los valores económicos son simulados.</footer>
+</body>
+</html>
