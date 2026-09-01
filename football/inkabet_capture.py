@@ -91,9 +91,18 @@ def capture_inkabet_matches(
     before_observations = OddsObservation.objects.filter(
         match__in=matches, source__code="inkabet"
     ).count()
-    before_snapshots = OddsSnapshot.objects.filter(
-        match__in=matches, source__code="inkabet"
-    ).count()
+    before_snapshots = {
+        (row.match_id, row.bookmaker_id, row.market_id): (
+            row.home,
+            row.draw,
+            row.away,
+            row.provider_updated_at,
+            row.observed_at,
+        )
+        for row in OddsSnapshot.objects.filter(
+            match__in=matches, source__code="inkabet"
+        )
+    }
     stats = SyncStats()
     errors = []
     first_error = None
@@ -132,15 +141,27 @@ def capture_inkabet_matches(
     after_observations = OddsObservation.objects.filter(
         match__in=matches, source__code="inkabet"
     ).count()
-    after_snapshots = OddsSnapshot.objects.filter(
-        match__in=matches, source__code="inkabet"
-    ).count()
+    after_snapshots = {
+        (row.match_id, row.bookmaker_id, row.market_id): (
+            row.home,
+            row.draw,
+            row.away,
+            row.provider_updated_at,
+            row.observed_at,
+        )
+        for row in OddsSnapshot.objects.filter(
+            match__in=matches, source__code="inkabet"
+        )
+    }
     return InkabetCaptureResult(
         "DEGRADED" if errors else "SUCCESS",
         stats=stats,
         calls=getattr(client, "calls", 0),
         observations_created=after_observations - before_observations,
-        snapshots_changed=max(0, after_snapshots - before_snapshots),
+        snapshots_changed=sum(
+            before_snapshots.get(identity) != value
+            for identity, value in after_snapshots.items()
+        ),
         errors=errors,
         client=client,
     )

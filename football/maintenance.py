@@ -19,6 +19,7 @@ from football.models import (
     CompetitionSourceRef,
     MaintenanceRun,
     Match,
+    OddsObservation,
     ReconciliationStatus,
     Season,
 )
@@ -123,10 +124,12 @@ def _emit_terminal(run, *, error=None):
 def _bounded_client(client_factory, *, at, maximum_attempts, maximum_pages):
     state = quota_state(at, CaptureConfig.from_settings())
     available = state.remaining
+    reserve = settings.FOOTBALL_CAPTURE_MANDATORY_RESERVE
+    admission_reserve = reserve
     if state.basis == "BOUNDED_BOOTSTRAP":
         available = settings.FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS
-    reserve = settings.FOOTBALL_CAPTURE_MANDATORY_RESERVE
-    if available - reserve < maximum_attempts:
+        admission_reserve = 0
+    if available - admission_reserve < maximum_attempts:
         raise APIFootballQuotaReserveError(
             "Periodic maintenance cannot fit inside the conservative quota budget.",
             diagnostic_context={"attempts": 0},
@@ -410,18 +413,36 @@ def run_season_maintenance(*, at=None, client_factory=APIFootballClient):
 
 
 def _evidence_signature():
-    aggregate = Match.objects.filter(
+    resolved_outcomes = [value for value, _ in Match.OUTCOMES]
+    matches = Match.objects.filter(
         season__competition__enabled=True,
-        outcome__in=[value for value, _ in Match.OUTCOMES],
+        outcome__in=resolved_outcomes,
     ).aggregate(
-        count=Count("id"), latest_modified=Max("modified"), maximum_id=Max("id")
+        count=Count("id"),
+        latest_modified=Max("modified"),
+        maximum_id=Max("id"),
+    )
+    observations = OddsObservation.objects.filter(
+        match__season__competition__enabled=True,
+        match__outcome__in=resolved_outcomes,
+    ).aggregate(
+        count=Count("id"),
+        latest_observed_at=Max("observed_at"),
+        maximum_id=Max("id"),
     )
     return {
-        "count": aggregate["count"],
-        "maximum_id": aggregate["maximum_id"],
+        "count": matches["count"],
+        "maximum_id": matches["maximum_id"],
         "latest_modified": (
-            aggregate["latest_modified"].isoformat()
-            if aggregate["latest_modified"]
+            matches["latest_modified"].isoformat()
+            if matches["latest_modified"]
+            else None
+        ),
+        "odds_observation_count": observations["count"],
+        "odds_observation_maximum_id": observations["maximum_id"],
+        "latest_odds_observed_at": (
+            observations["latest_observed_at"].isoformat()
+            if observations["latest_observed_at"]
             else None
         ),
     }

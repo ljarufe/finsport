@@ -300,6 +300,75 @@ def test_due_odds_capture_runs_inkabet_once_and_repeated_window_is_idempotent():
         }
     )
 )
+def test_later_inkabet_price_update_counts_snapshot_as_changed():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39,
+        name="Premier League",
+        kickoff=now + timedelta(hours=1),
+    )
+    external_id = 39 * 1000 + 1
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
+    FakeAutomaticInkabetClient.categories_payload = inkabet_categories_payload(
+        kickoff=match.kickoff.isoformat()
+    )
+    FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload()
+
+    first = run_capture(
+        at=now,
+        allow_bootstrap=True,
+        client_factory=FakeCaptureClient,
+        inkabet_client_factory=FakeAutomaticInkabetClient,
+    )
+
+    assert first.secondary["inkabet"]["snapshots_changed"] == 1
+
+    FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload(
+        home="1.90",
+        draw="3.50",
+        away="4.10",
+    )
+
+    later_at = now + timedelta(minutes=30)
+    with mock.patch(
+        "football.capture.executor.timezone.now",
+        return_value=later_at,
+    ):
+        later = run_capture(
+            at=later_at,
+            allow_bootstrap=True,
+            client_factory=FakeCaptureClient,
+            inkabet_client_factory=FakeAutomaticInkabetClient,
+        )
+
+    snapshot = OddsSnapshot.objects.get(
+        match=match,
+        source__code="inkabet",
+    )
+
+    assert later.secondary["inkabet"]["status"] == "SUCCESS"
+    assert later.secondary["inkabet"]["observations_created"] == 1
+    assert later.secondary["inkabet"]["snapshots_changed"] == 1
+    assert str(snapshot.home) == "1.9000"
+    assert (
+        OddsObservation.objects.filter(
+            match=match,
+            source__code="inkabet",
+        ).count()
+        == 2
+    )
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
+            "INKABET_AUTOMATIC_ENABLED": True,
+            "INKABET_BRAND_ID": "local-brand",
+            "INKABET_MARKET_CODE": "local-market",
+        }
+    )
+)
 def test_inkabet_failure_degrades_but_preserves_primary_capture():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(

@@ -13,7 +13,7 @@ from football.maintenance import (
 from football.models import MaintenanceRun, Match
 
 from .helpers import catalog_season, competition, fixture_payload, league_payload
-from .prediction_helpers import create_synthetic_league
+from .prediction_helpers import create_synthetic_league, create_synthetic_odds
 
 pytestmark = pytest.mark.django_db
 
@@ -94,6 +94,37 @@ def test_catalogue_runs_once_per_local_day_and_persists_audit():
     assert run.summary["market_id"]
 
 
+@override_settings(
+    **(
+        MAINTENANCE_SETTINGS
+        | {
+            "FOOTBALL_CAPTURE_MANDATORY_RESERVE": 10,
+            "FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS": 2,
+            "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS": 2,
+        }
+    )
+)
+def test_catalogue_bounded_bootstrap_waives_unknown_reserve():
+    at = datetime(2026, 8, 31, 15, tzinfo=UTC)
+    FakeMaintenanceClient.responses = {
+        "leagues": [league_payload()],
+        "odds/bets": [{"id": 1, "name": "Match Winner"}],
+    }
+
+    result = run_catalogue_maintenance(
+        at=at,
+        client_factory=FakeMaintenanceClient,
+    )
+
+    assert result["status"] == MaintenanceRun.Status.SUCCESS
+    assert result["summary"]["provider_attempts"] == 2
+    assert FakeMaintenanceClient.instances[0].kwargs["daily_reserve"] == 10
+    assert FakeMaintenanceClient.instances[0].requests == [
+        ("leagues", {}),
+        ("odds/bets", {}),
+    ]
+
+
 @override_settings(**MAINTENANCE_SETTINGS)
 def test_daily_season_detection_bootstraps_once_and_does_not_repeat():
     at = datetime(2026, 8, 31, 15, tzinfo=UTC)
@@ -131,7 +162,7 @@ def test_daily_season_detection_bootstraps_once_and_does_not_repeat():
 @override_settings(**MAINTENANCE_SETTINGS)
 def test_weekly_evaluation_is_due_once_and_skips_unchanged_evidence():
     at = datetime(2026, 8, 31, 15, tzinfo=UTC)
-    competition_row, _, _ = create_synthetic_league()
+    competition_row, _, matches = create_synthetic_league()
     calls = []
 
     def fake_backtest(target_competition, season):
@@ -157,3 +188,18 @@ def test_weekly_evaluation_is_due_once_and_skips_unchanged_evidence():
     status = maintenance_status(at=at + timedelta(days=8))
     assert status["weekly_evaluation"]["due"] is False
     assert status["weekly_evaluation"]["last_status"] == (MaintenanceRun.Status.NO_WORK)
+
+    create_synthetic_odds([matches[0]])
+    changed_market_evidence = run_weekly_evaluation(
+        at=at + timedelta(days=16),
+        backtest_runner=fake_backtest,
+    )
+
+    assert changed_market_evidence["status"] == MaintenanceRun.Status.SUCCESS
+    assert (
+        changed_market_evidence["summary"]["evidence_signature"][
+            "odds_observation_count"
+        ]
+        > 0
+    )
+    assert len(calls) == 2
