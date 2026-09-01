@@ -125,7 +125,7 @@ def test_selector_identity_is_unambiguous_and_hash_is_reproducible():
         select_decision_basis(
             prediction_experiment=source_experiment,
             source_model_code=Prediction.DIXON_COLES,
-            source_comparator_code="LEGACY_R45",
+            source_comparator_code="RESEARCH_COMPARATOR",
             decision_policy_code="VALUE",
         )
 
@@ -136,13 +136,13 @@ def test_all_no_bet_comparator_stream_remains_representable_without_fake_evidenc
             {"action": Decision.ACTION_NO_BET, "outcome": "", "price": None},
             {"action": Decision.ACTION_NO_BET, "outcome": "", "price": None},
         ],
-        decision_policy="LEGACY_R45",
+        decision_policy="RESEARCH_COMPARATOR",
         comparator=True,
     )
     experiment = run_capital_experiment(
         prediction_experiment=source_experiment,
-        source_comparator_code="LEGACY_R45",
-        decision_policy_code="LEGACY_R45",
+        source_comparator_code="RESEARCH_COMPARATOR",
+        decision_policy_code="RESEARCH_COMPARATOR",
         config=replay_config([{"code": "FLAT_UNIT", "config": {"unit": "1"}}]),
     )
     run = experiment.policy_runs.get()
@@ -197,7 +197,7 @@ def test_stochastic_service_persists_real_es_and_complete_multi_policy_pareto():
     assert all(run.seed == 19 for run in runs)
     assert all(run.path_count == 128 for run in runs)
     assert all("expected_shortfall" in run.metrics for run in runs)
-    assert all(run.metrics["numpy_version"] == "2.5.2" for run in runs)
+    assert all(run.metrics["numpy_version"] == "2.4.6" for run in runs)
     assert not CapitalLedgerEntry.objects.filter(policy_run__in=runs).exists()
     assert experiment.summary["pareto"]["metrics_used"] == [
         "return",

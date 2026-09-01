@@ -268,6 +268,7 @@ class CaptureResult:
     skipped_work: list[dict] = field(default_factory=list)
     failed_work: list[dict] = field(default_factory=list)
     completed_work: list[dict] = field(default_factory=list)
+    secondary: dict = field(default_factory=dict)
     plan: dict = field(default_factory=dict)
     operational_cause: dict = field(default_factory=dict, repr=False)
 
@@ -288,5 +289,6 @@ class CaptureResult:
             "skipped_work": self.skipped_work,
             "failed_work": self.failed_work,
             "completed_work": self.completed_work,
+            "secondary": self.secondary,
             "plan": self.plan,
         }

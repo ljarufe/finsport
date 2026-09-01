@@ -4,16 +4,12 @@ from datetime import date
 from django.db import transaction
 from django.utils import timezone
 
-from football.models import Competition, Decision, PredictionExperiment
+from football.models import Competition, Prediction, PredictionExperiment
 
 from .constants import (
     CONFIDENCE_GRID,
     ENGINE_VERSION,
-    LEGACY_R45_VERSION,
-    LOGISTIC_C_GRID,
     MINIMUM_EV_GRID,
-    PRIOR_STRENGTH_GRID,
-    R45_VARIANTS,
 )
 from .contracts import UnavailablePrediction
 from .datasets import eligible_finished_matches, local_day, upcoming_matches_for_day
@@ -25,60 +21,18 @@ from .evaluation import (
 )
 from .goal_models import DixonColesAdapter, IndependentPoissonAdapter
 from .market import MarketConsensusAdapter
-from .r45 import LEGACY_REPLAY_REASONS
+from .r45 import (
+    fit_modernized,
+    modernized_config_grid,
+    predict_modernized,
+    select_modernized_config,
+)
 
 DEFAULT_CONFIG = {
     "dixon_coles": {"xi": 0.001},
     "independent_poisson": {"xi": 0.001},
     "elo_multinomial_logit": {"k": 20, "C": 1.0},
 }
-
-
-def persist_prospective_r45_accounting(experiment, targets, history, cutoff):
-    """Make both R45 arms auditable without inventing unavailable inputs.
-
-    The canonical store currently has no persisted, selected Modernized R45
-    configuration.  It is therefore unavailable unless historical temporal
-    market evidence exists; the legacy arm is always a nullable-Prediction
-    NO_BET because its historical mutable league context cannot be recovered.
-    """
-    market = MarketConsensusAdapter()
-    historical_market_count = sum(
-        not isinstance(market.predict(match, match.kickoff), UnavailablePrediction)
-        for match in history
-    )
-    if historical_market_count:
-        modernized_reason = "NO_LEAK_SAFE_PROSPECTIVE_MODERNIZED_R45_CONFIGURATION"
-    else:
-        modernized_reason = "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS"
-    for match in targets:
-        decision = Decision(
-            experiment=experiment,
-            match=match,
-            prediction=None,
-            policy_code="LEGACY_R45",
-            policy_variant="",
-            policy_version=LEGACY_R45_VERSION,
-            policy_config={"unavailable_reasons": list(LEGACY_REPLAY_REASONS)},
-            decision_time=cutoff,
-            action=Decision.ACTION_NO_BET,
-            reason="EXACT_LEGACY_CONTEXT_UNAVAILABLE",
-        )
-        decision.full_clean()
-        decision.save()
-    return {
-        "MODERNIZED_R45": {
-            "status": "UNAVAILABLE",
-            "reason": modernized_reason,
-            "historical_temporal_market_matches": historical_market_count,
-        },
-        "LEGACY_R45": {
-            "status": "UNAVAILABLE",
-            "reason": "EXACT_LEGACY_CONTEXT_UNAVAILABLE",
-            "decision_count": len(targets),
-            "prediction_count": 0,
-        },
-    }
 
 
 def latest_selected_config(competition):
@@ -94,6 +48,29 @@ def latest_selected_config(competition):
         if selected:
             return selected, f"experiment:{experiment.id}"
     return DEFAULT_CONFIG, "fs003-default-no-completed-backtest"
+
+
+def _select_prospective_modernized(history):
+    years = sorted({match.season.year for match in history})
+    if len(years) < 2:
+        return None
+    validation_year = years[-1]
+    training = [match for match in history if match.season.year < validation_year]
+    validation = [match for match in history if match.season.year == validation_year]
+    selected = select_modernized_config(
+        training,
+        validation,
+        modernized_config_grid(),
+    )
+    if selected is None:
+        return None
+    validation_loss, config = selected
+    return {
+        **config,
+        "validation_log_loss": validation_loss,
+        "selection": "strict_prior_history_walk_forward",
+        "validation_season": validation_year,
+    }
 
 
 @dataclass(frozen=True)
@@ -148,6 +125,13 @@ def predict_competition_day(
     if not targets:
         return ProspectivePredictionResult(None, False, "NO_ELIGIBLE_TARGETS")
     selected, config_source = latest_selected_config(competition)
+    history = list(eligible_finished_matches(competition, before=cutoff))
+    history = [match for match in history if local_day(match.kickoff) < day]
+    if "modernized_r45" not in selected:
+        modernized_config = _select_prospective_modernized(history)
+        if modernized_config is not None:
+            selected = {**selected, "modernized_r45": modernized_config}
+            config_source = f"{config_source}+prospective-strict-prior-r45-selection"
     experiment = PredictionExperiment.objects.create(
         competition=competition,
         mode=PredictionExperiment.MODE_PROSPECTIVE,
@@ -169,15 +153,8 @@ def predict_competition_day(
             "temporal_batch_policy": "FS-005 logical intended_window/target_at; historical-results-strict-prior-local-day",
             "confidence_grid": list(CONFIDENCE_GRID),
             "minimum_ev_grid": list(MINIMUM_EV_GRID),
-            "modernized_r45_grid": {
-                "variants": list(R45_VARIANTS),
-                "C": list(LOGISTIC_C_GRID),
-                "prior_strength": list(PRIOR_STRENGTH_GRID),
-            },
         },
     )
-    history = list(eligible_finished_matches(competition, before=cutoff))
-    history = [match for match in history if local_day(match.kickoff) < day]
     adapters = (
         DixonColesAdapter(xi=selected["dixon_coles"]["xi"]),
         IndependentPoissonAdapter(xi=selected["independent_poisson"]["xi"]),
@@ -194,6 +171,21 @@ def predict_competition_day(
             unavailable[adapter.model_code] = outcome.reason
         else:
             fitted.append(adapter)
+    modernized = None
+    modernized_fit_unavailable = {}
+    if "modernized_r45" in selected:
+        modernized, modernized_fit_unavailable = fit_modernized(
+            history,
+            cutoff,
+            selected["modernized_r45"],
+        )
+        if isinstance(modernized, UnavailablePrediction):
+            unavailable[Prediction.MODERNIZED_R45] = modernized.reason
+            modernized = None
+    else:
+        unavailable[Prediction.MODERNIZED_R45] = (
+            "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
+        )
     market = MarketConsensusAdapter()
     for match in targets:
         for adapter in fitted:
@@ -209,13 +201,45 @@ def predict_competition_day(
         else:
             prediction = _persist_prediction(experiment, match, market, result, cutoff)
             persist_standard_policies(experiment, match, prediction, result, cutoff)
-    r45_arms = persist_prospective_r45_accounting(experiment, targets, history, cutoff)
+        if modernized is not None:
+            result = predict_modernized(modernized, history, match, cutoff)
+            if isinstance(result, UnavailablePrediction):
+                unavailable[f"MODERNIZED_R45:{match.id}"] = result.reason
+            else:
+                prediction = _persist_prediction(
+                    experiment,
+                    match,
+                    modernized,
+                    result,
+                    cutoff,
+                    variant=modernized.variant,
+                )
+                persist_standard_policies(experiment, match, prediction, result, cutoff)
     experiment.summary = {
         "target_count": len(targets),
         "prediction_count": experiment.predictions.count(),
         "decision_count": experiment.decisions.count(),
         "unavailable": unavailable,
-        "r45_arms": r45_arms,
+        "r45_arms": {
+            "MODERNIZED_R45": {
+                "status": (
+                    "PRODUCED"
+                    if experiment.predictions.filter(
+                        model_code=Prediction.MODERNIZED_R45
+                    ).exists()
+                    else "UNAVAILABLE"
+                ),
+                "unavailable_reasons": {
+                    key: reason
+                    for key, reason in unavailable.items()
+                    if key == Prediction.MODERNIZED_R45
+                    or key.startswith("MODERNIZED_R45:")
+                },
+                "config": selected.get("modernized_r45"),
+                "fit_unavailable": modernized_fit_unavailable,
+                "classification": "ACTIVE",
+            }
+        },
     }
     experiment.completed_at = timezone.now()
     experiment.save(update_fields=["summary", "completed_at", "modified"])

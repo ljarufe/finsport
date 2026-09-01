@@ -18,6 +18,7 @@ def run_capture(
     max_provider_attempts=None,
     allow_bootstrap=False,
     client_factory=None,
+    inkabet_client_factory=None,
 ):
     """Plan and optionally execute one bounded FS-005 capture run.
 
@@ -51,4 +52,6 @@ def run_capture(
     executor_kwargs = {}
     if client_factory is not None:
         executor_kwargs["client_factory"] = client_factory
+    if inkabet_client_factory is not None:
+        executor_kwargs["inkabet_client_factory"] = inkabet_client_factory
     return CaptureExecutor(**executor_kwargs).execute(plan, trigger=trigger)

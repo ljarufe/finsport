@@ -11,6 +11,8 @@ from football.api_football import (
     APIFootballQuotaReserveError,
     APIFootballRateLimitError,
 )
+from football.api_inkabet import InkabetClient
+from football.inkabet_capture import capture_inkabet_matches
 from football.models import (
     CaptureRun,
     CaptureWorkItem,
@@ -60,8 +62,14 @@ def _quota_dict(client, fallback):
 
 
 class CaptureExecutor:
-    def __init__(self, *, client_factory=APIFootballClient):
+    def __init__(
+        self,
+        *,
+        client_factory=APIFootballClient,
+        inkabet_client_factory=InkabetClient,
+    ):
         self.client_factory = client_factory
+        self.inkabet_client_factory = inkabet_client_factory
 
     def execute(self, plan, *, trigger):
         with capture_single_flight() as acquired:
@@ -275,6 +283,38 @@ class CaptureExecutor:
                     }
                     else row.status
                 )
+        due_inkabet_matches = [
+            item.match
+            for item, row in zip(plan.items, work_rows, strict=True)
+            if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
+            and row.status
+            in {
+                CaptureWorkItem.Status.SUCCESS,
+                CaptureWorkItem.Status.SUCCESS_EMPTY,
+                CaptureWorkItem.Status.LATE_CAPTURE,
+            }
+        ]
+        secondary = capture_inkabet_matches(
+            due_inkabet_matches,
+            client_factory=self.inkabet_client_factory,
+        )
+        result.secondary = {"inkabet": secondary.as_dict()}
+        if secondary.errors and not result.operational_cause:
+            first_error = secondary.errors[0]
+            result.operational_cause = {
+                "component": "capture",
+                "operation": f"inkabet_{first_error['operation']}",
+                "failure_kind": first_error["failure_kind"],
+                "provider": first_error["provider"],
+                "exception": None,
+                "traceback_text": "",
+                "context": {
+                    "match_id": first_error["match_id"],
+                    "event_id": first_error["event_id"],
+                },
+            }
+        result.observations_created += secondary.observations_created
+        result.snapshots_changed += secondary.snapshots_changed
         return self._finish(run, result, client)
 
     def _execute_item(self, plan, client, item, row, result):
@@ -554,7 +594,10 @@ class CaptureExecutor:
                     remaining=result.quota_before["remaining"],
                 ),
             )
-        if result.failed_work and result.completed_work:
+        secondary_degraded = any(
+            detail.get("status") == "DEGRADED" for detail in result.secondary.values()
+        )
+        if (result.failed_work or secondary_degraded) and result.completed_work:
             status = CaptureRun.Status.PARTIAL
         elif result.failed_work:
             status = CaptureRun.Status.FAILED
@@ -573,7 +616,9 @@ class CaptureExecutor:
         run.fixtures_changed = result.fixtures_changed
         run.matches_resolved = result.matches_resolved
         run.skips = len(result.skipped_work)
-        run.failures = len(result.failed_work)
+        run.failures = len(result.failed_work) + sum(
+            len(detail.get("errors", [])) for detail in result.secondary.values()
+        )
         run.quota_basis = result.quota_after.get("basis") or run.quota_basis
         run.quota_limit = result.quota_after.get("limit")
         run.quota_remaining_after = result.quota_after.get("remaining")
@@ -586,6 +631,14 @@ class CaptureExecutor:
             if failed_row:
                 run.error_class = failed_row.error_class
                 run.error_message = failed_row.error_message
+        elif secondary_degraded:
+            first_error = next(
+                error
+                for detail in result.secondary.values()
+                for error in detail.get("errors", [])
+            )
+            run.error_class = first_error["error_class"][:120]
+            run.error_message = first_error["error_message"][:500]
         result.plan["metrics"] = CaptureExecutor._metrics(run, result)
         run.summary = result.as_dict()
         run.save()

@@ -5,7 +5,6 @@ INDEPENDENT_POISSON_VERSION = "fs003-independent-poisson-v1"
 ELO_MULTINOMIAL_LOGIT_VERSION = "fs003-elo-multinomial-logit-v1"
 MARKET_CONSENSUS_VERSION = "fs003-market-consensus-v1"
 MODERNIZED_R45_VERSION = "fs003-modernized-r45-v1"
-LEGACY_R45_VERSION = "R45-refund-stop@ef861a4897e4bfdff938e8541e8185f731ddaa5c"
 
 MODAL_ALL_VERSION = "fs003-modal-all-v1"
 SELECTIVE_CONFIDENCE_VERSION = "fs003-selective-confidence-v1"

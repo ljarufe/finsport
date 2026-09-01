@@ -94,6 +94,7 @@ services:
     build: .
     restart: always
     command: celery -A finsport beat -l info --schedule=/tmp/finsport-celerybeat-schedule
+    profiles: ["operational"]
     volumes:
       - .:/app
       - logs_volume:/app/logs

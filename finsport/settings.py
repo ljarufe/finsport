@@ -48,14 +48,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # local apps
     "football",
-    "bet",
     # third parties
     "django_countries",
     "django_extensions",
-    "rest_framework",
-    "rest_framework.authtoken",
-    "django_celery_beat",
-    "django_celery_results",
 ]
 
 MIDDLEWARE = [
@@ -163,15 +158,6 @@ LOGGING = {
     },
 }
 
-REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework.authentication.TokenAuthentication",
-    ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": 10,
-}
-
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # Read-only API-Football boundary. The key is never logged or persisted.
@@ -247,7 +233,7 @@ FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES = env.int(
     "FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES", default=720
 )
 FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD = env.int(
-    "FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD", default=2
+    "FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD", default=1
 )
 FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED = env.bool(
     "FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED", default=True
@@ -259,6 +245,51 @@ FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES = env.int(
     "FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES", default=360
 )
 
+# Pipeline-owned experimental maintenance. The frequent wake only evaluates
+# persistent due state; it does not repeat daily/weekly work on every wake.
+FOOTBALL_MAINTENANCE_ENABLED = env.bool("FOOTBALL_MAINTENANCE_ENABLED", default=True)
+FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS = env.int(
+    "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS", default=2
+)
+FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES = env.int(
+    "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES", default=1
+)
+FOOTBALL_MAINTENANCE_SEASON_MAX_ATTEMPTS = env.int(
+    "FOOTBALL_MAINTENANCE_SEASON_MAX_ATTEMPTS", default=3
+)
+FOOTBALL_MAINTENANCE_SEASON_MAX_PAGES = env.int(
+    "FOOTBALL_MAINTENANCE_SEASON_MAX_PAGES", default=3
+)
+FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS = env.int(
+    "FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS", default=2
+)
+FOOTBALL_MAINTENANCE_DAILY_MAX_ATTEMPTS = env.int(
+    "FOOTBALL_MAINTENANCE_DAILY_MAX_ATTEMPTS", default=2
+)
+FOOTBALL_MAINTENANCE_QUOTA_RETRY_HOURS = env.int(
+    "FOOTBALL_MAINTENANCE_QUOTA_RETRY_HOURS", default=4
+)
+FOOTBALL_MAINTENANCE_MAX_SEASONS_PER_DAY = env.int(
+    "FOOTBALL_MAINTENANCE_MAX_SEASONS_PER_DAY", default=1
+)
+FOOTBALL_MAINTENANCE_WEEKLY_INTERVAL_DAYS = env.int(
+    "FOOTBALL_MAINTENANCE_WEEKLY_INTERVAL_DAYS", default=7
+)
+_maintenance_positive_settings = {
+    "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS": FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS,
+    "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES": FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES,
+    "FOOTBALL_MAINTENANCE_SEASON_MAX_ATTEMPTS": FOOTBALL_MAINTENANCE_SEASON_MAX_ATTEMPTS,
+    "FOOTBALL_MAINTENANCE_SEASON_MAX_PAGES": FOOTBALL_MAINTENANCE_SEASON_MAX_PAGES,
+    "FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS": FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS,
+    "FOOTBALL_MAINTENANCE_DAILY_MAX_ATTEMPTS": FOOTBALL_MAINTENANCE_DAILY_MAX_ATTEMPTS,
+    "FOOTBALL_MAINTENANCE_QUOTA_RETRY_HOURS": FOOTBALL_MAINTENANCE_QUOTA_RETRY_HOURS,
+    "FOOTBALL_MAINTENANCE_MAX_SEASONS_PER_DAY": FOOTBALL_MAINTENANCE_MAX_SEASONS_PER_DAY,
+    "FOOTBALL_MAINTENANCE_WEEKLY_INTERVAL_DAYS": FOOTBALL_MAINTENANCE_WEEKLY_INTERVAL_DAYS,
+}
+for _name, _value in _maintenance_positive_settings.items():
+    if _value < 1:
+        raise ImproperlyConfigured(f"{_name} must be positive.")
+
 # Read-only Inkabet JSON boundary. These values are local configuration, not
 # browser/session credentials, and are never logged or persisted.
 INKABET_BASE_URL = env(
@@ -268,6 +299,7 @@ INKABET_BASE_URL = env(
 INKABET_BRAND_ID = env("INKABET_BRAND_ID", default="")
 INKABET_MARKET_CODE = env("INKABET_MARKET_CODE", default="")
 INKABET_TIMEOUT = env.int("INKABET_TIMEOUT", default=15)
+INKABET_AUTOMATIC_ENABLED = env.bool("INKABET_AUTOMATIC_ENABLED", default=True)
 
 CACHES = {
     "default": {
@@ -291,10 +323,9 @@ if DEBUG:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
-# Beat is intentionally available with no automatic jobs during the demo-only
-# stage. The local Beat service uses Celery's file scheduler rather than the
-# database scheduler, so persisted django-celery-beat rows cannot dispatch the
-# historical betting cycle.
+# The operational Beat service uses Celery's ephemeral file scheduler. The
+# development workflow does not start that service, even when the local .env
+# enables pipeline automation.
 CELERY_BEAT_SCHEDULE = {}
 if FOOTBALL_PIPELINE_ENABLED or FOOTBALL_CAPTURE_ENABLED:
     if FOOTBALL_CAPTURE_WAKE_SECONDS < 1:

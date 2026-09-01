@@ -11,6 +11,7 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from football.api_football import APIFootballClient, APIFootballResponseError
+from football.management.commands.observe_pipeline import Command as WatchdogCommand
 from football.models import (
     Competition,
     CompetitionSourceRef,
@@ -586,6 +587,65 @@ def test_watchdog_database_failure_is_one_bounded_incident(tmp_path, settings):
 
     emitter.assert_called_once()
     assert emitter.call_args.kwargs["event_code"] == "OBSERVABILITY_WATCHDOG_FAILED"
+
+
+def test_watchdog_discards_failed_connection_and_recovers_without_restart(
+    tmp_path, settings
+):
+    settings.FOOTBALL_PIPELINE_ENABLED = True
+    settings.OBSERVABILITY_WATCHDOG_STATE_FILE = str(tmp_path / "state.json")
+    recovered = SimpleNamespace(overdue=False)
+    database_connection = mock.Mock()
+
+    with (
+        mock.patch(
+            "football.management.commands.observe_pipeline.evaluate_liveness",
+            side_effect=[
+                RuntimeError("database unavailable"),
+                RuntimeError("database still unavailable"),
+                recovered,
+            ],
+        ),
+        mock.patch(
+            "football.management.commands.observe_pipeline.connections",
+            {"default": database_connection},
+        ),
+        mock.patch(
+            "football.management.commands.observe_pipeline.close_old_connections"
+        ) as close_old,
+        mock.patch(
+            "football.management.commands.observe_pipeline.emit_event"
+        ) as emitter,
+    ):
+        call_command("observe_pipeline", once=True, at="2026-08-30T12:00:00+00:00")
+        call_command("observe_pipeline", once=True, at="2026-08-30T12:00:01+00:00")
+        call_command("observe_pipeline", once=True, at="2026-08-30T12:00:02+00:00")
+
+    emitter.assert_called_once()
+    assert database_connection.close.call_count == 2
+    close_old.assert_not_called()
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["check_failed"] is False
+    assert state["last_checked_at"] == "2026-08-30T12:00:02+00:00"
+
+
+def test_watchdog_long_running_iteration_refreshes_old_connections(tmp_path, settings):
+    now = datetime(2026, 8, 30, 12, tzinfo=dt_timezone.utc)
+    settings.FOOTBALL_PIPELINE_ENABLED = True
+    settings.OBSERVABILITY_WATCHDOG_STATE_FILE = str(tmp_path / "state.json")
+
+    with (
+        mock.patch(
+            "football.management.commands.observe_pipeline.evaluate_liveness",
+            return_value=SimpleNamespace(overdue=False),
+        ),
+        mock.patch(
+            "football.management.commands.observe_pipeline.close_old_connections"
+        ) as close_old,
+    ):
+        WatchdogCommand()._check(now, prepare_connection=True)
+
+    close_old.assert_called_once_with()
 
 
 def test_celery_pipeline_boundary_emits_once_and_reraises(settings):

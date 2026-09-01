@@ -16,6 +16,7 @@ from football.api_football import (
     APIFootballPaginationError,
     APIFootballResponseError,
 )
+from football.api_inkabet import InkabetResponseError
 from football.capture import run_capture
 from football.capture.contracts import CaptureConfig
 from football.capture.executor import CaptureExecutor
@@ -31,7 +32,14 @@ from football.models import (
 from football.sync import sync_catalog_payloads, sync_fixture_payloads
 from football.tasks import wake_capture_planner
 
-from .helpers import catalog_season, competition, fixture_payload, odds_payload
+from .helpers import (
+    catalog_season,
+    competition,
+    fixture_payload,
+    inkabet_categories_payload,
+    inkabet_mw3w_payload,
+    odds_payload,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -65,6 +73,10 @@ CAPTURE_SETTINGS = {
     "FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES": 60,
     "FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES": 360,
     "API_FOOTBALL_MAX_RETRIES": 0,
+    # Unit tests must never inherit operational Inkabet enablement from .env.
+    # Tests that exercise automatic Inkabet enable it explicitly and inject
+    # FakeAutomaticInkabetClient.
+    "INKABET_AUTOMATIC_ENABLED": False,
 }
 
 
@@ -103,11 +115,41 @@ class FakeCaptureClient:
         return response(params or {}) if callable(response) else response
 
 
+class FakeAutomaticInkabetClient:
+    instances = []
+    categories_payload = {}
+    mw3w_payload = {}
+    error = None
+
+    def __init__(self):
+        self.calls = 0
+        self.requests = []
+        self.__class__.instances.append(self)
+
+    def categories(self):
+        self.calls += 1
+        self.requests.append(("categories", {}))
+        if self.__class__.error:
+            raise self.__class__.error
+        return self.__class__.categories_payload
+
+    def match_winner(self, event_id):
+        self.calls += 1
+        self.requests.append(("mw3w", {"eventId": event_id}))
+        if self.__class__.error:
+            raise self.__class__.error
+        return self.__class__.mw3w_payload
+
+
 @pytest.fixture(autouse=True)
 def reset_capture_client():
     FakeCaptureClient.instances = []
     FakeCaptureClient.responses = {}
     FakeCaptureClient.error = None
+    FakeAutomaticInkabetClient.instances = []
+    FakeAutomaticInkabetClient.categories_payload = {}
+    FakeAutomaticInkabetClient.mw3w_payload = {}
+    FakeAutomaticInkabetClient.error = None
 
 
 def create_match(*, league_id, name, kickoff, status="NS"):
@@ -198,6 +240,131 @@ def test_same_window_executes_once_and_later_window_allows_unchanged_price():
     assert OddsObservation.objects.filter(match=match).count() == 2
     assert OddsSnapshot.objects.filter(match=match).count() == 1
     assert len(FakeCaptureClient.instances) == 2
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
+            "INKABET_AUTOMATIC_ENABLED": True,
+            "INKABET_BRAND_ID": "local-brand",
+            "INKABET_MARKET_CODE": "local-market",
+        }
+    )
+)
+def test_due_odds_capture_runs_inkabet_once_and_repeated_window_is_idempotent():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+    )
+    external_id = 39 * 1000 + 1
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
+    FakeAutomaticInkabetClient.categories_payload = inkabet_categories_payload(
+        kickoff=match.kickoff.isoformat()
+    )
+    FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload()
+
+    first = run_capture(
+        at=now,
+        allow_bootstrap=True,
+        client_factory=FakeCaptureClient,
+        inkabet_client_factory=FakeAutomaticInkabetClient,
+    )
+    repeated = run_capture(
+        at=now,
+        allow_bootstrap=True,
+        client_factory=FakeCaptureClient,
+        inkabet_client_factory=FakeAutomaticInkabetClient,
+    )
+
+    assert first.secondary["inkabet"]["status"] == "SUCCESS"
+    assert first.secondary["inkabet"]["observations_created"] == 1
+    assert FakeAutomaticInkabetClient.instances[0].requests == [
+        ("categories", {}),
+        ("mw3w", {"eventId": "f-current-match"}),
+    ]
+    assert repeated.provider_attempts == 0
+    assert len(FakeAutomaticInkabetClient.instances) == 1
+    assert (
+        OddsObservation.objects.filter(match=match, source__code="inkabet").count() == 1
+    )
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
+            "INKABET_AUTOMATIC_ENABLED": True,
+            "INKABET_BRAND_ID": "local-brand",
+            "INKABET_MARKET_CODE": "local-market",
+        }
+    )
+)
+def test_inkabet_failure_degrades_but_preserves_primary_capture():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+    )
+    external_id = 39 * 1000 + 1
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
+    FakeAutomaticInkabetClient.error = InkabetResponseError("secondary unavailable")
+
+    result = run_capture(
+        at=now,
+        allow_bootstrap=True,
+        client_factory=FakeCaptureClient,
+        inkabet_client_factory=FakeAutomaticInkabetClient,
+    )
+
+    assert result.status == CaptureRun.Status.PARTIAL
+    assert result.secondary["inkabet"]["status"] == "DEGRADED"
+    assert len(result.secondary["inkabet"]["errors"]) == 1
+    assert result.operational_cause["provider"] == "Inkabet"
+    assert result.operational_cause["operation"] == "inkabet_categories"
+    assert (
+        OddsObservation.objects.filter(match=match, source__code="api_football").count()
+        == 1
+    )
+    assert not OddsObservation.objects.filter(
+        match=match, source__code="inkabet"
+    ).exists()
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
+            "INKABET_AUTOMATIC_ENABLED": True,
+            "INKABET_BRAND_ID": "local-brand",
+            "INKABET_MARKET_CODE": "local-market",
+        }
+    )
+)
+def test_inkabet_unexpected_client_failure_is_fail_soft():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+    )
+    external_id = 39 * 1000 + 1
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
+
+    def broken_inkabet_client():
+        raise RuntimeError("secondary client construction failed")
+
+    result = run_capture(
+        at=now,
+        allow_bootstrap=True,
+        client_factory=FakeCaptureClient,
+        inkabet_client_factory=broken_inkabet_client,
+    )
+
+    assert result.status == CaptureRun.Status.PARTIAL
+    assert result.secondary["inkabet"]["status"] == "DEGRADED"
+    assert result.operational_cause["provider"] == "Inkabet"
+    assert (
+        OddsObservation.objects.filter(match=match, source__code="api_football").count()
+        == 1
+    )
 
 
 @override_settings(**CAPTURE_SETTINGS)
@@ -952,6 +1119,35 @@ def test_fixture_discovery_is_shared_bounded_capability_not_every_wake():
     assert repeated.skipped_work[0]["status"] == (
         CaptureWorkItem.Status.ALREADY_FULFILLED
     )
+
+
+@override_settings(
+    **(
+        CAPTURE_SETTINGS
+        | {
+            "FOOTBALL_CAPTURE_DISCOVERY_ENABLED": True,
+            "FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES": 720,
+            "FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD": 1,
+        }
+    )
+)
+def test_free_plan_discovery_horizon_plans_only_today_and_tomorrow():
+    now = datetime(2026, 8, 31, 23, 30, tzinfo=UTC)
+    competition(external_id=39, name="League")
+
+    result = run_capture(
+        at=now,
+        dry_run=True,
+        purpose=CaptureWorkItem.Purpose.FIXTURE_REFRESH,
+    )
+
+    assert [
+        item["logical_identity"].split(":discovery:", 1)[1].split(":", 1)[0]
+        for item in result.plan["items"]
+    ] == [
+        "2026-08-31",
+        "2026-09-01",
+    ]
 
 
 @override_settings(**CAPTURE_SETTINGS)

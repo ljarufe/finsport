@@ -559,10 +559,16 @@ def test_pipeline_scheduler_disabled_is_provider_free():
 def test_pipeline_scheduler_enabled_delegates_to_service(monkeypatch):
     result = SimpleNamespace(as_dict=lambda: {"status": "NO_WORK"})
     service = mock.Mock(return_value=result)
+    maintenance = mock.Mock(return_value={"status": "COMPLETED"})
     monkeypatch.setattr("football.tasks.run_pipeline", service)
+    monkeypatch.setattr("football.tasks.run_periodic_maintenance", maintenance)
 
-    assert wake_pipeline() == {"status": "NO_WORK"}
+    assert wake_pipeline() == {
+        "status": "NO_WORK",
+        "maintenance": {"status": "COMPLETED"},
+    }
     service.assert_called_once_with(trigger=PipelineRun.Trigger.SCHEDULER)
+    maintenance.assert_called_once_with()
 
 
 def test_beat_enabled_pipeline_is_the_only_automatic_capture_owner(monkeypatch):

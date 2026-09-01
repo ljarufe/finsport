@@ -46,6 +46,8 @@ CONTEXT_ALLOWLIST = {
     "http_status",
     "json_path",
     "last_scheduler_activity_at",
+    "capability",
+    "maintenance_run_id",
     "oldest_pending_age_seconds",
     "occurrence_count",
     "pending_count",

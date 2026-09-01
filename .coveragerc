@@ -1,11 +1,9 @@
 [run]
 branch = True
 source =
-    accounts
-    bet
-    common
     finsport
     football
+    tools
 omit =
     */migrations/*
     */tests.py
@@ -15,3 +13,4 @@ omit =
 show_missing = True
 skip_covered = True
 precision = 1
+fail_under = 80

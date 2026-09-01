@@ -1,14 +1,9 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from football.api_inkabet import InkabetClient, InkabetError
-from football.inkabet import (
-    reconcile_categories,
-    resolved_match_refs_for,
-    sync_mw3w_payload,
-)
+from football.api_inkabet import InkabetClient
+from football.inkabet_capture import capture_inkabet_matches
 from football.models import CompetitionSourceRef, OddsMarket, ReconciliationStatus
-from football.observability.events import emit_event
 from football.sync import (
     FootballSyncError,
     sync_fixture_payloads,
@@ -77,8 +72,15 @@ class Command(SyncCommand):
             )
             stats.merge(sync_odds_payloads(payloads, {fixture_id: match}, market))
 
-        if not settings.INKABET_BRAND_ID or not settings.INKABET_MARKET_CODE:
-            stats.skipped += len(accepted)
+        inkabet = capture_inkabet_matches(
+            accepted.values(),
+            client_factory=self.inkabet_client_class,
+            automatic=False,
+        )
+        stats.merge(inkabet.stats)
+        self.inkabet_client = inkabet.client
+        self.inkabet_errors = len(inkabet.errors)
+        if inkabet.status == "SKIPPED_CONFIGURATION":
             self.stdout.write(
                 self.style.WARNING(
                     "INKABET_CONFIGURATION_REQUIRED: set local brandId and "
@@ -86,67 +88,12 @@ class Command(SyncCommand):
                 )
             )
             return stats
-
-        self.inkabet_errors = 0
-        self.inkabet_client = self.inkabet_client_class()
-
-        try:
-            categories = self.inkabet_client.categories()
-            discovery_stats = reconcile_categories(
-                categories,
-                accepted.values(),
-            )
-        except InkabetError as error:
-            self.inkabet_errors += 1
-            self._emit_inkabet_degraded(error, operation="categories")
-            self.stdout.write(self.style.WARNING(f"INKABET_DEGRADED: {error}"))
-            return stats
-
-        stats.merge(discovery_stats)
-
-        inkabet_failures = []
-        for match_ref in resolved_match_refs_for(accepted.values()):
-            try:
-                payload = self.inkabet_client.match_winner(match_ref.external_id)
-                match_stats = sync_mw3w_payload(payload, match_ref)
-            except InkabetError as error:
-                self.inkabet_errors += 1
-                inkabet_failures.append((error, match_ref.match_id))
-                self.stdout.write(
-                    self.style.WARNING(
-                        "INKABET_DEGRADED " f"event={match_ref.external_id}: {error}"
-                    )
+        for error in inkabet.errors:
+            event = f" event={error['event_id']}" if error.get("event_id") else ""
+            separator = ":" if not event else ""
+            self.stdout.write(
+                self.style.WARNING(
+                    f"INKABET_DEGRADED{event}{separator} {error['error_message']}"
                 )
-                continue
-
-            stats.merge(match_stats)
-
-        if inkabet_failures:
-            error, match_id = inkabet_failures[0]
-            self._emit_inkabet_degraded(
-                error,
-                operation="match_winner",
-                match_id=match_id,
-                occurrence_count=len(inkabet_failures),
             )
-
         return stats
-
-    @staticmethod
-    def _emit_inkabet_degraded(error, *, operation, match_id=None, occurrence_count=1):
-        emit_event(
-            event_code="PROVIDER_DEGRADED",
-            severity="WARNING",
-            component="capture",
-            operation=operation,
-            outcome="DEGRADED",
-            failure_kind=getattr(error, "failure_kind", "provider_request"),
-            human_summary="Inkabet evidence was incomplete; canonical work continued.",
-            provider="Inkabet",
-            match_id=match_id,
-            exception=error,
-            context={
-                **getattr(error, "diagnostic_context", {}),
-                "occurrence_count": occurrence_count,
-            },
-        )

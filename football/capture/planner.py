@@ -7,6 +7,7 @@ from django.db.models import Count, Max, Q
 from football.models import (
     CaptureRun,
     CaptureWorkItem,
+    MaintenanceRun,
     Match,
     MatchSourceRef,
     OddsMarket,
@@ -35,22 +36,39 @@ def _slot_start(at, cadence):
 def quota_state(at, config):
     utc_at = at.astimezone(UTC)
     epoch_start = utc_at.replace(hour=0, minute=0, second=0, microsecond=0)
-    observed = (
-        CaptureRun.objects.filter(
-            quota_observed_at__gte=epoch_start,
-            quota_observed_at__lte=at,
-            quota_remaining_after__isnull=False,
+    observed_candidates = [
+        row
+        for row in (
+            CaptureRun.objects.filter(
+                quota_observed_at__gte=epoch_start,
+                quota_observed_at__lte=at,
+                quota_remaining_after__isnull=False,
+            )
+            .order_by("-quota_observed_at", "-id")
+            .first(),
+            MaintenanceRun.objects.filter(
+                quota_observed_at__gte=epoch_start,
+                quota_observed_at__lte=at,
+                quota_remaining_after__isnull=False,
+            )
+            .order_by("-quota_observed_at", "-id")
+            .first(),
         )
-        .order_by("-quota_observed_at", "-id")
-        .first()
+        if row is not None
+    ]
+    observed = max(
+        observed_candidates, key=lambda row: row.quota_observed_at, default=None
     )
     if observed is None:
         bootstrap_attempts = sum(
-            CaptureRun.objects.filter(
-                started_at__gte=epoch_start,
-                started_at__lte=at,
-                quota_observed_at__isnull=True,
-            ).values_list("provider_attempts", flat=True)
+            sum(
+                model.objects.filter(
+                    started_at__gte=epoch_start,
+                    started_at__lte=at,
+                    quota_observed_at__isnull=True,
+                ).values_list("provider_attempts", flat=True)
+            )
+            for model in (CaptureRun, MaintenanceRun)
         )
         return QuotaState(
             basis="BOUNDED_BOOTSTRAP",
@@ -62,11 +80,14 @@ def quota_state(at, config):
     # Header-less runs are already bounded. Their exact attempt count is summed
     # separately because Count(id) alone would understate multi-attempt failures.
     headerless_attempts = sum(
-        CaptureRun.objects.filter(
-            started_at__gt=observed.quota_observed_at,
-            started_at__lte=at,
-            quota_observed_at__isnull=True,
-        ).values_list("provider_attempts", flat=True)
+        sum(
+            model.objects.filter(
+                started_at__gt=observed.quota_observed_at,
+                started_at__lte=at,
+                quota_observed_at__isnull=True,
+            ).values_list("provider_attempts", flat=True)
+        )
+        for model in (CaptureRun, MaintenanceRun)
     )
     remaining = max(0, observed.quota_remaining_after - headerless_attempts)
     return QuotaState(
