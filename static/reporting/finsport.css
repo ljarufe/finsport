@@ -1,0 +1,21 @@
+/* FS-009 overrides. Bootstrap 5.3.8 is vendored beside this file. */
+body { background: #f5f7fa; color: #20252b; }
+h1, h2 { letter-spacing: -.02em; }
+code { white-space: normal; overflow-wrap: anywhere; color: #5b2c6f; }
+summary { cursor: pointer; color: #0b5ed7; font-weight: 600; }
+.table { background: #fff; margin-bottom: 0; }
+.table caption { color: #5d6670; caption-side: top; }
+.scope-panel, .report-detail { background: #fff; border: 1px solid #dfe3e8; border-radius: .75rem; padding: 1rem; }
+.evidence-card { border: 0; border-left: .3rem solid #0d6efd; box-shadow: 0 .125rem .35rem rgba(25, 38, 51, .08); }
+.config-list { display: grid; grid-template-columns: minmax(8rem, auto) 1fr; gap: .2rem .75rem; margin: .75rem 0; font-size: .875rem; }
+.config-list dt { color: #59636e; }
+.config-list dd { margin: 0; overflow-wrap: anywhere; }
+.daily-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.match-card { border: 0; box-shadow: 0 .2rem .8rem rgba(25, 38, 51, .1); }
+.match-card .card-header { border-bottom: 1px solid #e6e9ed; }
+.reporting-shell { width: 100%; max-width: none; padding-left: 20px; padding-right: 20px; }
+@media (max-width: 575.98px) {
+  .daily-nav { align-items: stretch; flex-direction: column; text-align: center; }
+  .config-list { grid-template-columns: 1fr; }
+  .config-list dd { margin-bottom: .4rem; }
+}
