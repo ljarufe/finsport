@@ -7,6 +7,7 @@ from django.db.models import Prefetch
 from django.utils import timezone
 
 from football.models import (
+    CapitalExperiment,
     CapitalPolicyRun,
     Competition,
     Decision,
@@ -142,10 +143,12 @@ def _decision_metrics(rows):
 def historical(params):
     competition, start, end, errors = filters(params)
     pqs = Prediction.objects.filter(
-        experiment__mode=PredictionExperiment.MODE_PROSPECTIVE
+        experiment__mode=PredictionExperiment.MODE_PROSPECTIVE,
+        experiment__competition__enabled=True,
     ).select_related("experiment", "match__season__competition")
     dqs = Decision.objects.filter(
-        experiment__mode=PredictionExperiment.MODE_PROSPECTIVE
+        experiment__mode=PredictionExperiment.MODE_PROSPECTIVE,
+        experiment__competition__enabled=True,
     ).select_related(
         "experiment",
         "match__season__competition",
@@ -277,7 +280,8 @@ def historical(params):
             }
         )
     bqs = PredictionExperiment.objects.filter(
-        mode=PredictionExperiment.MODE_BACKTEST
+        mode=PredictionExperiment.MODE_BACKTEST,
+        competition__enabled=True,
     ).select_related("competition")
     if competition:
         bqs = bqs.filter(competition=competition)
@@ -307,7 +311,7 @@ def historical(params):
             )
     capital_runs = CapitalPolicyRun.objects.select_related(
         "experiment__source_experiment__competition"
-    )
+    ).filter(experiment__source_experiment__competition__enabled=True)
     if competition:
         capital_runs = capital_runs.filter(
             experiment__source_experiment__competition=competition
@@ -324,15 +328,43 @@ def historical(params):
     for run in capital_runs:
         run.status_label = CAPITAL_STATUSES.get(run.status, "Estado no clasificado")
         run.reason_items = capital_reason_presentations(run.reason)
-        run.terminal_bankroll = run.metrics.get("terminal_bankroll")
-        run.total_pnl = run.metrics.get("total_pnl")
-        run.roi = run.metrics.get("roi")
-        run.maximum_drawdown = run.metrics.get("maximum_drawdown")
-        run.practical_ruin = run.metrics.get("practical_ruin")
-        run.max_stake_pre_bankroll_ratio = run.metrics.get(
-            "max_stake_pre_bankroll_ratio"
-        )
         run.stake_concentration = run.metrics.get("stake_concentration")
+        if run.experiment.mode == CapitalExperiment.MODE_REPLAY:
+            run.terminal_bankroll = run.metrics.get("terminal_bankroll")
+            run.total_pnl = run.metrics.get("total_pnl")
+            run.roi = run.metrics.get("roi")
+            run.maximum_drawdown = run.metrics.get("maximum_drawdown")
+            run.practical_ruin = run.metrics.get("practical_ruin")
+            run.max_stake_pre_bankroll_ratio = run.metrics.get(
+                "max_stake_pre_bankroll_ratio"
+            )
+        else:
+            run.reported_path_count = (
+                run.path_count
+                if run.path_count is not None
+                else run.metrics.get("path_count")
+            )
+            run.mean_terminal_bankroll = run.metrics.get("mean_terminal_bankroll")
+            run.median_terminal_bankroll = run.metrics.get("median_terminal_bankroll")
+            run.mean_pnl = run.metrics.get("mean_pnl")
+            run.median_pnl = run.metrics.get("median_pnl")
+            run.practical_ruin_probability = run.metrics.get(
+                "practical_ruin_probability"
+            )
+            run.expected_shortfall = run.metrics.get("expected_shortfall")
+            run.terminal_bankroll_quantile_1 = run.metrics.get(
+                "terminal_bankroll_quantile_1"
+            )
+            run.terminal_bankroll_quantile_5 = run.metrics.get(
+                "terminal_bankroll_quantile_5"
+            )
+            run.maximum_drawdown_distribution = run.metrics.get(
+                "maximum_drawdown_distribution", {}
+            )
+            run.max_stake_distribution = run.metrics.get("max_stake_distribution", {})
+            run.max_stake_pre_bankroll_ratio_distribution = run.metrics.get(
+                "max_stake_pre_bankroll_ratio_distribution", {}
+            )
     return {
         "competitions": Competition.objects.filter(enabled=True),
         "competition": competition,
@@ -344,7 +376,17 @@ def historical(params):
         "crosses": crosses,
         "agreements": agreements,
         "backtests": backtests,
-        "capital_runs": capital_runs,
+        "replay_capital_runs": [
+            run
+            for run in capital_runs
+            if run.experiment.mode == CapitalExperiment.MODE_REPLAY
+        ],
+        "stochastic_capital_runs": [
+            run
+            for run in capital_runs
+            if run.experiment.mode
+            in (CapitalExperiment.MODE_MONTE_CARLO, CapitalExperiment.MODE_STRESS)
+        ],
         "evidence": {"predictions": len(predictions), "decisions": len(decisions)},
     }
 
@@ -366,13 +408,17 @@ def daily(params):
     end = start + timedelta(days=1)
     pqs = (
         Prediction.objects.filter(
-            experiment__mode=PredictionExperiment.MODE_PROSPECTIVE
+            experiment__mode=PredictionExperiment.MODE_PROSPECTIVE,
+            experiment__competition__enabled=True,
         )
         .select_related("experiment")
         .order_by("model_code", "variant")
     )
     dqs = (
-        Decision.objects.filter(experiment__mode=PredictionExperiment.MODE_PROSPECTIVE)
+        Decision.objects.filter(
+            experiment__mode=PredictionExperiment.MODE_PROSPECTIVE,
+            experiment__competition__enabled=True,
+        )
         .select_related(
             "prediction",
             "selected_odds_observation__source",
@@ -382,7 +428,11 @@ def daily(params):
         .order_by("policy_code", "policy_variant")
     )
     matches = (
-        Match.objects.filter(kickoff__gte=start, kickoff__lt=end)
+        Match.objects.filter(
+            kickoff__gte=start,
+            kickoff__lt=end,
+            season__competition__enabled=True,
+        )
         .select_related(
             "season__competition",
             "home_team__competition",

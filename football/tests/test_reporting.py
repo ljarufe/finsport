@@ -319,11 +319,22 @@ def test_decision_resolution_and_temporal_economics_are_separate(graph):
         "Accionables resueltas",
         "Aciertos",
         "Pérdidas",
-        "Económicas con precio válido",
+        "N económico / Decisions con precio válido",
         "Cobertura económica sobre resueltas",
         "Hit rate",
+        "PnL simulado (stake plano 1u)",
+        "ROI simulado",
     ):
         assert heading in content
+    assert ">1u<" in content
+    assert ">100.0%<" in content
+    context = historical({})
+    assert any(
+        row["metrics"]["economic_decisions"] == 0
+        and row["metrics"]["flat_unit_pnl"] is None
+        and row["metrics"]["roi"] is None
+        for row in context["decision_rows"]
+    )
 
 
 @pytest.mark.django_db
@@ -447,6 +458,112 @@ def test_capital_empty_metrics_do_not_crash_and_filters_do_not_leak(graph):
     assert "25.0%" in content
 
 
+@pytest.mark.django_db
+def test_capital_reporting_uses_mode_specific_metric_contracts(graph):
+    source = experiment(graph)
+
+    def capital_run(mode, code, metrics, *, path_count=None):
+        capital = CapitalExperiment.objects.create(
+            source_experiment=source,
+            source_model_code=Prediction.DIXON_COLES,
+            decision_policy_code="MODAL_ALL",
+            mode=mode,
+            initial_bankroll=Decimal("100"),
+            input_count=4,
+            input_hash=code,
+        )
+        return CapitalPolicyRun.objects.create(
+            experiment=capital,
+            policy_code=code,
+            policy_version="v1",
+            status=CapitalPolicyRun.STATUS_PRODUCED,
+            path_count=path_count,
+            metrics=metrics,
+        )
+
+    replay = capital_run(
+        CapitalExperiment.MODE_REPLAY,
+        "REPLAY_POLICY",
+        {
+            "terminal_bankroll": "104",
+            "total_pnl": "4",
+            "roi": "0.04",
+            "maximum_drawdown": "0.02",
+            "practical_ruin": False,
+            "max_stake_pre_bankroll_ratio": "0.01",
+        },
+    )
+    stochastic_metrics = {
+        "path_count": 500,
+        "mean_terminal_bankroll": 112,
+        "median_terminal_bankroll": 109,
+        "terminal_bankroll_quantile_1": 70,
+        "terminal_bankroll_quantile_5": 82,
+        "mean_pnl": 12,
+        "median_pnl": 9,
+        "practical_ruin_probability": 0.03,
+        "maximum_drawdown_distribution": {
+            "mean": 0.12,
+            "median": 0.10,
+            "quantile_95": 0.30,
+            "maximum": 0.50,
+        },
+        "max_stake_distribution": {
+            "mean": 2,
+            "median": 1.5,
+            "quantile_95": 4,
+            "maximum": 6,
+        },
+        "max_stake_pre_bankroll_ratio_distribution": {
+            "mean": 0.02,
+            "median": 0.015,
+            "quantile_95": 0.04,
+            "maximum": 0.06,
+        },
+        "stake_concentration": 0.025,
+        "expected_shortfall": 75,
+    }
+    monte_carlo = capital_run(
+        CapitalExperiment.MODE_MONTE_CARLO,
+        "MONTE_CARLO_POLICY",
+        stochastic_metrics,
+        path_count=500,
+    )
+    stress_metrics = dict(stochastic_metrics)
+    stress_metrics.update(mean_terminal_bankroll=95, mean_pnl=-5)
+    stress = capital_run(
+        CapitalExperiment.MODE_STRESS,
+        "STRESS_POLICY",
+        stress_metrics,
+        path_count=500,
+    )
+
+    context = historical({})
+    assert [run.pk for run in context["replay_capital_runs"]] == [replay.pk]
+    assert {run.pk for run in context["stochastic_capital_runs"]} == {
+        monte_carlo.pk,
+        stress.pk,
+    }
+    assert not hasattr(context["stochastic_capital_runs"][0], "terminal_bankroll")
+    assert context["stochastic_capital_runs"][0].mean_terminal_bankroll == 112
+
+    content = Client().get("/").content.decode()
+    stochastic_section = content.split("Simulación estocástica", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert f"PredictionExperiment #{source.pk}" in stochastic_section
+    assert Prediction.DIXON_COLES in stochastic_section
+    assert "MODAL_ALL" in stochastic_section
+    assert "REPLAY_POLICY" not in stochastic_section
+    assert "MONTE_CARLO_POLICY" in stochastic_section
+    assert "STRESS_POLICY" in stochastic_section
+    assert "112u" in stochastic_section and "95u" in stochastic_section
+    assert "3.0%" in stochastic_section
+    assert "Shortfall esperado" in stochastic_section
+    assert "ROI" not in stochastic_section
+    assert "Bankroll final" not in stochastic_section
+
+
 def test_ratio_formatter_converts_half_to_fifty_percent():
     assert as_percent(0.5) == "50.0%"
     assert as_percent(-0.335) == "-33.5%"
@@ -464,6 +581,99 @@ def test_ratio_formatter_converts_half_to_fifty_percent():
 def test_reporting_static_assets_are_discoverable_by_collectstatic():
     assert finders.find("reporting/bootstrap.min.css")
     assert finders.find("reporting/finsport.css")
+
+
+@pytest.mark.django_db
+def test_default_scope_excludes_all_disabled_competition_evidence(graph):
+    graph.other_competition.enabled = False
+    graph.other_competition.save(update_fields=["enabled", "modified"])
+    disabled_season = Season.objects.create(
+        competition=graph.other_competition, year=graph.selected.year
+    )
+    disabled_home = Team.objects.create(
+        competition=graph.other_competition, name="DISABLED_HOME"
+    )
+    disabled_away = Team.objects.create(
+        competition=graph.other_competition, name="DISABLED_AWAY"
+    )
+    disabled_match = Match.objects.create(
+        season=disabled_season,
+        home_team=disabled_home,
+        away_team=disabled_away,
+        kickoff=graph.kickoff,
+        status_short="FT",
+        status_long="Match Finished",
+        outcome=Match.OUTCOME_HOME,
+    )
+
+    enabled_exp = experiment(graph)
+    enabled_prediction = prediction(graph, enabled_exp)
+    decision(
+        graph,
+        enabled_exp,
+        enabled_prediction,
+        policy="ENABLED_DECISION",
+    )
+    enabled_backtest = experiment(
+        graph,
+        mode="BACKTEST",
+        summary={"unavailable_arms": {"ENABLED_BACKTEST": "NO_VALID_MARKET"}},
+    )
+    assert enabled_backtest.pk
+
+    disabled_exp = experiment(graph, competition=graph.other_competition)
+    disabled_prediction = prediction(
+        graph, disabled_exp, match=disabled_match, config={"scope": "DISABLED"}
+    )
+    decision(
+        graph,
+        disabled_exp,
+        disabled_prediction,
+        match=disabled_match,
+        policy="DISABLED_DECISION",
+    )
+    experiment(
+        graph,
+        mode="BACKTEST",
+        competition=graph.other_competition,
+        summary={"unavailable_arms": {"DISABLED_BACKTEST": "NO_VALID_MARKET"}},
+    )
+    disabled_capital = CapitalExperiment.objects.create(
+        source_experiment=disabled_exp,
+        source_model_code=Prediction.DIXON_COLES,
+        decision_policy_code="MODAL_ALL",
+        mode=CapitalExperiment.MODE_REPLAY,
+        initial_bankroll=Decimal("100"),
+        input_hash="disabled-capital",
+    )
+    CapitalPolicyRun.objects.create(
+        experiment=disabled_capital,
+        policy_code="DISABLED_CAPITAL",
+        policy_version="v1",
+        status=CapitalPolicyRun.STATUS_UNAVAILABLE,
+    )
+
+    home = Client().get("/")
+    home_content = home.content.decode()
+    assert home.status_code == 200
+    assert "ENABLED_DECISION" in home_content
+    assert "ENABLED_BACKTEST" in home_content
+    assert "DISABLED_DECISION" not in home_content
+    assert "DISABLED_BACKTEST" not in home_content
+    assert "DISABLED_CAPITAL" not in home_content
+
+    daily = Client().get("/daily/", {"date": graph.selected.isoformat()})
+    daily_content = daily.content.decode()
+    assert daily.status_code == 200
+    assert "Equipo Local" in daily_content
+    assert "DISABLED_HOME" not in daily_content
+
+    selected = Client().get("/", {"competition": graph.competition.pk})
+    assert selected.status_code == 200
+    assert "ENABLED_DECISION" in selected.content.decode()
+    invalid_disabled = Client().get("/", {"competition": graph.other_competition.pk})
+    assert invalid_disabled.status_code == 200
+    assert "No se aplicaron los filtros" in invalid_disabled.content.decode()
 
 
 @pytest.mark.django_db
