@@ -8,6 +8,7 @@ from django.utils import timezone
 from football.models import (
     CapitalExperiment,
     CapitalLedgerEntry,
+    CapitalLongitudinalSeries,
     CapitalPolicyRun,
     Decision,
     PredictionExperiment,
@@ -175,39 +176,51 @@ def _validate_experiment_config(config):
 
 
 @transaction.atomic
-def run_capital_experiment(
+def run_prepared_capital_experiment(
     *,
-    prediction_experiment,
+    basis,
+    manifest,
+    input_hash,
     decision_policy_code,
     config,
+    prediction_experiment=None,
+    longitudinal_series=None,
     decision_policy_variant="",
     source_model_code="",
     source_model_variant="",
     source_comparator_code="",
     logical_identity="",
+    semantic_identity="",
+    policy_failure_callback=None,
 ):
-    if not isinstance(prediction_experiment, PredictionExperiment):
+    mode, initial_bankroll, policy_arms = _validate_experiment_config(config)
+    if bool(prediction_experiment) == bool(longitudinal_series):
+        raise CapitalInputError(
+            "Exactly one PredictionExperiment or longitudinal series is required."
+        )
+    if prediction_experiment and not isinstance(
+        prediction_experiment, PredictionExperiment
+    ):
         prediction_experiment = PredictionExperiment.objects.get(
             pk=prediction_experiment
         )
-    mode, initial_bankroll, policy_arms = _validate_experiment_config(config)
-    source_rows = select_decision_basis(
-        prediction_experiment=prediction_experiment,
-        decision_policy_code=decision_policy_code,
-        decision_policy_variant=decision_policy_variant,
-        source_model_code=source_model_code,
-        source_model_variant=source_model_variant,
-        source_comparator_code=source_comparator_code,
-    )
-    basis, manifest, input_hash = build_input_manifest(source_rows)
+    if longitudinal_series and not isinstance(
+        longitudinal_series, CapitalLongitudinalSeries
+    ):
+        longitudinal_series = CapitalLongitudinalSeries.objects.get(
+            pk=longitudinal_series
+        )
+    basis = tuple(basis)
     experiment = CapitalExperiment.objects.create(
         source_experiment=prediction_experiment,
+        longitudinal_series=longitudinal_series,
         source_model_code=source_model_code,
         source_model_variant=source_model_variant,
         source_comparator_code=source_comparator_code,
         decision_policy_code=decision_policy_code,
         decision_policy_variant=decision_policy_variant,
         logical_identity=logical_identity,
+        semantic_identity=semantic_identity,
         engine_version=ENGINE_VERSION,
         mode=mode,
         initial_bankroll=initial_bankroll,
@@ -292,6 +305,8 @@ def run_capital_experiment(
             run.status = CapitalPolicyRun.STATUS_FAILED
             run.reason = f"{type(error).__name__}:{error}"[:120]
             run.metrics = {}
+            if policy_failure_callback is not None:
+                policy_failure_callback(error, experiment, run)
         run.save(
             update_fields=[
                 "policy_version",
@@ -318,3 +333,42 @@ def run_capital_experiment(
     experiment.completed_at = timezone.now()
     experiment.save(update_fields=["summary", "completed_at", "modified"])
     return experiment
+
+
+def run_capital_experiment(
+    *,
+    prediction_experiment,
+    decision_policy_code,
+    config,
+    decision_policy_variant="",
+    source_model_code="",
+    source_model_variant="",
+    source_comparator_code="",
+    logical_identity="",
+):
+    if not isinstance(prediction_experiment, PredictionExperiment):
+        prediction_experiment = PredictionExperiment.objects.get(
+            pk=prediction_experiment
+        )
+    source_rows = select_decision_basis(
+        prediction_experiment=prediction_experiment,
+        decision_policy_code=decision_policy_code,
+        decision_policy_variant=decision_policy_variant,
+        source_model_code=source_model_code,
+        source_model_variant=source_model_variant,
+        source_comparator_code=source_comparator_code,
+    )
+    basis, manifest, input_hash = build_input_manifest(source_rows)
+    return run_prepared_capital_experiment(
+        basis=basis,
+        manifest=manifest,
+        input_hash=input_hash,
+        prediction_experiment=prediction_experiment,
+        decision_policy_code=decision_policy_code,
+        config=config,
+        decision_policy_variant=decision_policy_variant,
+        source_model_code=source_model_code,
+        source_model_variant=source_model_variant,
+        source_comparator_code=source_comparator_code,
+        logical_identity=logical_identity,
+    )

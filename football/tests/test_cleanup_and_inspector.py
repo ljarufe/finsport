@@ -17,6 +17,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "evaluate_football_predictions",
         "evaluate_capital_policies",
         "predict_football_day",
+        "recompute_longitudinal_capital",
         "run_football_capture",
         "run_football_maintenance",
         "run_football_pipeline",

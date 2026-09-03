@@ -4,6 +4,7 @@ from .models import (
     Bookmaker,
     CapitalExperiment,
     CapitalLedgerEntry,
+    CapitalLongitudinalSeries,
     CapitalPolicyRun,
     CaptureRun,
     CaptureWorkItem,
@@ -155,6 +156,7 @@ class CapitalExperimentAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
     list_display = (
         "id",
         "source_experiment",
+        "longitudinal_series",
         "source_identity",
         "decision_policy_code",
         "decision_policy_variant",
@@ -164,7 +166,7 @@ class CapitalExperimentAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
         "completed_at",
     )
     list_filter = ("mode", "engine_version", "decision_policy_code")
-    raw_id_fields = ("source_experiment",)
+    raw_id_fields = ("source_experiment", "longitudinal_series")
     inlines = (CapitalPolicyRunInline,)
 
     @admin.display(description="Source")
@@ -172,6 +174,22 @@ class CapitalExperimentAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
         if obj.source_model_code:
             return f"{obj.source_model_code}:{obj.source_model_variant}"
         return f"comparator:{obj.source_comparator_code}"
+
+
+@admin.register(CapitalLongitudinalSeries)
+class CapitalLongitudinalSeriesAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "code",
+        "evidence_class",
+        "source_model_code",
+        "decision_policy_code",
+        "epoch",
+        "mode",
+        "initial_bankroll",
+        "current_snapshot",
+    )
+    raw_id_fields = ("current_snapshot",)
 
 
 @admin.register(CapitalPolicyRun)

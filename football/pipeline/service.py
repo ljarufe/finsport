@@ -12,6 +12,10 @@ from football.capital.baseline import (
     run_research_baseline,
 )
 from football.capital.contracts import ENGINE_VERSION as CAPITAL_ENGINE_VERSION
+from football.capital.longitudinal import (
+    LONGITUDINAL_CONFIG,
+    recompute_longitudinal_capital,
+)
 from football.capture import run_capture
 from football.models import (
     CaptureRun,
@@ -180,6 +184,7 @@ def _report(
     experiments,
     cycle_experiments,
     capital_results,
+    longitudinal_capital_result,
     capture_data,
     cancellation_data,
     warnings,
@@ -252,6 +257,7 @@ def _report(
                 "label": BASELINE_LABEL,
             },
             "results": capital_results,
+            "longitudinal": longitudinal_capital_result,
             "produced_count": sum(
                 item["status"] == "PRODUCED" for item in capital_results
             ),
@@ -486,13 +492,16 @@ def run_pipeline(
     errors.extend({"phase": "RESULT_SETTLEMENT", **item} for item in result_errors)
 
     capital_results = []
+    longitudinal_capital_result = {}
     capital_errors = []
+    capital_primary_event_emitted = False
     if dry_run:
         phases["CAPITAL"] = PhaseResult(
             PhaseState.SKIPPED,
             reason="DRY_RUN",
             details={
                 "baseline": BASELINE_CONFIG,
+                "longitudinal": LONGITUDINAL_CONFIG,
                 "prospective_experiments_considered": PredictionExperiment.objects.filter(
                     mode=PredictionExperiment.MODE_PROSPECTIVE,
                     competition_id__in=competition_ids,
@@ -520,26 +529,67 @@ def run_pipeline(
                         "error": f"{type(error).__name__}:{error}"[:500],
                     }
                 )
+        try:
+            longitudinal_capital_result = recompute_longitudinal_capital(
+                pipeline_run_id=run.pk if run else None
+            ).as_dict()
+            capital_primary_event_emitted = longitudinal_capital_result.get(
+                "primary_failure_emitted", False
+            )
+        except Exception as error:
+            capital_primary_event_emitted = getattr(
+                error, "longitudinal_event_emitted", False
+            )
+            if not capital_primary_event_emitted:
+                operational_causes.append(
+                    {
+                        **exception_diagnostic(error),
+                        "component": "capital",
+                        "operation": "recompute_longitudinal_capital",
+                    }
+                )
+            capital_errors.append(
+                {
+                    "operation": "LONGITUDINAL_RECOMPUTE",
+                    "error": f"{type(error).__name__}:{error}"[:500],
+                }
+            )
         produced = [item for item in capital_results if item["status"] == "PRODUCED"]
         created = [item for item in produced if item["created"]]
         unavailable = [
             item for item in capital_results if item["status"] == "UNAVAILABLE"
         ]
-        if capital_errors:
+        longitudinal_created = longitudinal_capital_result.get(
+            "status"
+        ) == "PRODUCED" and longitudinal_capital_result.get("created")
+        longitudinal_failed = any(
+            state.get("status") == "FAILED"
+            for state in longitudinal_capital_result.get("policy_states", {}).values()
+        )
+        longitudinal_unavailable = (
+            longitudinal_capital_result.get("status") == "UNAVAILABLE"
+        )
+        if capital_errors or longitudinal_failed:
             capital_state = (
-                PhaseState.DEGRADED if capital_results else PhaseState.FAILED
+                PhaseState.DEGRADED
+                if capital_results or longitudinal_capital_result
+                else PhaseState.FAILED
             )
-        elif created:
+        elif created or longitudinal_created:
             capital_state = PhaseState.DEGRADED if unavailable else PhaseState.SUCCESS
         elif produced:
             capital_state = PhaseState.NO_WORK
-        elif unavailable:
+        elif unavailable or longitudinal_unavailable:
             capital_state = PhaseState.UNAVAILABLE
         else:
             capital_state = PhaseState.NO_WORK
         phases["CAPITAL"] = PhaseResult(
             capital_state,
-            details={"results": capital_results, "errors": capital_errors},
+            details={
+                "results": capital_results,
+                "longitudinal": longitudinal_capital_result,
+                "errors": capital_errors,
+            },
         )
         errors.extend({"phase": "CAPITAL", **item} for item in capital_errors)
 
@@ -582,6 +632,7 @@ def run_pipeline(
         experiments=rolling_experiment_rows,
         cycle_experiments=experiment_rows,
         capital_results=capital_results,
+        longitudinal_capital_result=longitudinal_capital_result,
         capture_data=capture_data,
         cancellation_data=cancellation_data,
         warnings=warnings,
@@ -597,6 +648,9 @@ def run_pipeline(
                 if item.get("capital_experiment_id")
             }
         )
+        if longitudinal_capital_result.get("capital_experiment_id"):
+            capital_ids.append(longitudinal_capital_result["capital_experiment_id"])
+            capital_ids = sorted(set(capital_ids))
         run.status = status
         run.completed_at = generated_at
         run.phase_states = {name: result.as_dict() for name, result in phases.items()}

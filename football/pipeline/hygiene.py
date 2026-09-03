@@ -40,8 +40,18 @@ class CancellationHygieneResult:
         }
 
 
-def _manifest_decision_ids(manifest):
-    values = manifest.get("decision_ids", []) if isinstance(manifest, dict) else []
+def _manifest_referenced_decision_ids(manifest):
+    if not isinstance(manifest, dict):
+        return set()
+    included = manifest.get("decision_ids", [])
+    values = list(included) if isinstance(included, (list, tuple)) else []
+    if manifest.get("schema") == "fs010-longitudinal-capital-v1":
+        first_gap = manifest.get("first_gap")
+        if isinstance(first_gap, dict):
+            values.append(first_gap.get("decision_id"))
+            batch_values = first_gap.get("batch_decision_ids", [])
+            if isinstance(batch_values, list):
+                values.extend(batch_values)
     return {str(value) for value in values if isinstance(value, (int, str))}
 
 
@@ -69,7 +79,8 @@ def cleanup_cancelled_matches(*, match_ids=None, dry_run=False):
     capital_experiment_ids = tuple(
         experiment.pk
         for experiment in CapitalExperiment.objects.only("id", "input_manifest")
-        if _manifest_decision_ids(experiment.input_manifest) & decision_id_strings
+        if _manifest_referenced_decision_ids(experiment.input_manifest)
+        & decision_id_strings
     )
     snapshot_count = OddsSnapshot.objects.filter(match_id__in=cancelled_ids).count()
     observation_count = OddsObservation.objects.filter(

@@ -3,11 +3,12 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from itertools import combinations
 
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch
 from django.utils import timezone
 
 from football.models import (
     CapitalExperiment,
+    CapitalLongitudinalSeries,
     CapitalPolicyRun,
     Competition,
     Decision,
@@ -311,7 +312,10 @@ def historical(params):
             )
     capital_runs = CapitalPolicyRun.objects.select_related(
         "experiment__source_experiment__competition"
-    ).filter(experiment__source_experiment__competition__enabled=True)
+    ).filter(
+        experiment__longitudinal_series__isnull=True,
+        experiment__source_experiment__competition__enabled=True,
+    )
     if competition:
         capital_runs = capital_runs.filter(
             experiment__source_experiment__competition=competition
@@ -365,6 +369,68 @@ def historical(params):
             run.max_stake_pre_bankroll_ratio_distribution = run.metrics.get(
                 "max_stake_pre_bankroll_ratio_distribution", {}
             )
+    longitudinal_series = list(
+        CapitalLongitudinalSeries.objects.filter(
+            current_snapshot__isnull=False,
+            current_snapshot__longitudinal_series_id=F("id"),
+        )
+        .select_related("current_snapshot")
+        .prefetch_related(
+            Prefetch(
+                "current_snapshot__policy_runs",
+                queryset=CapitalPolicyRun.objects.prefetch_related("ledger_entries"),
+            )
+        )
+        .order_by("code")
+    )
+    longitudinal_groups = []
+    for series in longitudinal_series:
+        snapshot = series.current_snapshot
+        manifest = snapshot.input_manifest or {}
+        series_context = manifest.get("series", {})
+        rows = list(snapshot.policy_runs.all())
+        for run in rows:
+            run.status_label = CAPITAL_STATUSES.get(run.status, "Estado no clasificado")
+            run.reason_items = capital_reason_presentations(run.reason)
+            run.policy_config_display = compact_config(run.policy_config)
+            for key in (
+                "input_decisions",
+                "actionable_capital_decisions",
+                "capital_actions",
+                "terminal_bankroll",
+                "total_pnl",
+                "roi",
+                "maximum_drawdown",
+                "drawdown_duration",
+                "practical_ruin",
+                "max_single_stake",
+                "max_stake_pre_bankroll_ratio",
+                "turnover",
+            ):
+                setattr(run, key, run.metrics.get(key))
+            run.termination_reasons = sorted(
+                {
+                    item.termination_reason
+                    for item in run.ledger_entries.all()
+                    if item.termination_reason
+                }
+            )
+        longitudinal_groups.append(
+            {
+                "series": series,
+                "snapshot": snapshot,
+                "runs": rows,
+                "epoch": series_context.get("epoch", series.epoch),
+                "watermark": series_context.get("watermark"),
+                "cohort_count": len(series.frozen_competition_ids),
+                "cohort_hash": series.cohort_hash,
+                "input_hash": snapshot.input_hash,
+                "engine_version": snapshot.engine_version,
+                "input_count": manifest.get("counts", {}).get(
+                    "input_decisions", snapshot.input_count
+                ),
+            }
+        )
     return {
         "competitions": Competition.objects.filter(enabled=True),
         "competition": competition,
@@ -387,6 +453,7 @@ def historical(params):
             if run.experiment.mode
             in (CapitalExperiment.MODE_MONTE_CARLO, CapitalExperiment.MODE_STRESS)
         ],
+        "longitudinal_capital_groups": longitudinal_groups,
         "evidence": {"predictions": len(predictions), "decisions": len(decisions)},
     }
 
