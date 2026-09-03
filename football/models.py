@@ -800,6 +800,55 @@ class Decision(TimeStampedModel):
         ordering = ("decision_time", "match_id", "policy_code", "policy_variant")
 
 
+class CapitalLongitudinalSeries(TimeStampedModel):
+    """Frozen identity and current-state pointer for longitudinal Capital evidence."""
+
+    code = models.SlugField(max_length=80, unique=True)
+    evidence_class = models.CharField(max_length=20)
+    source_model_code = models.CharField(max_length=30)
+    decision_policy_code = models.CharField(max_length=30)
+    frozen_competition_ids = models.JSONField(default=list)
+    cohort_hash = models.CharField(max_length=64)
+    epoch = models.DateTimeField()
+    mode = models.CharField(max_length=12)
+    initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
+    config = models.JSONField(default=dict)
+    current_snapshot = models.OneToOneField(
+        "CapitalExperiment",
+        on_delete=models.SET_NULL,
+        related_name="current_for_longitudinal_series",
+        null=True,
+        blank=True,
+    )
+
+    def __str__(self):
+        return f"{self.code} ({self.evidence_class})"
+
+    def clean(self):
+        super().clean()
+        if (
+            self.current_snapshot_id
+            and self.pk
+            and self.current_snapshot.longitudinal_series_id != self.pk
+        ):
+            raise ValidationError(
+                {
+                    "current_snapshot": (
+                        "Current snapshot must be owned by this longitudinal series."
+                    )
+                }
+            )
+
+    class Meta:
+        ordering = ("code",)
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(initial_bankroll__gt=0),
+                name="football_capital_series_positive_bankroll",
+            )
+        ]
+
+
 class CapitalExperiment(TimeStampedModel):
     MODE_REPLAY = "REPLAY"
     MODE_MONTE_CARLO = "MONTE_CARLO"
@@ -814,6 +863,15 @@ class CapitalExperiment(TimeStampedModel):
         PredictionExperiment,
         on_delete=models.PROTECT,
         related_name="capital_experiments",
+        null=True,
+        blank=True,
+    )
+    longitudinal_series = models.ForeignKey(
+        CapitalLongitudinalSeries,
+        on_delete=models.PROTECT,
+        related_name="snapshots",
+        null=True,
+        blank=True,
     )
     source_model_code = models.CharField(max_length=30, blank=True)
     source_model_variant = models.CharField(max_length=20, blank=True)
@@ -844,6 +902,19 @@ class CapitalExperiment(TimeStampedModel):
                     | Q(source_model_code__gt="", source_comparator_code="")
                 ),
                 name="football_capital_experiment_one_source_identity",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        source_experiment__isnull=False,
+                        longitudinal_series__isnull=True,
+                    )
+                    | Q(
+                        source_experiment__isnull=True,
+                        longitudinal_series__isnull=False,
+                    )
+                ),
+                name="football_capital_experiment_one_source_owner",
             ),
             models.CheckConstraint(
                 condition=Q(initial_bankroll__gt=0),

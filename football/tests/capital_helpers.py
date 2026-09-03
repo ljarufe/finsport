@@ -24,11 +24,15 @@ def create_capital_stream(
     decision_policy="VALUE",
     decision_variant="",
     comparator=False,
+    enabled=False,
+    suffix="",
+    base=None,
 ):
     competition = Competition.objects.create(
-        name="Capital Test League",
+        name=f"Capital Test League{suffix}",
         competition_type="League",
         country="PE",
+        enabled=enabled,
     )
     season = Season.objects.create(
         competition=competition,
@@ -36,10 +40,12 @@ def create_capital_stream(
         start_date=date(2025, 1, 1),
         end_date=date(2025, 12, 31),
     )
-    home = Team.objects.create(competition=competition, name="Capital Home")
-    away = Team.objects.create(competition=competition, name="Capital Away")
+    home = Team.objects.create(competition=competition, name=f"Capital Home{suffix}")
+    away = Team.objects.create(competition=competition, name=f"Capital Away{suffix}")
     source = Source.objects.create(
-        code="capital-test", name="Capital Test", base_url="https://example.test"
+        code=f"capital-test{suffix}".strip("-")[:50],
+        name=f"Capital Test{suffix}",
+        base_url="https://example.test",
     )
     bookmaker = Bookmaker.objects.create(
         source=source, external_id="capital", name="Capital Book"
@@ -55,7 +61,7 @@ def create_capital_stream(
         config={},
     )
     decisions = []
-    base = datetime(2025, 1, 1, 12, tzinfo=timezone.utc)
+    base = base or datetime(2025, 1, 1, 12, tzinfo=timezone.utc)
     for index, spec in enumerate(rows, start=1):
         decision_time = spec.get("decision_time", base + timedelta(days=index))
         action = spec.get("action", Match.OUTCOME_HOME)
@@ -78,8 +84,8 @@ def create_capital_stream(
                 match=match,
                 model_code=model_code,
                 variant=model_variant,
-                model_version="test-v1",
-                model_config={},
+                model_version=spec.get("model_version", "test-v1"),
+                model_config=spec.get("model_config", {}),
                 cutoff=decision_time,
                 p_home=0.6,
                 p_draw=0.2,
@@ -110,8 +116,8 @@ def create_capital_stream(
                 prediction=prediction,
                 policy_code=decision_policy,
                 policy_variant=decision_variant,
-                policy_version="test-decision-v1",
-                policy_config={},
+                policy_version=spec.get("policy_version", "test-decision-v1"),
+                policy_config=spec.get("policy_config", {}),
                 decision_time=decision_time,
                 action=action,
                 reason=spec.get("reason", "TEST"),
