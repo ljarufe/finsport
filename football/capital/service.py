@@ -190,6 +190,7 @@ def run_prepared_capital_experiment(
     source_model_variant="",
     source_comparator_code="",
     logical_identity="",
+    semantic_identity="",
     policy_failure_callback=None,
 ):
     mode, initial_bankroll, policy_arms = _validate_experiment_config(config)
@@ -219,6 +220,7 @@ def run_prepared_capital_experiment(
         decision_policy_code=decision_policy_code,
         decision_policy_variant=decision_policy_variant,
         logical_identity=logical_identity,
+        semantic_identity=semantic_identity,
         engine_version=ENGINE_VERSION,
         mode=mode,
         initial_bankroll=initial_bankroll,

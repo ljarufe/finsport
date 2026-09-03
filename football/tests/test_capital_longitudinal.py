@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from io import StringIO
@@ -6,7 +7,7 @@ from unittest import mock
 
 import pytest
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
@@ -75,6 +76,35 @@ def test_series_freezes_enabled_cohort_once_and_keeps_fixed_epoch():
     assert created is False
     assert repeated.frozen_competition_ids == [first_experiment.competition_id]
     assert basis.manifest["decision_ids"] == [first_decisions[1].pk]
+
+
+def test_empty_enabled_cohort_does_not_freeze_primary_series(monkeypatch):
+    disabled_experiment, _ = _stream([{}], suffix="-empty", enabled=False)
+    emitter = mock.Mock()
+    monkeypatch.setattr("football.capital.longitudinal.emit_event", emitter)
+
+    empty = recompute_longitudinal_capital()
+
+    assert empty.status == "UNAVAILABLE"
+    assert empty.reason == "NO_ENABLED_COMPETITIONS"
+    assert not CapitalLongitudinalSeries.objects.exists()
+    assert not emitter.called
+
+    disabled_experiment.competition.enabled = True
+    disabled_experiment.competition.save(update_fields=["enabled", "modified"])
+    initialized = recompute_longitudinal_capital()
+    series = CapitalLongitudinalSeries.objects.get()
+
+    assert initialized.status == "PRODUCED"
+    assert series.frozen_competition_ids == [disabled_experiment.competition_id]
+
+    later_experiment, _ = _stream([{}], suffix="-later-enabled")
+    repeated = recompute_longitudinal_capital()
+    series.refresh_from_db()
+
+    assert repeated.status == "NO_WORK"
+    assert later_experiment.competition_id not in series.frozen_competition_ids
+    assert series.frozen_competition_ids == [disabled_experiment.competition_id]
 
 
 def test_basis_is_chronological_preserves_batches_no_bet_and_stops_at_first_gap():
@@ -268,6 +298,139 @@ def test_no_bet_has_zero_exposure_and_semantic_change_recomputes_from_epoch(
     assert changed.input_count == 2
 
 
+def test_failed_snapshot_retries_same_basis_then_healthy_snapshot_is_idempotent(
+    monkeypatch,
+):
+    _stream([{}], suffix="-retry")
+    from football.capital import service as capital_service
+
+    original_replay = capital_service.replay
+    replay_calls = 0
+
+    def transient_replay(*args, **kwargs):
+        nonlocal replay_calls
+        replay_calls += 1
+        if replay_calls == 1:
+            raise RuntimeError("transient engine failure")
+        return original_replay(*args, **kwargs)
+
+    monkeypatch.setattr(capital_service, "replay", transient_replay)
+    monkeypatch.setattr("football.capital.longitudinal.emit_event", mock.Mock())
+
+    failed = recompute_longitudinal_capital()
+    failed_snapshot = CapitalExperiment.objects.get(pk=failed.capital_experiment_id)
+    series = CapitalLongitudinalSeries.objects.get()
+
+    assert (
+        failed_snapshot.policy_runs.filter(
+            status=CapitalPolicyRun.STATUS_FAILED
+        ).count()
+        == 1
+    )
+    assert series.current_snapshot_id is None
+
+    healthy = recompute_longitudinal_capital()
+    healthy_snapshot = CapitalExperiment.objects.get(pk=healthy.capital_experiment_id)
+    series.refresh_from_db()
+
+    assert healthy.status == "PRODUCED"
+    assert healthy_snapshot.pk != failed_snapshot.pk
+    assert healthy_snapshot.semantic_identity == failed_snapshot.semantic_identity
+    assert healthy_snapshot.logical_identity != failed_snapshot.logical_identity
+    assert not healthy_snapshot.policy_runs.filter(
+        status=CapitalPolicyRun.STATUS_FAILED
+    ).exists()
+    assert series.current_snapshot_id == healthy_snapshot.pk
+    assert CapitalExperiment.objects.filter(pk=failed_snapshot.pk).exists()
+    assert failed_snapshot.policy_runs.filter(
+        status=CapitalPolicyRun.STATUS_FAILED
+    ).exists()
+
+    replay_calls_after_retry = replay_calls
+    unchanged = recompute_longitudinal_capital()
+
+    assert unchanged.status == "NO_WORK"
+    assert unchanged.capital_experiment_id == healthy_snapshot.pk
+    assert replay_calls == replay_calls_after_retry
+    assert CapitalExperiment.objects.count() == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_same_series_recomputes_are_serialized_and_converge(monkeypatch):
+    _stream([{}], suffix="-serialized")
+    series, _ = initialize_primary_series()
+    from football.capital import longitudinal as longitudinal_service
+
+    original_builder = longitudinal_service.build_longitudinal_basis
+    first_inside_lock = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    concurrent_builder_entry = threading.Event()
+    builder_calls = 0
+    builder_calls_lock = threading.Lock()
+
+    def controlled_builder(locked_series):
+        nonlocal builder_calls
+        with builder_calls_lock:
+            builder_calls += 1
+            call_number = builder_calls
+        if call_number == 1:
+            first_inside_lock.set()
+            assert release_first.wait(timeout=10)
+        else:
+            concurrent_builder_entry.set()
+        return original_builder(locked_series)
+
+    monkeypatch.setattr(
+        longitudinal_service, "build_longitudinal_basis", controlled_builder
+    )
+    monkeypatch.setattr(longitudinal_service, "emit_event", mock.Mock())
+    results = {}
+    errors = {}
+
+    def worker(name, started=None):
+        close_old_connections()
+        if started is not None:
+            started.set()
+        try:
+            results[name] = recompute_longitudinal_capital(series=series.pk)
+        except Exception as error:  # pragma: no cover - asserted below
+            errors[name] = error
+        finally:
+            close_old_connections()
+
+    first = threading.Thread(target=worker, args=("first",), daemon=True)
+    second = threading.Thread(
+        target=worker,
+        args=("second", second_started),
+        daemon=True,
+    )
+    first.start()
+    assert first_inside_lock.wait(timeout=10)
+    second.start()
+    assert second_started.wait(timeout=10)
+    assert not concurrent_builder_entry.wait(timeout=0.5)
+
+    release_first.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == {}
+    assert {results["first"].status, results["second"].status} == {
+        "PRODUCED",
+        "NO_WORK",
+    }
+    assert (
+        results["first"].capital_experiment_id
+        == results["second"].capital_experiment_id
+    )
+    assert CapitalExperiment.objects.count() == 1
+    series.refresh_from_db()
+    assert series.current_snapshot_id == results["first"].capital_experiment_id
+
+
 def test_cancellation_deletes_snapshot_and_clears_current_pointer():
     _, decisions = _stream([{}], suffix="-cancel")
     produced = recompute_longitudinal_capital()
@@ -348,6 +511,7 @@ def test_source_owner_constraint_keeps_legacy_rows_valid_and_rejects_bad_shapes(
     )
     assert legacy.source_experiment_id == source.pk
     assert legacy.longitudinal_series_id is None
+    assert legacy.semantic_identity == ""
 
     with pytest.raises(IntegrityError), transaction.atomic():
         CapitalExperiment.objects.create(
@@ -458,6 +622,36 @@ def test_unexpected_policy_failure_is_persisted_with_one_traceback_owner(monkeyp
     assert event["event_code"] == "CAPITAL_LONGITUDINAL_POLICY_FAILED"
     assert event["exception"].args == ("controlled engine failure",)
     assert event["pipeline_run_id"] == 88
+
+
+def test_unavailable_policy_arms_are_reusable_and_do_not_retry(monkeypatch):
+    same_time = AFTER_EPOCH + timedelta(days=2)
+    _stream([{"decision_time": same_time}], suffix="-unavailable-one")
+    _stream([{"decision_time": same_time}], suffix="-unavailable-two")
+    from football.capital import longitudinal as longitudinal_service
+
+    runner = mock.Mock(wraps=longitudinal_service.run_prepared_capital_experiment)
+    monkeypatch.setattr(longitudinal_service, "run_prepared_capital_experiment", runner)
+    monkeypatch.setattr(longitudinal_service, "emit_event", mock.Mock())
+
+    first = recompute_longitudinal_capital()
+    snapshot = CapitalExperiment.objects.get(pk=first.capital_experiment_id)
+    repeated = recompute_longitudinal_capital()
+
+    assert (
+        snapshot.policy_runs.filter(
+            status=CapitalPolicyRun.STATUS_UNAVAILABLE,
+            reason="UNAVAILABLE_CONCURRENT_RECOVERY_STEP",
+        ).count()
+        == 3
+    )
+    assert not snapshot.policy_runs.filter(
+        status=CapitalPolicyRun.STATUS_FAILED
+    ).exists()
+    assert repeated.status == "NO_WORK"
+    assert repeated.capital_experiment_id == snapshot.pk
+    assert runner.call_count == 1
+    assert CapitalExperiment.objects.count() == 1
 
 
 def test_gap_and_no_work_are_not_incidents_and_command_is_db_only(monkeypatch):

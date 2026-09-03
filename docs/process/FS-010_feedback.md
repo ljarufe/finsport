@@ -1,130 +1,479 @@
-# FS-010 — IMPLEMENTATION SNAPSHOT — MAY BECOME STALE
+# FS-010 — Final Reconciled Feedback
 
-Status: IMPLEMENTATION SNAPSHOT — MAY BECOME STALE / PASS 2 PRE-UAT / UAT PENDING
-Ticket: FS-010 — Construir evidencia longitudinal comparable de CapitalPolicies con resultados reales
-Branch: `FS-010-longitudinal-capital`
+**Status:** FINAL / TECHNICAL ACCEPTANCE PASS / OPERATIONAL CLOSE PENDING
+**Ticket:** FS-010 — Construir evidencia longitudinal comparable de CapitalPolicies con resultados reales
+**Branch:** `FS-010-longitudinal-capital`
+**Pull Request:** #15
 
-## Resultado
+## 1. Resultado
 
-FS-010 añade una serie longitudinal primaria persistente para comparar las siete
-familias `CapitalPolicy` sobre un único prefijo cronológico prospectivo de
-`DIXON_COLES + MODAL_ALL`.
-
-La implementación conserva la separación:
+FS-010 implementa evidencia longitudinal comparable de las siete familias `CapitalPolicy` sobre un único stream prospectivo real de:
 
 ```text
-Prediction != Decision != CapitalPolicy != real bet
+DIXON_COLES
++
+MODAL_ALL
 ```
 
-No selecciona ganador, no modifica fórmulas predictivas/de decisión/capital, no
-añade scheduler y no realiza llamadas de provider ni escrituras financieras.
+La comparación utiliza un bankroll simulado de investigación compartido de `100u`, orden cronológico por `Decision.decision_time`, semántica de lote para timestamps iguales y el máximo prefijo cronológico completo desde el epoch congelado.
 
-## Correcciones consolidadas de Pass 2
+La implementación conserva estrictamente:
 
-- La higiene CANC reconoce dependencias longitudinales tanto en el prefijo
-  `decision_ids` como en `first_gap.decision_id` y
-  `first_gap.batch_decision_ids`. No considera Decisions posteriores arbitrarias.
-- La home ya no renderiza la lista completa de Decision IDs. Muestra snapshot,
-  muestra, hash del manifest, engine, comparador, cohorte, epoch/watermark y el
-  contrato de provenance temporal; el manifest persistido conserva todos los IDs.
-- Inicialización y construcción de basis están dentro del límite estructurado de
-  error de Capital. Si no puede verificarse currentness, el puntero vigente se
-  limpia conservadoramente y el snapshot histórico se conserva.
-- Cuando Capital ya emitió la causa primaria, el pipeline conserva su evento
-  terminal de liveness pero no duplica el traceback causal.
-- Reporting tiene evidencia directa de `FAILED + diagnostic` con `metrics = {}` y
-  representa todos los valores ausentes mediante guiones neutrales.
+```text
+Prediction
+!=
+Decision
+!=
+CapitalPolicy
+!=
+real bet
+```
 
-## Persistencia y migración
+FS-010 no selecciona una política ganadora, no modifica las fórmulas de Prediction/Decision/Capital, no introduce un scheduler adicional y no incorpora bookmaker authentication, apuestas reales ni escrituras financieras externas.
 
-La migración aditiva `0008`:
+## 2. Persistencia longitudinal
 
-- crea `CapitalLongitudinalSeries` con identidad, evidence class, comparador,
-  cohorte congelada/hash, epoch, modo, bankroll, configuración exacta y puntero
-  one-to-one al snapshot vigente;
-- vuelve nullable `CapitalExperiment.source_experiment`;
-- añade `CapitalExperiment.longitudinal_series`;
-- exige por constraint que cada `CapitalExperiment` tenga exactamente un owner;
-- no reescribe ni elimina evidencia Capital existente.
+Se añadió `CapitalLongitudinalSeries` como identidad durable de la serie longitudinal primaria.
 
-La migración sólo fue ejercitada en bases aisladas de test. No se aplicó sobre la
-base PostgreSQL local del maintainer.
+La serie persiste:
 
-## Construcción de basis y currentness
+```text
+evidence class
+source comparator
+Decision policy
+frozen competition cohort
+cohort hash
+fixed epoch
+evaluation mode
+initial bankroll
+reference CapitalPolicy configuration
+current snapshot pointer
+```
 
-La inicialización primaria captura una sola vez las `Competition.enabled` y
-persiste el epoch cerrado `2026-08-26T21:34:33.795715Z`. Recomputes posteriores
-usan exclusivamente esa cohorte congelada.
+`CapitalExperiment` admite ahora ownership exclusivo mediante:
 
-El builder DB-only:
+```text
+source_experiment
+XOR
+longitudinal_series
+```
 
-- selecciona `PROSPECTIVE / DIXON_COLES / MODAL_ALL` desde el epoch;
-- ordena por `decision_time`, usando `id` sólo para auditoría estable dentro del
-  lote;
-- trata tiempos iguales como un único lote económico;
-- conserva `NO_BET` con exposición cero;
-- valida outcome y provenance exacto del precio seleccionado;
-- detiene el watermark en el primer lote con gap accionable y no salta evidencia
-  posterior;
-- persiste por Decision la identidad/config real de Prediction y Decision;
-- genera manifiesto/hash determinista con cohorte, epoch, watermark, lotes,
-  diagnóstico del primer gap y snapshots canónicos.
+La migración `0008` introduce esta estructura de forma aditiva y mantiene válidos los experimentos Capital anteriores.
 
-Ante un cambio semántico, el puntero vigente se limpia antes de ejecutar el nuevo
-replay. El replay siempre reconstruye desde el epoch. Un hash/config idéntico
-retorna `NO_WORK`; un snapshot histórico idéntico se reutiliza; una corrección
-genera un snapshot nuevo. Snapshots anteriores pueden permanecer auditables, pero
-el reporting sólo consume el puntero vigente.
+La corrección de PR añade la migración aditiva `0009`, que incorpora:
 
-## Motor y siete brazos
+```text
+CapitalExperiment.semantic_identity
+```
 
-`run_capital_experiment()` permanece como wrapper compatible y delega, junto con
-la ruta longitudinal, en un runner de basis preparado compartido. Replay,
-policies, ledgers y métricas continúan perteneciendo al motor FS-004.
+`semantic_identity` identifica el basis longitudinal comparable.
 
-Los siete brazos usan exactamente la configuración de referencia FS-010. Cada
-uno persiste `PRODUCED`, `UNAVAILABLE + reason` o `FAILED + reason`. La
-concurrencia de recovery en un lote simultáneo permanece `UNAVAILABLE`; no se
-serializa ni reduce el stream. Kelly conserva Decisions con edge no positivo y
-aplica exposición cero.
+`logical_identity` continúa siendo globalmente único e identifica cada intento concreto.
 
-## Integraciones
+Las filas Capital legacy mantienen:
 
-- El pipeline ejecuta un único recompute longitudinal DB-only dentro de la fase
-  `CAPITAL`, después de higiene/settlement y además del baseline independiente.
-- No depende de que el ciclo haya creado un `PredictionExperiment`.
-- Higiene CANC elimina snapshots afectados por el prefijo o primer gap y
-  `SET_NULL` limpia el puntero vigente.
-- El comando `recompute_longitudinal_capital` ofrece el entry point manual JSON.
-- Reporting histórico separa Capital longitudinal vigente de los experimentos
-  independientes REPLAY/MONTE_CARLO/STRESS y presenta estados/métricas en español
-  sin ranking ni métricas inventadas.
-- Fallas inesperadas emiten un único traceback primario en Capital, correlacionado
-  con `PipelineRun`; gap, `NO_WORK` y `UNAVAILABLE` de dominio no generan incidentes.
+```text
+semantic_identity = ""
+```
 
-## Evidencia automatizada
+y conservan su comportamiento anterior.
 
-- Suite focal corregida de Pass 2: `100 passed`.
-- Suite longitudinal FS-010: `17 passed`.
-- Suite completa: `313 passed`.
-- Cobertura total: `86.78%` (mínimo requerido: `80%`).
-- `make check`: PASS.
-- `git diff --check`: PASS.
-- `makemigrations --check --dry-run`: sin cambios.
-- `pip check`: sin dependencias rotas.
-- `pip-audit --local`: sin vulnerabilidades conocidas.
+## 3. Cohorte, epoch y basis
 
-## UAT y validación diferida
+La serie primaria congela exactamente una vez la cohorte no vacía de `Competition.enabled`.
 
-PENDING:
+Una base fresca sin competiciones habilitadas devuelve:
 
-- aplicar `0008` mediante el flujo autorizado por el maintainer;
-- ejecutar el comando contra la DB real y confirmar el cohort/hash, el prefijo de
-  seis Decisions, watermark cerrado y gap de Decision 10903;
-- UAT visual/browser del bloque longitudinal.
+```text
+UNAVAILABLE
+NO_ENABLED_COMPETITIONS
+```
 
-No se inventaron resultados UAT.
+sin evento ERROR y sin persistir un singleton con cohorte vacía.
 
-## New Work Discovered
+Cuando posteriormente existe una cohorte habilitada, la siguiente ejecución inicializa y congela esa cohorte; cambios posteriores de `Competition.enabled` no alteran su identidad.
+
+El epoch longitudinal queda fijado en:
+
+```text
+2026-08-26T21:34:33.795715Z
+```
+
+La selección utiliza evidencia `PROSPECTIVE / DIXON_COLES / MODAL_ALL` y:
+
+```text
+decision_time ASC
+same decision_time = one economic batch
+```
+
+El watermark es el final del máximo prefijo cronológico completo.
+
+`NO_BET` permanece en el stream con exposición de capital cero.
+
+Un Decision accionable incompleto detiene el watermark; no se salta para consumir evidencia posterior.
+
+Los precios provienen exclusivamente del `selected_odds_observation` persistido y deben preceder al `decision_time`. Nunca se sustituye una cotización posterior o current.
+
+## 4. Replay, identidad y currentness
+
+El source of truth continúa siendo el basis canónico de Decisions.
+
+Ante una modificación semántica:
+
+```text
+canonical basis changes
+→ full deterministic REPLAY from epoch
+```
+
+No existe un bankroll mutable irreversible.
+
+Un snapshot sólo puede ser reutilizado como current si:
+
+```text
+completed
++
+seven required CapitalPolicy arms present
++
+every arm is PRODUCED or UNAVAILABLE
++
+no arm is FAILED
+```
+
+`UNAVAILABLE` es evidencia válida de dominio y permanece idempotente.
+
+Un snapshot con cualquier brazo `FAILED` permanece persistido para auditoría, no se presenta como current y no bloquea un retry posterior sobre la misma `semantic_identity`.
+
+Un retry sano crea otro intento con distinto `logical_identity`, conserva el intento fallido histórico y pasa a ser el snapshot vigente.
+
+A partir de entonces una nueva ejecución sin cambio del basis retorna:
+
+```text
+NO_WORK
+```
+
+sin producir otro intento.
+
+## 5. Concurrencia
+
+El recompute de una misma `CapitalLongitudinalSeries` queda serializado mediante transacción PostgreSQL y:
+
+```text
+select_for_update
+```
+
+El lock cubre:
+
+```text
+basis construction
+→ semantic lookup
+→ attempt creation
+→ current pointer transition
+```
+
+Dos recomputes concurrentes de la misma serie no pueden crear dos snapshots equivalentes ni permitir que el proceso perdedor invalide el snapshot correcto del ganador.
+
+La regresión con dos conexiones PostgreSQL confirma convergencia a:
+
+```text
+one PRODUCED
++
+one NO_WORK
++
+same CapitalExperiment
++
+zero false operational failures
+```
+
+## 6. Siete brazos
+
+FS-010 reutiliza el motor FS-004 y exactamente la configuración de referencia aprobada:
+
+```text
+FLAT_UNIT
+unit = 1
+
+FIXED_FRACTION_BANKROLL
+fraction = 0.05
+
+FIXED_TARGET_PROFIT_NO_RECOVERY
+target_profit = 1
+
+LEGACY_RECOVERY
+initial_stake = 1
+
+LEGACY_CAPPED
+initial_stake = 1
+max_absolute_stake = 5
+
+LEGACY_PARTIAL
+target_profit = 1
+alpha = 0.5
+
+FRACTIONAL_KELLY
+lambda = 0.25
+```
+
+Todos los brazos consumen el mismo manifest.
+
+Los brazos recovery permanecen explícitamente:
+
+```text
+UNAVAILABLE_CONCURRENT_RECOVERY_STEP
+```
+
+cuando un mismo lote contiene más de un Decision accionable y no existe una secuencia recovery independiente canónica.
+
+No se serializa artificialmente el lote y no se reduce el sample de esos brazos.
+
+Fractional Kelly recibe el mismo stream y puede legítimamente producir exposición cero cuando el edge modelado no es positivo.
+
+## 7. Correcciones y cancelaciones
+
+Una corrección de outcome o provenance cambia la identidad semántica y provoca replay completo desde el epoch.
+
+La higiene de `CANC` invalida evidencia longitudinal cuando el Decision cancelado aparece en:
+
+```text
+decision_ids
+first_gap.decision_id
+first_gap.batch_decision_ids
+```
+
+No convierte una cancelación en un `NO_BET` sintético.
+
+El snapshot afectado deja de ser current y la evidencia corregida puede avanzar posteriormente cuando el basis canónico lo permite.
+
+## 8. Pipeline y observabilidad
+
+El recompute longitudinal se ejecuta una vez por ciclo dentro de la fase existente:
+
+```text
+CAPITAL
+```
+
+después de hygiene/settlement y junto al baseline Capital ya existente.
+
+No se añadió un scheduler independiente.
+
+La ruta automática es exclusivamente:
+
+```text
+REPLAY
+```
+
+`MONTE_CARLO` y `STRESS` continúan siendo capacidades manuales/on-demand separadas.
+
+Failures inesperadas de Capital generan un único traceback causal en la capa propietaria.
+
+El pipeline conserva siempre su evento terminal de liveness sin duplicar el traceback ya emitido por Capital.
+
+Estados normales:
+
+```text
+NO_WORK
+UNAVAILABLE
+first gap
+```
+
+no generan incidentes.
+
+## 9. Reporting
+
+La home histórica muestra la evidencia longitudinal como un grupo separado de los CapitalExperiments independientes.
+
+El bloque muestra de forma acotada:
+
+```text
+snapshot
+input sample
+manifest hash
+engine
+DIXON_COLES + MODAL_ALL
+REPLAY
+100u simulated research bankroll
+frozen cohort/hash
+epoch
+watermark
+temporal provenance
+```
+
+La lista completa de Decision IDs permanece en el manifest técnico pero no se imprime en la UI humana.
+
+`PRODUCED`, `UNAVAILABLE` y `FAILED` se muestran explícitamente.
+
+Un run `FAILED` con `metrics={}` no recibe métricas inventadas: los campos no disponibles se representan neutralmente.
+
+No existe ranking ni declaración de política ganadora.
+
+## 10. Evidencia automatizada final
+
+Después de las correcciones de PR:
+
+```text
+FS-010 longitudinal tests
+21 passed
+
+focused affected set
+104 passed
+
+full repository gate
+317 passed
+
+coverage
+86.85%
+
+minimum required coverage
+80%
+
+makemigrations --check --dry-run
+No changes detected
+
+git diff --check
+PASS
+```
+
+No se modificó la investigación `REFERENCE_ONLY`.
+
+## 11. UAT real
+
+La UAT real previa validó la serie longitudinal sobre PostgreSQL persistente.
+
+Resultado:
+
+```text
+series
+fs010-primary-prospective-dixon-coles-modal-all
+
+evidence class
+PROSPECTIVE
+
+frozen cohort
+12 competitions
+
+epoch
+2026-08-26T21:34:33.795715Z
+
+current snapshot
+12
+
+engine
+fs004-v1
+
+input Decisions
+6
+
+Decision IDs
+10623
+10656
+10689
+10722
+10767
+10801
+
+watermark
+2026-08-29T00:01:19Z
+
+first gap
+Decision 10903
+
+reason
+MISSING_SELECTED_ODDS_OBSERVATION
+```
+
+La procedencia temporal de los seis precios seleccionados fue validada contra sus OddsObservations persistidas.
+
+Los siete CapitalPolicy arms estuvieron presentes.
+
+Los cuatro brazos evaluables fueron `PRODUCED`.
+
+Los tres brazos recovery fueron honestamente `UNAVAILABLE_CONCURRENT_RECOVERY_STEP`.
+
+Fractional Kelly produjo cero exposición para este sample.
+
+Dos recomputes consecutivos sobre el mismo basis devolvieron `NO_WORK` y reutilizaron el mismo snapshot.
+
+El GET de reporting devolvió HTTP 200 y los contadores antes/después fueron idénticos.
+
+La UAT visual desktop y 390px fue aprobada.
+
+Pass 3 no cambió metodología ni reporting; la única superficie invalidada fue persistencia/lifecycle. La delta-UAT posterior aplicó la migración `0009` sobre la DB local persistente y confirmó que el snapshot longitudinal existente continúa siendo compatible e idempotente después del cambio de identidad semántica.
+
+## 12. PR review
+
+El primer review de PR #15 encontró tres findings reales:
+
+```text
+FAILED snapshot was not retryable
+concurrent recomputes were not serialized
+empty cohort could freeze permanently
+```
+
+Los tres fueron corregidos en una única Pass 3 consolidada.
+
+La corrección preserva evidencia fallida histórica, introduce separación semantic-attempt identity, serializa el recompute por serie y evita persistencia de cohortes vacías.
+
+No fue necesaria Pass 4 local.
+
+La reconciliación remota final de CI/threads se realizará sobre el commit que contiene conjuntamente estas correcciones y este feedback final.
+
+## 13. Acceptance final
+
+```text
+A01–A30
+PASS
+
+blocking technical PENDING
+0
+
+technical acceptance
+PASS
+```
+
+Los estados `UNAVAILABLE` de recovery y el gap de Decision 10903 son evidencia válida prevista por el contrato, no blockers.
+
+## 14. Safety
+
+FS-010 permanece:
+
+```text
+local/demo/research only
+```
+
+Durante implementación, tests y UAT:
+
+```text
+provider calls required by FS-010 = 0
+bookmaker authentication = 0
+real betting = 0
+external financial writes = 0
+```
+
+## 15. Limitaciones factuales
+
+El stream real disponible sigue siendo pequeño y está detenido actualmente por la falta de provenance de precio seleccionada para Decision 10903.
+
+Por ello FS-010 genera evidencia longitudinal comparable pero no intenta decidir qué CapitalPolicy es superior.
+
+La selección, sample sufficiency, estabilidad, tests estadísticos, PROMOTE/DROP y evaluación integrada Prediction + Decision + Capital permanecen fuera de FS-010 y corresponden al horizonte posterior de evaluación.
+
+## 16. New Work Discovered
 
 Ninguno.
+
+## 17. Cierre
+
+FS-010 queda técnicamente aceptado.
+
+Después del último commit/push sólo quedan pasos de cierre operativo:
+
+```text
+latest GitHub CI
++
+review reconciliation
+→ squash merge
+→ sync master
+→ branch cleanup
+→ tmp cleanup
+→ Planka Review → Done
+→ final handoff / durable source reconciliation
+```

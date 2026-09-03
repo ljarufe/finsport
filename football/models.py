@@ -879,6 +879,7 @@ class CapitalExperiment(TimeStampedModel):
     decision_policy_code = models.CharField(max_length=30)
     decision_policy_variant = models.CharField(max_length=30, blank=True)
     logical_identity = models.CharField(max_length=64, blank=True)
+    semantic_identity = models.CharField(max_length=64, blank=True, db_index=True)
     engine_version = models.CharField(max_length=50, default="fs004-v1")
     mode = models.CharField(max_length=12, choices=MODES)
     initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
