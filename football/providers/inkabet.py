@@ -6,21 +6,22 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django_countries.fields import Country
 
-from .api_inkabet import InkabetResponseError
-from .country_mapping import country_code, normalized_text
-from .models import (
+from football.country_mapping import country_code, normalized_text
+from football.models import (
     Bookmaker,
     MatchSourceRef,
     OddsMarket,
     ReconciliationStatus,
 )
-from .reconciliation import (
+from football.reconciliation import (
     MATCH_KICKOFF_TOLERANCE,
     reconcile_competition_ref,
     reconcile_match_ref,
     reconcile_team_ref,
 )
-from .sync import SyncStats, _upsert, get_inkabet_source, upsert_current_odds
+from football.sync import SyncStats, _upsert, get_inkabet_source, upsert_current_odds
+
+from .api_inkabet import InkabetResponseError
 
 MW3W = "MW3W"
 OUTRIGHT_MARKERS = {

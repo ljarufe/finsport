@@ -1,3 +1,5 @@
+"""Read-only API-Football source integration."""
+
 import json
 import socket
 import time

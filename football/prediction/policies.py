@@ -40,6 +40,19 @@ def modal_all(probability, best_prices=None):
     )
 
 
+def readiness_no_bet(reason, probability=None):
+    return PolicyResult(
+        action="NO_BET",
+        reason=reason,
+        model_probability=(
+            probability.probability_for(probability.predicted_outcome)
+            if probability is not None
+            else None
+        ),
+        config={"readiness_gate": True},
+    )
+
+
 def selective_confidence(probability, threshold, best_prices=None):
     outcome = probability.predicted_outcome
     confidence = probability.probability_for(outcome)

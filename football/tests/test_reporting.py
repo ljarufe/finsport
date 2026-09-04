@@ -16,6 +16,8 @@ from football.models import (
     CapitalPolicyRun,
     Competition,
     Decision,
+    DixonColesReadinessProfile,
+    HistoricalCoverage,
     Match,
     OddsMarket,
     OddsObservation,
@@ -25,6 +27,8 @@ from football.models import (
     Source,
     Team,
 )
+from football.prediction.constants import DIXON_COLES_VERSION
+from football.prediction.goal_models import DixonColesAdapter
 from football.reporting.presentation import (
     decision_reason_presentations,
     reason_presentations,
@@ -725,4 +729,239 @@ def test_reporting_gets_are_read_only_and_do_not_dispatch(graph):
         Prediction.objects.count(),
         Decision.objects.count(),
         CapitalExperiment.objects.count(),
+    )
+
+
+@pytest.mark.django_db
+def test_fs011_historical_and_daily_states_are_truthful_and_read_only(graph):
+    HistoricalCoverage.objects.create(
+        competition=graph.competition,
+        status=HistoricalCoverage.Status.PARTIAL,
+        required_seasons=[2022, 2023],
+        covered_seasons=[2022],
+        unresolved_seasons=[2023],
+        strategy_version="fs011-football-data-v1",
+        reason="UNMAPPED_TEAM_IDENTITY:frozen-team",
+    )
+    DixonColesReadinessProfile.objects.create(
+        competition=graph.other_competition,
+        version="reporting-profile-v1",
+        model_version=DIXON_COLES_VERSION,
+        model_config=DixonColesAdapter(xi=0.001).config,
+        approved=True,
+    )
+    produced_experiment = experiment(
+        graph,
+        summary={
+            "dixon_coles": {
+                "status": "PRODUCED",
+                "reasons": [],
+                "evidence_identity": "produced-evidence-id",
+            }
+        },
+    )
+    produced_experiment.config = {"target_match_ids": [graph.match.pk]}
+    produced_experiment.period_start = graph.selected
+    produced_experiment.period_end = graph.selected
+    produced_experiment.save(
+        update_fields=["config", "period_start", "period_end", "modified"]
+    )
+    produced = prediction(graph, produced_experiment)
+    produced.bet_eligible = False
+    produced.evidence_identity = "produced-evidence-id"
+    produced.readiness_reason = "NO_APPROVED_READINESS_PROFILE"
+    produced.save(
+        update_fields=[
+            "bet_eligible",
+            "evidence_identity",
+            "readiness_reason",
+            "modified",
+        ]
+    )
+    decision(
+        graph,
+        produced_experiment,
+        produced,
+        action=Decision.ACTION_NO_BET,
+        reason="NO_APPROVED_READINESS_PROFILE",
+    )
+    for status, reason in (
+        ("UNAVAILABLE", "INSUFFICIENT_TEAM_HISTORY"),
+        ("FAILED", "DIXON_COLES_PREDICTION_FAILED"),
+    ):
+        classified = experiment(
+            graph,
+            summary={
+                "dixon_coles": {
+                    "status": status,
+                    "reasons": [reason],
+                    "evidence_identity": f"{status.lower()}-evidence-id",
+                }
+            },
+        )
+        classified.config = {"target_match_ids": [graph.match.pk]}
+        classified.period_start = graph.selected
+        classified.period_end = graph.selected
+        classified.save(
+            update_fields=["config", "period_start", "period_end", "modified"]
+        )
+
+    counts = {
+        "coverage": HistoricalCoverage.objects.count(),
+        "profiles": DixonColesReadinessProfile.objects.count(),
+        "experiments": PredictionExperiment.objects.count(),
+        "predictions": Prediction.objects.count(),
+        "decisions": Decision.objects.count(),
+    }
+    with (
+        patch(
+            "football.providers.api_football.APIFootballClient.get_all",
+            side_effect=AssertionError("reporting called API-Football"),
+        ) as api_football,
+        patch(
+            "football.providers.api_inkabet.InkabetClient.get_json",
+            side_effect=AssertionError("reporting called Inkabet"),
+        ) as inkabet,
+        patch("football.tasks.run_pipeline") as pipeline,
+        patch("football.tasks.run_capture") as capture,
+    ):
+        home = Client().get("/")
+        daily = Client().get("/daily/", {"date": graph.selected.isoformat()})
+
+    home_content = home.content.decode()
+    assert home.status_code == 200
+    assert "Cobertura histórica y readiness Dixon-Coles" in home_content
+    assert "PARTIAL" in home_content
+    assert "UNMAPPED_TEAM_IDENTITY:frozen-team" in home_content
+    assert "1 / 2" in home_content
+    assert "Reintento automático" in home_content
+    assert "reporting-profile-v1" in home_content
+    assert "Sin perfil aprobado · fail-closed" in home_content
+
+    daily_content = daily.content.decode()
+    assert daily.status_code == 200
+    assert all(
+        status in daily_content for status in ("PRODUCED", "UNAVAILABLE", "FAILED")
+    )
+    assert "bet_eligible=false" in daily_content
+    assert "Sin perfil de readiness aprobado" in daily_content
+    assert "NO_APPROVED_READINESS_PROFILE" in daily_content
+    assert "INSUFFICIENT_TEAM_HISTORY" in daily_content
+    assert "DIXON_COLES_PREDICTION_FAILED" in daily_content
+    assert "produced-evidence-id" in daily_content
+    assert "No seleccionar (NO_BET)" in daily_content
+    assert not api_football.called and not inkabet.called
+    assert not pipeline.called and not capture.called
+    assert counts == {
+        "coverage": HistoricalCoverage.objects.count(),
+        "profiles": DixonColesReadinessProfile.objects.count(),
+        "experiments": PredictionExperiment.objects.count(),
+        "predictions": Prediction.objects.count(),
+        "decisions": Decision.objects.count(),
+    }
+
+
+@pytest.mark.django_db
+def test_daily_dc_status_and_reason_are_scoped_to_each_target_match(graph):
+    unavailable_match = Match.objects.create(
+        season=graph.season,
+        home_team=graph.home,
+        away_team=graph.away,
+        kickoff=graph.kickoff + timedelta(minutes=1),
+        status_short="NS",
+        status_long="Not Started",
+    )
+    failed_match = Match.objects.create(
+        season=graph.season,
+        home_team=graph.home,
+        away_team=graph.away,
+        kickoff=graph.kickoff + timedelta(minutes=2),
+        status_short="NS",
+        status_long="Not Started",
+    )
+    exp = experiment(graph)
+    exp.period_start = graph.selected
+    exp.period_end = graph.selected
+    exp.config = {
+        "target_match_ids": [graph.match.pk, unavailable_match.pk, failed_match.pk]
+    }
+    exp.summary = {
+        "unavailable": {
+            f"DIXON_COLES:{unavailable_match.pk}": "INSUFFICIENT_TEAM_HISTORY"
+        },
+        "failed": {
+            f"DIXON_COLES:{failed_match.pk}": {
+                "reason": "DIXON_COLES_PREDICTION_FAILED"
+            }
+        },
+        "dixon_coles": {
+            "status": "FAILED",
+            "reasons": [
+                "INSUFFICIENT_TEAM_HISTORY",
+                "DIXON_COLES_PREDICTION_FAILED",
+            ],
+            "evidence_identity": "mixed-target-evidence",
+            "targets": {
+                str(graph.match.pk): {"status": "PRODUCED", "reasons": []},
+                str(unavailable_match.pk): {
+                    "status": "UNAVAILABLE",
+                    "reasons": ["INSUFFICIENT_TEAM_HISTORY"],
+                },
+                str(failed_match.pk): {
+                    "status": "FAILED",
+                    "reasons": ["DIXON_COLES_PREDICTION_FAILED"],
+                },
+            },
+        },
+    }
+    exp.save(
+        update_fields=["period_start", "period_end", "config", "summary", "modified"]
+    )
+    prediction(graph, exp)
+
+    counts = (
+        PredictionExperiment.objects.count(),
+        Prediction.objects.count(),
+        Decision.objects.count(),
+    )
+    with (
+        patch("football.tasks.run_pipeline") as pipeline,
+        patch("football.tasks.run_capture") as capture,
+    ):
+        response = Client().get("/daily/", {"date": graph.selected.isoformat()})
+
+    assert response.status_code == 200
+    matches = {match.pk: match for match in response.context["matches"]}
+    assert matches[graph.match.pk].dc_evidence[0]["status"] == "PRODUCED"
+    assert matches[graph.match.pk].dc_evidence[0]["reasons"] == []
+    assert matches[unavailable_match.pk].dc_evidence[0] == {
+        "experiment_id": exp.pk,
+        "status": "UNAVAILABLE",
+        "reasons": ["INSUFFICIENT_TEAM_HISTORY"],
+        "evidence_identity": "mixed-target-evidence",
+    }
+    assert matches[failed_match.pk].dc_evidence[0]["status"] == "FAILED"
+    assert matches[failed_match.pk].dc_evidence[0]["reasons"] == [
+        "DIXON_COLES_PREDICTION_FAILED"
+    ]
+
+    content = response.content.decode()
+
+    def status_section(match_id):
+        start = content.index(f'id="dc-status-{match_id}"')
+        return content[start : content.index("</section>", start)]
+
+    produced_section = status_section(graph.match.pk)
+    assert "PRODUCED" in produced_section
+    assert "INSUFFICIENT_TEAM_HISTORY" not in produced_section
+    assert "DIXON_COLES_PREDICTION_FAILED" not in produced_section
+    assert "UNAVAILABLE" in status_section(unavailable_match.pk)
+    assert "INSUFFICIENT_TEAM_HISTORY" in status_section(unavailable_match.pk)
+    assert "FAILED" in status_section(failed_match.pk)
+    assert "DIXON_COLES_PREDICTION_FAILED" in status_section(failed_match.pk)
+    assert not pipeline.called and not capture.called
+    assert counts == (
+        PredictionExperiment.objects.count(),
+        Prediction.objects.count(),
+        Decision.objects.count(),
     )

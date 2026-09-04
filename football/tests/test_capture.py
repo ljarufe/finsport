@@ -10,13 +10,6 @@ from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 
-from football.api_football import (
-    APIFootballClient,
-    APIFootballConfigurationError,
-    APIFootballPaginationError,
-    APIFootballResponseError,
-)
-from football.api_inkabet import InkabetResponseError
 from football.capture import run_capture
 from football.capture.contracts import CaptureConfig
 from football.capture.executor import CaptureExecutor
@@ -29,6 +22,13 @@ from football.models import (
     OddsObservation,
     OddsSnapshot,
 )
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballConfigurationError,
+    APIFootballPaginationError,
+    APIFootballResponseError,
+)
+from football.providers.api_inkabet import InkabetResponseError
 from football.sync import sync_catalog_payloads, sync_fixture_payloads
 from football.tasks import wake_capture_planner
 

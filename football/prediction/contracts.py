@@ -40,3 +40,9 @@ class ProbabilityResult:
 class UnavailablePrediction:
     reason: str
     diagnostics: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FailedPrediction:
+    reason: str
+    diagnostics: dict = field(default_factory=dict)

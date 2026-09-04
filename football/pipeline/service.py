@@ -1,6 +1,6 @@
 import uuid
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -17,10 +17,12 @@ from football.capital.longitudinal import (
     recompute_longitudinal_capital,
 )
 from football.capture import run_capture
+from football.historical import historical_coverage_is_current
 from football.models import (
     CaptureRun,
     CaptureWorkItem,
     Competition,
+    HistoricalCoverage,
     Match,
     PipelineRun,
     PredictionExperiment,
@@ -29,7 +31,8 @@ from football.observability.events import emit_event
 from football.observability.pipeline import emit_pipeline_terminal, exception_diagnostic
 from football.observability.reconciliation import emit_reconciliation_pending
 from football.prediction.constants import ENGINE_VERSION as PREDICTION_ENGINE_VERSION
-from football.prediction.service import predict_competition_day
+from football.prediction.evidence import dixon_coles_evidence_basis
+from football.prediction.service import latest_selected_config, predict_competition_day
 from football.prediction.settlement import settle_prospective_predictions
 
 from .contracts import PhaseResult, PhaseState, PipelineResult
@@ -94,6 +97,14 @@ def _prediction_candidates(capture_result, at):
                 "target_at": target_at,
                 "logical_identity": identity,
                 "match_ids": [],
+                "model_codes": [
+                    "INDEPENDENT_POISSON",
+                    "ELO_MULTINOMIAL_LOGIT",
+                    "MARKET_CONSENSUS",
+                    "MODERNIZED_R45",
+                ],
+                "cutoff": at,
+                "evidence_identity": "",
             },
         )["match_ids"].append(match.pk)
     normalized = []
@@ -102,6 +113,67 @@ def _prediction_candidates(capture_result, at):
         candidate["match_ids"] = sorted(set(candidate["match_ids"]))
         normalized.append(candidate)
     return normalized
+
+
+def _dixon_coles_candidates(at):
+    horizon = at + timedelta(hours=settings.FOOTBALL_CAPTURE_HORIZON_HOURS)
+    matches = list(
+        Match.objects.filter(
+            season__competition__enabled=True,
+            season__competition__historical_coverage__status=HistoricalCoverage.Status.COMPLETE,
+            status_short__in=("TBD", "NS"),
+            kickoff__gt=at,
+            kickoff__lte=horizon,
+        )
+        .select_related(
+            "season",
+            "season__competition",
+            "season__competition__historical_coverage",
+        )
+        .order_by("season__competition_id", "kickoff", "id")
+    )
+    local_timezone = ZoneInfo(settings.TIME_ZONE)
+    groups = defaultdict(list)
+    current_coverage = {}
+    for match in matches:
+        competition = match.season.competition
+        if competition.pk not in current_coverage:
+            current_coverage[competition.pk] = historical_coverage_is_current(
+                competition, competition.historical_coverage
+            )
+        if not current_coverage[competition.pk]:
+            continue
+        groups[
+            (
+                match.season.competition_id,
+                match.kickoff.astimezone(local_timezone).date(),
+            )
+        ].append(match)
+    candidates = []
+    for (competition_id, day), targets in sorted(groups.items()):
+        competition = targets[0].season.competition
+        selected, _ = latest_selected_config(competition)
+        cutoff = min(match.kickoff for match in targets) - timedelta(microseconds=1)
+        evidence_identity, _, _ = dixon_coles_evidence_basis(
+            competition,
+            targets,
+            cutoff=cutoff,
+            config=selected["dixon_coles"],
+        )
+        candidates.append(
+            {
+                "competition_id": competition_id,
+                "day": day,
+                "intended_window": "football-evidence",
+                "target_at": None,
+                "logical_identity": f"fs011:dc:{evidence_identity}",
+                "match_ids": [match.pk for match in targets],
+                "model_codes": ["DIXON_COLES"],
+                "cutoff": cutoff,
+                "evidence_identity": evidence_identity,
+            }
+        )
+    return candidates
 
 
 def _capture_state(capture_result, *, dry_run):
@@ -122,8 +194,16 @@ def _capture_state(capture_result, *, dry_run):
 def _experiment_report(experiment, *, created):
     produced = Counter(experiment.predictions.values_list("model_code", flat=True))
     unavailable = Counter()
+    failed = Counter()
+    failure_reasons = defaultdict(list)
     for key in (experiment.summary or {}).get("unavailable", {}):
         unavailable[key.split(":", 1)[0]] += 1
+    for key, detail in (experiment.summary or {}).get("failed", {}).items():
+        code = key.split(":", 1)[0]
+        failed[code] += 1
+        reason = detail.get("reason") if isinstance(detail, dict) else detail
+        if reason and str(reason) not in failure_reasons[code]:
+            failure_reasons[code].append(str(reason)[:200])
     for code, detail in (experiment.summary or {}).get("r45_arms", {}).items():
         if detail.get("status") == "UNAVAILABLE":
             unavailable[code] += 1
@@ -154,7 +234,12 @@ def _experiment_report(experiment, *, created):
         "models": {
             "produced": dict(sorted(produced.items())),
             "unavailable": dict(sorted(unavailable.items())),
+            "failed": dict(sorted(failed.items())),
+            "failure_reasons": {
+                code: reasons[:10] for code, reasons in sorted(failure_reasons.items())
+            },
         },
+        "dixon_coles": (experiment.summary or {}).get("dixon_coles", {}),
         "policies": {key: policies[key] for key in sorted(policies)},
     }
 
@@ -357,6 +442,7 @@ def run_pipeline(
         phases["CAPTURE"] = PhaseResult(PhaseState.FAILED, reason=message)
 
     candidates = _prediction_candidates(capture_result, at) if capture_result else []
+    candidates.extend(_dixon_coles_candidates(at))
     experiment_rows = []
     prediction_unavailable = []
     prediction_errors = []
@@ -369,7 +455,12 @@ def run_pipeline(
                     {
                         **candidate,
                         "day": candidate["day"].isoformat(),
-                        "target_at": candidate["target_at"].isoformat(),
+                        "target_at": (
+                            candidate["target_at"].isoformat()
+                            if candidate["target_at"]
+                            else None
+                        ),
+                        "cutoff": candidate["cutoff"].isoformat(),
                     }
                     for candidate in candidates
                 ]
@@ -381,11 +472,13 @@ def run_pipeline(
                 outcome = predict_competition_day(
                     candidate["competition_id"],
                     candidate["day"],
-                    at,
+                    candidate["cutoff"],
                     logical_identity=candidate["logical_identity"],
                     intended_window=candidate["intended_window"],
                     target_at=candidate["target_at"],
                     match_ids=candidate["match_ids"],
+                    model_codes=candidate["model_codes"],
+                    evidence_identity=candidate["evidence_identity"],
                 )
                 if outcome.experiment is None:
                     prediction_unavailable.append(
@@ -416,8 +509,26 @@ def run_pipeline(
                     }
                 )
         created_count = sum(row["created"] for row in experiment_rows)
+        created_rows = [row for row in experiment_rows if row["created"]]
+        classified_failed = [
+            row
+            for row in created_rows
+            if row.get("dixon_coles", {}).get("status") == "FAILED"
+        ]
+        classified_unavailable = [
+            row
+            for row in created_rows
+            if row.get("dixon_coles", {}).get("status") == "UNAVAILABLE"
+        ]
+        produced_count = sum(
+            sum(row["models"]["produced"].values()) for row in created_rows
+        )
         if prediction_errors:
             state = PhaseState.DEGRADED if experiment_rows else PhaseState.FAILED
+        elif classified_failed:
+            state = PhaseState.DEGRADED if produced_count else PhaseState.FAILED
+        elif classified_unavailable and not produced_count:
+            state = PhaseState.UNAVAILABLE
         elif prediction_unavailable and not experiment_rows:
             state = PhaseState.UNAVAILABLE
         elif created_count:
@@ -432,6 +543,8 @@ def run_pipeline(
                 "experiments": experiment_rows,
                 "unavailable": prediction_unavailable,
                 "errors": prediction_errors,
+                "classified_failed": len(classified_failed),
+                "classified_unavailable": len(classified_unavailable),
             },
         )
         errors.extend({"phase": "PREDICTION", **item} for item in prediction_errors)

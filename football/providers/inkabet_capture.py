@@ -2,15 +2,16 @@ from dataclasses import dataclass, field
 
 from django.conf import settings
 
-from football.api_inkabet import InkabetClient
-from football.inkabet import (
+from football.models import OddsObservation, OddsSnapshot
+from football.observability.events import emit_event, sanitize_text
+from football.sync import SyncStats
+
+from .api_inkabet import InkabetClient
+from .inkabet import (
     reconcile_categories,
     resolved_match_refs_for,
     sync_mw3w_payload,
 )
-from football.models import OddsObservation, OddsSnapshot
-from football.observability.events import emit_event, sanitize_text
-from football.sync import SyncStats
 
 
 @dataclass

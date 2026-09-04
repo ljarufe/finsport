@@ -5,7 +5,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from football.api_football import (
+from football.providers.api_football import (
     APIFootballAuthenticationError,
     APIFootballClient,
     APIFootballConfigurationError,

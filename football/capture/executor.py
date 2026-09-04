@@ -3,16 +3,6 @@ from types import SimpleNamespace
 
 from django.utils import timezone
 
-from football.api_football import (
-    APIFootballClient,
-    APIFootballError,
-    APIFootballOperationBudgetError,
-    APIFootballPaginationError,
-    APIFootballQuotaReserveError,
-    APIFootballRateLimitError,
-)
-from football.api_inkabet import InkabetClient
-from football.inkabet_capture import capture_inkabet_matches
 from football.models import (
     CaptureRun,
     CaptureWorkItem,
@@ -23,6 +13,16 @@ from football.models import (
     Source,
 )
 from football.observability.pipeline import exception_diagnostic
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballError,
+    APIFootballOperationBudgetError,
+    APIFootballPaginationError,
+    APIFootballQuotaReserveError,
+    APIFootballRateLimitError,
+)
+from football.providers.api_inkabet import InkabetClient
+from football.providers.inkabet_capture import capture_inkabet_matches
 from football.sync import FINISHED_STATUSES, sync_fixture_payloads, sync_odds_payloads
 
 from .contracts import CaptureResult

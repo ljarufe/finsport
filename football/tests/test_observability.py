@@ -10,7 +10,6 @@ import pytest
 from django.core.management import call_command
 from django.utils import timezone
 
-from football.api_football import APIFootballClient, APIFootballResponseError
 from football.management.commands.observe_pipeline import Command as WatchdogCommand
 from football.models import (
     Competition,
@@ -31,6 +30,7 @@ from football.observability.reconciliation import emit_reconciliation_pending
 from football.observability.runtime import OperationalErrorHandler
 from football.pipeline.contracts import PhaseResult, PhaseState
 from football.pipeline.service import _phase_status
+from football.providers.api_football import APIFootballClient, APIFootballResponseError
 from football.tasks import wake_pipeline
 
 pytestmark = pytest.mark.django_db

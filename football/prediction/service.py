@@ -5,13 +5,14 @@ from django.db import transaction
 from django.utils import timezone
 
 from football.models import Competition, Prediction, PredictionExperiment
+from football.observability.events import emit_event
 
 from .constants import (
     CONFIDENCE_GRID,
     ENGINE_VERSION,
     MINIMUM_EV_GRID,
 )
-from .contracts import UnavailablePrediction
+from .contracts import FailedPrediction, UnavailablePrediction
 from .datasets import eligible_finished_matches, local_day, upcoming_matches_for_day
 from .elo import EloMultinomialAdapter
 from .evaluation import (
@@ -19,6 +20,7 @@ from .evaluation import (
     dependency_versions,
     persist_standard_policies,
 )
+from .evidence import dixon_coles_evidence_basis
 from .goal_models import DixonColesAdapter, IndependentPoissonAdapter
 from .market import MarketConsensusAdapter
 from .r45 import (
@@ -27,6 +29,7 @@ from .r45 import (
     predict_modernized,
     select_modernized_config,
 )
+from .readiness import assess_bet_eligibility
 
 DEFAULT_CONFIG = {
     "dixon_coles": {"xi": 0.001},
@@ -80,6 +83,42 @@ class ProspectivePredictionResult:
     reason: str = ""
 
 
+def _classified_reason(value):
+    if isinstance(value, dict):
+        return value.get("reason", "")
+    return str(value or "")
+
+
+def _dixon_coles_targets(experiment, targets, unavailable, failed):
+    produced_ids = set(
+        experiment.predictions.filter(model_code=Prediction.DIXON_COLES).values_list(
+            "match_id", flat=True
+        )
+    )
+    rows = {}
+    for match in targets:
+        key = f"{Prediction.DIXON_COLES}:{match.pk}"
+        if key in failed:
+            status, reason = "FAILED", _classified_reason(failed[key])
+        elif key in unavailable:
+            status, reason = "UNAVAILABLE", _classified_reason(unavailable[key])
+        elif match.pk in produced_ids:
+            status, reason = "PRODUCED", ""
+        elif Prediction.DIXON_COLES in failed:
+            status, reason = "FAILED", _classified_reason(
+                failed[Prediction.DIXON_COLES]
+            )
+        else:
+            status, reason = "UNAVAILABLE", _classified_reason(
+                unavailable.get(Prediction.DIXON_COLES, "DIXON_COLES_NOT_PRODUCED")
+            )
+        rows[str(match.pk)] = {
+            "status": status,
+            "reasons": [reason] if reason else [],
+        }
+    return rows
+
+
 @transaction.atomic
 def predict_competition_day(
     competition,
@@ -90,6 +129,8 @@ def predict_competition_day(
     intended_window="",
     target_at=None,
     match_ids=None,
+    model_codes=None,
+    evidence_identity="",
 ):
     if isinstance(day, str):
         day = date.fromisoformat(day)
@@ -125,8 +166,29 @@ def predict_competition_day(
     if not targets:
         return ProspectivePredictionResult(None, False, "NO_ELIGIBLE_TARGETS")
     selected, config_source = latest_selected_config(competition)
+    requested_models = set(
+        model_codes
+        or (
+            Prediction.DIXON_COLES,
+            Prediction.INDEPENDENT_POISSON,
+            Prediction.ELO_MULTINOMIAL_LOGIT,
+            Prediction.MARKET_CONSENSUS,
+            Prediction.MODERNIZED_R45,
+        )
+    )
     history = list(eligible_finished_matches(competition, before=cutoff))
     history = [match for match in history if local_day(match.kickoff) < day]
+    dc_basis = None
+    if Prediction.DIXON_COLES in requested_models:
+        calculated_identity, dc_basis, history = dixon_coles_evidence_basis(
+            competition,
+            targets,
+            cutoff=cutoff,
+            config=selected["dixon_coles"],
+        )
+        if evidence_identity and evidence_identity != calculated_identity:
+            raise ValueError("Dixon-Coles evidence identity does not match its basis.")
+        evidence_identity = calculated_identity
     if "modernized_r45" not in selected:
         modernized_config = _select_prospective_modernized(history)
         if modernized_config is not None:
@@ -150,30 +212,60 @@ def predict_competition_day(
             "intended_window": intended_window,
             "target_at": target_at.isoformat() if target_at else None,
             "target_match_ids": sorted(match.pk for match in targets),
+            "model_codes": sorted(requested_models),
+            "dixon_coles_evidence_identity": evidence_identity,
+            "dixon_coles_evidence_basis": dc_basis,
             "temporal_batch_policy": "FS-005 logical intended_window/target_at; historical-results-strict-prior-local-day",
             "confidence_grid": list(CONFIDENCE_GRID),
             "minimum_ev_grid": list(MINIMUM_EV_GRID),
         },
     )
-    adapters = (
-        DixonColesAdapter(xi=selected["dixon_coles"]["xi"]),
-        IndependentPoissonAdapter(xi=selected["independent_poisson"]["xi"]),
-        EloMultinomialAdapter(
-            k=selected["elo_multinomial_logit"]["k"],
-            c=selected["elo_multinomial_logit"]["C"],
-        ),
-    )
+    adapters = []
+    if Prediction.DIXON_COLES in requested_models:
+        adapters.append(DixonColesAdapter(xi=selected["dixon_coles"]["xi"]))
+    if Prediction.INDEPENDENT_POISSON in requested_models:
+        adapters.append(
+            IndependentPoissonAdapter(xi=selected["independent_poisson"]["xi"])
+        )
+    if Prediction.ELO_MULTINOMIAL_LOGIT in requested_models:
+        adapters.append(
+            EloMultinomialAdapter(
+                k=selected["elo_multinomial_logit"]["k"],
+                c=selected["elo_multinomial_logit"]["C"],
+            )
+        )
     fitted = []
     unavailable = {}
+    failed = {}
     for adapter in adapters:
-        outcome = adapter.fit(history, cutoff)
+        if adapter.model_code == Prediction.DIXON_COLES and hasattr(
+            adapter, "fit_for_targets"
+        ):
+            outcome = adapter.fit_for_targets(
+                history,
+                cutoff,
+                targets,
+                readiness_assessor=lambda diagnostics: assess_bet_eligibility(
+                    competition,
+                    diagnostics,
+                    model_version=adapter.model_version,
+                    model_config=adapter.config,
+                ),
+            )
+        else:
+            outcome = adapter.fit(history, cutoff)
         if isinstance(outcome, UnavailablePrediction):
             unavailable[adapter.model_code] = outcome.reason
+        elif isinstance(outcome, FailedPrediction):
+            failed[adapter.model_code] = {
+                "reason": outcome.reason,
+                "diagnostics": outcome.diagnostics,
+            }
         else:
             fitted.append(adapter)
     modernized = None
     modernized_fit_unavailable = {}
-    if "modernized_r45" in selected:
+    if Prediction.MODERNIZED_R45 in requested_models and "modernized_r45" in selected:
         modernized, modernized_fit_unavailable = fit_modernized(
             history,
             cutoff,
@@ -182,7 +274,7 @@ def predict_competition_day(
         if isinstance(modernized, UnavailablePrediction):
             unavailable[Prediction.MODERNIZED_R45] = modernized.reason
             modernized = None
-    else:
+    elif Prediction.MODERNIZED_R45 in requested_models:
         unavailable[Prediction.MODERNIZED_R45] = (
             "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
         )
@@ -193,14 +285,34 @@ def predict_competition_day(
             if isinstance(result, UnavailablePrediction):
                 unavailable[f"{adapter.model_code}:{match.id}"] = result.reason
                 continue
-            prediction = _persist_prediction(experiment, match, adapter, result, cutoff)
+            if isinstance(result, FailedPrediction):
+                failed[f"{adapter.model_code}:{match.id}"] = {
+                    "reason": result.reason,
+                    "diagnostics": result.diagnostics,
+                }
+                continue
+            prediction = _persist_prediction(
+                experiment,
+                match,
+                adapter,
+                result,
+                cutoff,
+                evidence_identity=(
+                    evidence_identity
+                    if adapter.model_code == Prediction.DIXON_COLES
+                    else ""
+                ),
+            )
             persist_standard_policies(experiment, match, prediction, result, cutoff)
-        result = market.predict(match, cutoff)
-        if isinstance(result, UnavailablePrediction):
-            unavailable[f"MARKET_CONSENSUS:{match.id}"] = result.reason
-        else:
-            prediction = _persist_prediction(experiment, match, market, result, cutoff)
-            persist_standard_policies(experiment, match, prediction, result, cutoff)
+        if Prediction.MARKET_CONSENSUS in requested_models:
+            result = market.predict(match, cutoff)
+            if isinstance(result, UnavailablePrediction):
+                unavailable[f"MARKET_CONSENSUS:{match.id}"] = result.reason
+            else:
+                prediction = _persist_prediction(
+                    experiment, match, market, result, cutoff
+                )
+                persist_standard_policies(experiment, match, prediction, result, cutoff)
         if modernized is not None:
             result = predict_modernized(modernized, history, match, cutoff)
             if isinstance(result, UnavailablePrediction):
@@ -215,11 +327,26 @@ def predict_competition_day(
                     variant=modernized.variant,
                 )
                 persist_standard_policies(experiment, match, prediction, result, cutoff)
+    dc_targets = _dixon_coles_targets(experiment, targets, unavailable, failed)
+    dc_statuses = {row["status"] for row in dc_targets.values()}
     experiment.summary = {
         "target_count": len(targets),
         "prediction_count": experiment.predictions.count(),
         "decision_count": experiment.decisions.count(),
         "unavailable": unavailable,
+        "failed": failed,
+        "dixon_coles": {
+            "status": (
+                "FAILED"
+                if "FAILED" in dc_statuses
+                else ("PRODUCED" if "PRODUCED" in dc_statuses else "UNAVAILABLE")
+            ),
+            "evidence_identity": evidence_identity,
+            "reasons": sorted(
+                {reason for row in dc_targets.values() for reason in row["reasons"]}
+            ),
+            "targets": dc_targets,
+        },
         "r45_arms": {
             "MODERNIZED_R45": {
                 "status": (
@@ -241,6 +368,30 @@ def predict_competition_day(
             }
         },
     }
+    if Prediction.DIXON_COLES in requested_models:
+        dc_summary = experiment.summary["dixon_coles"]
+        emit_event(
+            event_code=f"DIXON_COLES_{dc_summary['status']}",
+            severity="ERROR" if dc_summary["status"] == "FAILED" else "INFO",
+            component="prediction",
+            operation="dixon_coles",
+            outcome=dc_summary["status"],
+            failure_kind=(
+                "dixon_coles_runtime" if dc_summary["status"] == "FAILED" else ""
+            ),
+            human_summary="Pure Dixon-Coles prediction reached a classified terminal state.",
+            competition_id=competition.pk,
+            prediction_experiment_id=experiment.pk,
+            context={
+                "evidence_identity": evidence_identity,
+                "status": dc_summary["status"],
+                "reason": "; ".join(
+                    str(value)
+                    for key, value in {**unavailable, **failed}.items()
+                    if key.startswith(Prediction.DIXON_COLES)
+                )[:500],
+            },
+        )
     experiment.completed_at = timezone.now()
     experiment.save(update_fields=["summary", "completed_at", "modified"])
     return ProspectivePredictionResult(experiment, True)

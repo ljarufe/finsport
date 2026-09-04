@@ -1,8 +1,8 @@
 from django.core.management.base import BaseCommand, CommandError
 
-from football.api_football import APIFootballClient, APIFootballError
-from football.api_inkabet import InkabetError
 from football.observability.events import emit_event
+from football.providers.api_football import APIFootballClient, APIFootballError
+from football.providers.api_inkabet import InkabetError
 from football.sync import FootballSyncError, SyncStats
 
 
