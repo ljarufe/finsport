@@ -134,6 +134,27 @@ def test_approved_versioned_profile_can_make_valid_dc_prediction_eligible():
 
 
 @pytest.mark.django_db
+def test_non_dc_batch_does_not_persist_dixon_coles_status():
+    competition, _, history = create_synthetic_league()
+    target = future_target(competition, [history[0].home_team, history[0].away_team])
+
+    outcome = predict_competition_day(
+        competition,
+        target.kickoff.date(),
+        timezone.now(),
+        logical_identity="fs011-non-dc-batch",
+        match_ids=[target.pk],
+        model_codes=[Prediction.ELO_MULTINOMIAL_LOGIT],
+    )
+
+    assert outcome.created is True
+    assert "dixon_coles" not in outcome.experiment.summary
+    assert not outcome.experiment.predictions.filter(
+        model_code=Prediction.DIXON_COLES
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_multi_target_unseen_team_does_not_suppress_mature_dc_prediction():
     competition, _, history = create_synthetic_league()
     mature = future_target(competition, [history[0].home_team, history[0].away_team])

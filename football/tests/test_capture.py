@@ -567,7 +567,7 @@ def test_executor_revalidates_optional_bootstrap_opt_in_under_lock():
 
 @override_settings(**CAPTURE_SETTINGS)
 def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
@@ -604,7 +604,7 @@ def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
     )
 )
 def test_worst_case_admission_blocks_before_provider_call():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
@@ -997,7 +997,7 @@ def test_result_debt_has_priority_and_can_use_bounded_mandatory_reserve():
     )
 )
 def test_result_then_due_odds_precede_discovery_under_constrained_budget():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(
         league_id=39,
         name="Past League",

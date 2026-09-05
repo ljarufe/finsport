@@ -364,6 +364,64 @@ def test_exact_secondary_with_one_hour_delta_reuses_api_match_idempotently():
 
 
 @pytest.mark.django_db
+def test_exact_reimport_outside_tolerance_is_conflict_not_unchanged():
+    competition, season, _ = competition_with_catalogue()
+    home, away = Team.objects.filter(competition=competition).order_by("pk")[:2]
+    canonical_kickoff = datetime(2024, 8, 20, 15, tzinfo=ZoneInfo("Europe/London"))
+    canonical = Match.objects.create(
+        season=season,
+        home_team=home,
+        away_team=away,
+        kickoff=canonical_kickoff,
+        status_short="FT",
+        status_long="Match Finished",
+        home_score=2,
+        away_score=1,
+        outcome=Match.OUTCOME_HOME,
+    )
+    api_source, _ = Source.objects.get_or_create(
+        code="api_football",
+        defaults={"name": "API-Football", "base_url": "https://example.test/"},
+    )
+    MatchSourceRef.objects.create(
+        source=api_source,
+        external_id="api-reimport-primary",
+        match=canonical,
+        reconciliation_status=ReconciliationStatus.RESOLVED,
+    )
+    secondary, _ = Source.objects.get_or_create(
+        code="football_data",
+        defaults={"name": "football-data", "base_url": "https://example.test/"},
+    )
+    original = exact_result(
+        season.year,
+        canonical_kickoff + timedelta(hours=1),
+        external_id="secondary-reimport-time",
+    )
+    first = reconcile_result(secondary, competition, season, original)
+    assert first.reconciled == 1
+
+    corrected = exact_result(
+        season.year,
+        canonical_kickoff + timedelta(hours=3),
+        external_id=original.external_id,
+    )
+    repeated = reconcile_result(secondary, competition, season, corrected)
+
+    canonical.refresh_from_db()
+    ref = MatchSourceRef.objects.get(source=secondary, external_id=original.external_id)
+    assert repeated.unchanged == 0
+    assert repeated.conflicts == 1
+    assert ref.context["reconciliation"] == "SOURCE_REIMPORT_CONFLICT"
+    assert canonical.kickoff == canonical_kickoff
+    assert (canonical.home_score, canonical.away_score, canonical.outcome) == (
+        2,
+        1,
+        Match.OUTCOME_HOME,
+    )
+
+
+@pytest.mark.django_db
 def test_bounded_secondary_score_conflict_preserves_api_canonical_result():
     competition, season, _ = competition_with_catalogue()
     home, away = Team.objects.filter(competition=competition).order_by("pk")[:2]

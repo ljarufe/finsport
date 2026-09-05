@@ -327,26 +327,12 @@ def predict_competition_day(
                     variant=modernized.variant,
                 )
                 persist_standard_policies(experiment, match, prediction, result, cutoff)
-    dc_targets = _dixon_coles_targets(experiment, targets, unavailable, failed)
-    dc_statuses = {row["status"] for row in dc_targets.values()}
     experiment.summary = {
         "target_count": len(targets),
         "prediction_count": experiment.predictions.count(),
         "decision_count": experiment.decisions.count(),
         "unavailable": unavailable,
         "failed": failed,
-        "dixon_coles": {
-            "status": (
-                "FAILED"
-                if "FAILED" in dc_statuses
-                else ("PRODUCED" if "PRODUCED" in dc_statuses else "UNAVAILABLE")
-            ),
-            "evidence_identity": evidence_identity,
-            "reasons": sorted(
-                {reason for row in dc_targets.values() for reason in row["reasons"]}
-            ),
-            "targets": dc_targets,
-        },
         "r45_arms": {
             "MODERNIZED_R45": {
                 "status": (
@@ -369,6 +355,20 @@ def predict_competition_day(
         },
     }
     if Prediction.DIXON_COLES in requested_models:
+        dc_targets = _dixon_coles_targets(experiment, targets, unavailable, failed)
+        dc_statuses = {row["status"] for row in dc_targets.values()}
+        experiment.summary["dixon_coles"] = {
+            "status": (
+                "FAILED"
+                if "FAILED" in dc_statuses
+                else ("PRODUCED" if "PRODUCED" in dc_statuses else "UNAVAILABLE")
+            ),
+            "evidence_identity": evidence_identity,
+            "reasons": sorted(
+                {reason for row in dc_targets.values() for reason in row["reasons"]}
+            ),
+            "targets": dc_targets,
+        }
         dc_summary = experiment.summary["dixon_coles"]
         emit_event(
             event_code=f"DIXON_COLES_{dc_summary['status']}",

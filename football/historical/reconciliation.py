@@ -183,9 +183,19 @@ def _candidate_matches(record, season, home_team, away_team):
     return list(candidates.order_by("id")[:2])
 
 
+def _same_kickoff(match, record):
+    if record.kickoff_precision == "EXACT":
+        return abs(match.kickoff - record.kickoff) <= EXACT_KICKOFF_TOLERANCE
+    source_timezone = record.kickoff.tzinfo
+    if source_timezone is None:
+        return match.kickoff.date() == record.kickoff.date()
+    return match.kickoff.astimezone(source_timezone).date() == record.kickoff.date()
+
+
 def _same_result(match, record):
     return (
-        match.status_short == "FT"
+        _same_kickoff(match, record)
+        and match.status_short == "FT"
         and match.home_score == record.home_score
         and match.away_score == record.away_score
         and match.outcome == _outcome(record.home_score, record.away_score)

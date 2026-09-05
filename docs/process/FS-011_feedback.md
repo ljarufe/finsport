@@ -1,109 +1,311 @@
 # FS-011 Feedback
 
-## IMPLEMENTATION SNAPSHOT — MAY BECOME STALE
+## Final outcome
 
-Pass 2 of 4 consolidated pre-UAT correction feedback. This snapshot is not final operational acceptance.
+FS-011 is complete.
 
-### Outcome
+The ticket delivers auditable multi-source historical ingestion for the final enabled competition pool, source-aware reconciliation and historical readiness, a complete Dixon-Coles operational/readiness contract, reporting of Dixon-Coles terminal states, and the initial approved readiness configuration required for end-to-end simulation.
 
-FS-011 now has a corrected implementation candidate for fail-closed historical identity, model/config-scoped Dixon-Coles readiness, current-evidence runtime classification, pipeline failure ownership, complete focused provider organization, and bounded read-only reporting.
+The final implementation includes all UAT-driven corrections and all material PR review findings. Historical acquisition is not part of the recurring daily provider path, existing API-Football canonical evidence remains authoritative, and Dixon-Coles remains fail-closed for structurally insufficient targets.
 
-The implementation deliberately did not apply migration `0010` to the maintainer's persistent database, call live providers, perform the real historical backfill, start UAT, or alter the persistent final enabled-competition set.
+## Final enabled competition pool
 
-### Pass 2 correction findings
+Exactly these 10 first divisions are enabled for the FS-011 operating pool:
 
-- Finding 1: Unknown historical team identities no longer create canonical `Team` rows. Existing resolved source refs, configured aliases whose canonical target already exists, and exact canonical identity are the only automatic paths. Operators can create the legitimate historical-only `Team` and/or an explicit `TeamSourceRef`, then retry deterministically. Unknown aliases remain unresolved/PARTIAL with stable diagnostics.
-- Finding 2: `DixonColesReadinessProfile` approval is now scoped to `DIXON_COLES` model version plus normalized model/time-weight configuration. Matching profile/config participates in evidence identity. Config mismatch preserves valid Prediction evidence but forces `bet_eligible=false` and readiness `NO_BET`.
-- Finding 3: Runtime classification now uses whether current evidence passes the matching readiness profile, not profile existence. Below-profile known instability is UNAVAILABLE; unexpected post-readiness runtime or invalid probability output is FAILED. Backtests persist separate `failed_counts` and `unavailable_counts`.
-- Finding 4: Prediction-phase reporting consumes persisted classified DC outcomes. DC-only FAILED cannot report SUCCESS, mixed successful evidence plus failure is DEGRADED, expected UNAVAILABLE remains non-error/low-noise, and bounded failed counts/reasons are exposed.
+- FR — Ligue 1 (`1270`)
+- BR — Serie A (`1272`)
+- EN — Premier League (`1273`)
+- DE — Bundesliga (`1274`)
+- IT — Serie A (`1275`)
+- NL — Eredivisie (`1276`)
+- PT — Primeira Liga (`1277`)
+- ES — La Liga (`1278`)
+- TR — Süper Lig (`1325`)
+- AR — Liga Profesional Argentina (`1459`)
 
-### Maintainer addendum
+Peru Liga 1 (`1524`) and MLS (`1432`) are outside the final enabled pool.
 
-- AD1 PASS: The final focused provider home is `football/providers/`, containing `api_football.py`, `api_inkabet.py`, `catalog.py`, `football_data.py`, `inkabet.py`, and `inkabet_capture.py` plus `__init__.py`. All repository imports/tests were updated and the obsolete root provider modules were removed. API-Football behavior and Inkabet fail-soft/quota/safety/observability regressions pass without live calls. No registry, provider abstraction framework, or Django app was introduced.
-- AD2 PASS: Existing `/` and `/daily/` server-rendered reporting now surface persisted FS-011 semantics. Historical reporting shows enabled state, coverage/season/source/strategy/reason, no-auto-retry, readiness profile approval and fail-closed state. Daily reporting distinguishes persisted DC PRODUCED, UNAVAILABLE, and FAILED; produced rows show eligibility/readiness and bounded evidence identity, and below-readiness Prediction remains visibly distinct from its `NO_BET` Decision. Tests prove zero provider calls, task dispatches, domain writes, or financial writes.
+All 10 final competitions were verified with historical coverage `COMPLETE`, current strategy/basis, no unresolved required seasons, and no unresolved ambiguity/conflict in their effective required source-supported windows.
 
-Admin remains the detailed technical audit surface. No route, SPA, React, Node/npm, API/DRF, application JavaScript, or cross-model frontend redesign was added.
+## Historical ingestion and reconciliation
 
-### Integration evidence
+FS-011 adds an explicit `HistoricalCoverage` lifecycle and manual historical bootstrap/retry path.
 
-An offline regression now runs through the actual historical bootstrap/reconciliation service with a frozen source adapter. It inserts relevant canonical FT football evidence, changes the Dixon-Coles evidence identity, permits a new prospective evidence version, and preserves the prior Prediction. The existing price-only regression still proves odds changes do not alter the DC identity.
+Approved source behavior:
 
-### Automated validation
+- Europe: football-data.co.uk through penaltyblog.
+- Argentina and Brazil: direct football-data.co.uk CSV ingestion.
+- API-Football remains the primary current/canonical source.
+- Historical API-Football entitlement is not used as the default bulk-history mechanism.
+- Inkabet behavior is unchanged by historical bootstrap.
 
-- Focused correction matrix: 310 passed (`tmp/FS-011_focused_tests.txt`).
-- Full `make check`: 348 passed; 85.95% coverage (`tmp/FS-011_make_check.txt`).
-- Black, Ruff, Django system check, migration drift, pip dependency check, and pip-audit passed.
-- Separate migration drift: `No changes detected`.
+Historical acquisition remains manual and idempotent. It is not added to normal daily scheduling and completed historical seasons are not repeatedly downloaded after readiness is established.
+
+Reconciliation is deterministic and fail-closed:
+
+- exact source references take precedence;
+- deterministic Unicode/diacritic/case/whitespace/punctuation normalization is allowed;
+- explicit aliases are supported;
+- fuzzy matching is not used;
+- unknown identities do not silently create canonical Teams;
+- ambiguous identities remain unresolved;
+- existing API-Football canonical results are not silently overwritten by secondary historical evidence;
+- source provenance and reconciliation diagnostics are persisted.
+
+Historical reimports validate both result evidence and kickoff evidence before being counted as unchanged. `EXACT` source timestamps must remain within the approved reconciliation tolerance; a corrected exact kickoff outside that tolerance becomes a source-reimport conflict rather than silently preserving an incompatible canonical timestamp.
+
+## Source-supported historical window
+
+The effective required historical window is:
+
+`canonical completed Seasons ∩ actual approved source availability`
+
+A contiguous leading prefix of canonical seasons for which the approved source exposes no rows is audited as `SOURCE_OUTSIDE_AVAILABLE_HISTORY_WINDOW` and is not a readiness blocker.
+
+This exemption applies only to the leading unavailable source prefix. Missing seasons inside the effective supported interval remain a hard stop.
+
+Brazil therefore closes on the supported 2012–2025 interval while 2010–2011 remain explicitly audited outside source availability. Internal gaps continue to produce PARTIAL coverage.
+
+This is the final interpretation of acceptance criterion A08: COMPLETE requires every season in the effective source-supported required window to be covered without unresolved ambiguity/conflict.
+
+## Real historical UAT
+
+Authorized real backfills were completed for all 10 final competitions.
+
+Verified real/idempotent examples include:
+
+- La Liga: COMPLETE/current, 2010–2025, 6080 historical rows.
+- Premier League: COMPLETE/current, 6080 rows; repeated import created 0 and left 6080 unchanged.
+- Bundesliga: COMPLETE/current, 4896 historical rows; repeated import created 0 and left 4896 unchanged.
+- Serie A Italy: COMPLETE/current, 6080 rows.
+- Ligue 1: COMPLETE/current, 5757 rows.
+- Eredivisie: COMPLETE/current, 4822 rows.
+- Primeira Liga: COMPLETE/current, 4632 rows.
+- Süper Lig: COMPLETE/current, 2011–2025, 4924 rows; repeated import created 0 and left 4924 unchanged.
+- Liga Profesional Argentina: COMPLETE/current, 2015–2025, 4359 rows; historical team identities were explicitly reconciled and repeated import created 0 and left 4359 unchanged.
+- Serie A Brazil: COMPLETE/current over the effective 2012–2025 source-supported window, 5307 rows; 2010–2011 remain audited outside source availability; repeated import created 0 and left 5307 unchanged.
+
+The final DB inventory verified exactly 10 enabled competitions and all 10 historical readiness states as COMPLETE/current.
+
+## Dixon-Coles operational contract
+
+Dixon-Coles is football-evidence driven and does not depend on odds to fit or generate probabilities.
+
+FS-011 separates:
+
+- structural fit/readiness;
+- valid probability production;
+- betting eligibility;
+- Decision policy eligibility.
+
+Expected structural insufficiency is `UNAVAILABLE`. Unexpected runtime failure after approved readiness is `FAILED`. Valid probability output can be persisted even when betting eligibility is denied.
+
+Dixon-Coles evidence identity depends on relevant football evidence, model version/configuration and readiness identity. Price-only changes do not create a new Dixon-Coles evidence version. New relevant FT football evidence does.
+
+Prior Predictions are preserved when a new football-evidence version is created.
+
+For batches that do not request Dixon-Coles, FS-011 does not persist a synthetic Dixon-Coles status block. A non-DC experiment therefore cannot create a spurious `DIXON_COLES_NOT_PRODUCED` state in `/daily/`.
+
+## Historical data use
+
+The imported historical pool is active model evidence, not archival-only data.
+
+Prospective Dixon-Coles fits consume eligible same-competition FT history strictly before the target cutoff. The approved model configuration currently has `max_history=None`, so the runtime is not restricted to the 2025 season used for outer evaluation.
+
+Independent Poisson and Elo also receive the eligible historical match pool under their respective model contracts. Market Consensus remains market/odds-driven.
+
+The 2025 evaluation was used as a chronological outer holdout for model/configuration selection and readiness approval; it was not a restriction on the history available to prospective model fitting.
+
+## Dixon-Coles readiness profiles
+
+A chronological 2025 outer backtest was run for each of the 10 final competitions.
+
+All 10 runs produced Dixon-Coles predictions with valid normalized probability output and no invalid-probability findings.
+
+Selected initial configurations:
+
+- Ligue 1: `xi=0.002`
+- Serie A Brazil: `xi=0.002`
+- Premier League: `xi=0.002`
+- Bundesliga: `xi=0.002`
+- Serie A Italy: `xi=0.0`
+- Eredivisie: `xi=0.002`
+- Primeira Liga: `xi=0.0`
+- La Liga: `xi=0.002`
+- Süper Lig: `xi=0.002`
+- Liga Profesional Argentina: `xi=0.002`
+
+Ten `DixonColesReadinessProfile` rows were created and verified:
+
+- `approved=True`
+- `active=True`
+- profile version `fs011-initial-2025-v1`
+- model version `fs011-dixon-coles-v2`
+- exact runtime-compatible model config
+- `require_connected=True`
+- runtime assessment `APPROVED_READINESS_PROFILE_PASSED`
+
+No arbitrary universal minimum-match threshold was introduced. Existing target-specific structural checks continue to reject unseen or otherwise insufficient teams.
+
+These profiles are the initial simulation approval. They must be revalidated after each completed league season and whenever the Dixon-Coles model version or selected configuration changes.
+
+## Dixon-Coles real UAT
+
+Real mature target:
+
+- Bundesliga match `1567`, VfB Stuttgart vs 1. FC Köln.
+- Dixon-Coles produced normalized probabilities from approximately 4900 eligible historical matches.
+- The original UAT Prediction correctly remained below readiness because it was created before profiles were approved.
+
+Real insufficient-history target:
+
+- Argentina match `1573`, Estudiantes de Rio Cuarto vs Sarmiento Junin.
+- Dixon-Coles classified the target as `UNAVAILABLE / INSUFFICIENT_TEAM_HISTORY`.
+- No false Prediction or Decision was created.
+
+Versioning UAT:
+
+- a price-only delta preserved the Dixon-Coles evidence identity;
+- one additional eligible FT football result changed the evidence identity;
+- the changed football basis created a new prospective Dixon-Coles Prediction version;
+- the prior Prediction remained unchanged;
+- all synthetic UAT data was rolled back;
+- persistent DB state was unchanged after rollback.
+
+The measured full Bundesliga Dixon-Coles refit took approximately 169 seconds. This is a performance follow-up, not a functional correctness blocker.
+
+## Current-season acquisition UAT
+
+Authorized `sync_football_day --date 2026-09-04 --with-odds` completed successfully for API-Football:
+
+- command result: success;
+- 13 API-Football calls;
+- 86 records created;
+- 12 updated;
+- 110 unchanged;
+- no pending competition/team/match mappings;
+- reported API-Football daily remaining quota: 87.
+
+Inkabet made one secondary call and timed out. The sync remained fail-soft/degraded and API-Football acquisition completed successfully.
+
+The later normal pipeline execution found no new prospective prediction work because the day's relevant fixtures had already started or finished. This was a timing limitation of the live smoke attempt, not a model or historical-readiness failure.
+
+A separate future-match smoke test should exercise API-Football → normal pipeline → approved/eligible Dixon-Coles Prediction → Decisions → `/daily/` before kickoff. It is operational follow-up evidence, not unfinished FS-011 implementation.
+
+## Reporting
+
+Existing server-rendered reporting remains the product surface.
+
+Historical reporting exposes enabled/coverage/source/strategy/reason/readiness state.
+
+Daily reporting distinguishes per-target Dixon-Coles:
+
+- `PRODUCED`
+- `UNAVAILABLE`
+- `FAILED`
+
+Produced rows expose betting eligibility/readiness and bounded evidence identity. Per-target state prevents one sibling target from leaking its failure/unavailability reason into another.
+
+Experiments that did not request Dixon-Coles do not contribute a Dixon-Coles status to daily reporting.
+
+The attempted shell-level `/daily/` smoke using Django `Client()` returned `400` because the harness used `HTTP_HOST=testserver`, which is not allowed by the project settings. This was a harness issue and is not recorded as a frontend defect.
+
+## Final PR review corrections
+
+The final PR correction resolves all material review findings:
+
+1. **Non-requested Dixon-Coles status**
+   - Dixon-Coles summary/status is now persisted only when Dixon-Coles was actually requested for that experiment.
+   - Regression coverage proves non-DC batches do not invent Dixon-Coles terminal state.
+
+2. **Kickoff-aware historical reimport**
+   - unchanged historical reimports must satisfy the same approved kickoff precision/tolerance contract used during initial reconciliation.
+   - an exact kickoff correction outside tolerance is classified as `SOURCE_REIMPORT_CONFLICT`.
+   - canonical API-Football evidence remains unchanged.
+
+3. **UTC quota-test rollover**
+   - three capture tests that depended on wall-clock `timezone.now()` are pinned to a deterministic midday UTC instant.
+   - production quota epoch logic is unchanged.
+   - this removes the previously observed midnight-UTC CI flake.
+
+4. **Final feedback reconciliation**
+   - this document replaces the stale pre-UAT snapshots and records the actual automated evidence, real/manual UAT, warnings and future work.
+
+## Final automated validation
+
+The final corrected tree passed the repository validation required for technical close:
+
+- focused PR-correction tests: PASS;
+- `make check`: PASS;
+- Black: PASS;
+- Ruff: PASS;
+- Django system check: PASS;
+- migration drift: no changes detected;
+- dependency check: PASS;
+- pip-audit: PASS;
+- coverage gate: PASS;
 - `git diff --check`: clean.
-- Provider network edges were frozen/injected; real local penaltyblog Dixon-Coles mathematics was exercised.
 
-### Migration 0010
+The PR correction delta required no additional live provider calls or historical backfills.
 
-The existing uncommitted migration `football/migrations/0010_prediction_bet_eligible_prediction_evidence_identity_and_more.py` was updated in place. `DixonColesReadinessProfile` now includes explicit `model_version` and `model_config` fields; no unnecessary `0011` was created. The migration was not applied to the persistent database.
+## Acceptance closure
 
-### Pass 3 exceptional scoped pre-UAT amendment
+The previously pending real-UAT criteria are closed:
 
-Pass 3 corrected only the three material boundaries identified by the maintainer's completed Pass 2 review:
+- A06 PASS — pre-existing enabled competitions were audited/backfilled.
+- A07 PASS — exactly 10 final competitions are enabled and historical COMPLETE/current.
+- A09 PASS — European historical bootstrap used football-data.co.uk/penaltyblog rather than live API-Football bulk history.
+- A10 PASS — direct football-data CSV ingestion for Argentina/Brazil is source-aware, reproducible and idempotent.
+- A17 PASS — current-season API-Football acquisition remained operational after historical readiness activation.
 
-- P3-1: Dixon-Coles retains one reusable shared league fit, but unseen-team checks, readiness assessment, and FAILED versus UNAVAILABLE classification are now target-specific. A low-readiness target cannot suppress or reclassify a mature sibling target.
-- P3-2: Prospective summaries persist a compact per-target Dixon-Coles status/reason map while retaining the aggregate state for pipeline reporting. `/daily/` consumes or deterministically derives each Match's own state, so sibling failure/unavailability reasons cannot leak across targets; reporting remains read-only.
-- P3-3: One canonical DB-only helper now requires stored COMPLETE coverage to match the current completed-Season set, covered set, empty unresolved set, and current strategy version. Activation, explicit bootstrap, and DC candidate scheduling use this currentness contract. Current Seasons stay excluded and stale coverage requires explicit bootstrap/retry; no automatic acquisition was added.
+A08 uses the final effective source-supported historical-window interpretation documented above.
 
-Pass 3 focused validation: 71 passed. Final `make check`: 352 passed with 85.83% coverage; Black, Ruff, Django, dependency, security, and migration checks passed. Separate migration drift reported `No changes detected`, and `git diff --check` was clean. Migration `0010` did not change in Pass 3 and was not applied. Live provider calls and persistent side effects remained zero. The real-UAT work and criteria `A06`, `A07`, `A09`, `A10`, and `A17` remain pending.
+No material FS-011 implementation blocker remains.
 
-### Pass 4 final real-UAT correction amendment
+## Safety record
 
-Real UAT exposed three ingestion defects: football-data naive times were being interpreted as America/Lima, secondary matches required identical kickoffs, and direct CSV season labels could assign rows to overlapping canonical seasons. The final normal code pass corrected only those boundaries and the associated observed source-data cases.
+- Real-money betting remains prohibited/fail-closed.
+- No bookmaker write/authentication behavior was added.
+- Historical bootstrap does not run recurrently.
+- API-Football canonical rows are not destructively rewritten by secondary history.
+- PR correction validation requires no live-provider quota.
+- Persistent UAT migrations/backfills were operator-authorized.
+- Synthetic versioning UAT changes were transactionally rolled back.
 
-- Both penaltyblog and direct football-data CSV ingestion now share an explicit `Europe/London` source-time contract. Naive values use UK civil time, already-aware values are not reinterpreted, missing times remain DATE_ONLY, and bounded provenance retains the raw date/time, source-time contract, normalized kickoff, source season and adapter/URL context.
-- EXACT secondary reconciliation now considers same-season/same-team candidates within two hours. A unique +60-minute same-result candidate resolves to the existing API-F Match while retaining its canonical fields and recording the source kickoff/delta; conflicts and multiple candidates remain pending/fail-closed, and no candidate may create a correctly normalized historical Match.
-- Existing-Team matching gained deterministic Unicode/diacritic/case/whitespace/punctuation normalization and the evidenced Celta/Espanol aliases. It remains non-fuzzy and never auto-creates unknown Teams; normalized collisions fail closed and repeated unknown identities are summarized with bounded, deduplicated counts/seasons.
-- Direct rows are partitioned by parsed Date against coherent, non-overlapping canonical Season intervals. Non-final rows with both scores absent are skipped and counted; partial scores or final-result claims without valid scores fail parsing. Missing required source seasons remain unresolved, so frozen Brazil 2010/2011 stays incomplete/disabled while fully covered frozen MLS data can pass the data-driven gate.
+## New work discovered / future maintenance
 
-Pass 4 focused validation: 66 passed. The single final `make check` passed 372 tests with 86.10% coverage; Black, Ruff, Django, dependency, security, and migration checks passed. Separate migration drift reported `No changes detected`, and `git diff --check` was clean. Migration `0010` did not change in Pass 4 and was not applied. Live provider calls and persistent side effects remained zero. Criteria `A06`, `A07`, `A09`, `A10`, and `A17` remain pending until the maintainer repeats the authorized real UAT.
+### Dixon-Coles fit performance
 
-### Pass 5 exceptional final UAT correction amendment
+Evidence: a real Bundesliga fit over approximately 4900 historical matches took about 169 seconds.
 
-Real Argentina UAT exposed a uniqueness collision when `Colon Santa FE` and `Colon Santa Fe` arrived with different football-data external IDs. Both names normalize to the same deterministic identity, but the exact-ID miss previously proceeded directly to canonical-Team matching and attempted a second `TeamSourceRef`, violating the existing unique `(source, team)` constraint.
+Impact: correctness is unaffected, but repeated full refits across the final 10-league pool may be operationally expensive.
 
-Historical team reconciliation now preserves exact source-ID precedence, then inspects same-source/same-competition refs using the existing deterministic name normalizer. One valid resolved canonical Team is reused without creating another ref; divergent Teams or any unresolved/invalid matching ref fail closed as `AMBIGUOUS_TEAM_MAPPING`. With no normalized source-ref match, the existing canonical-Team path continues unchanged. Explicit alias keys now use the same deterministic normalization, so capitalization-only variants cannot bypass an approved alias. Canonical display names, external-ID generation, database schema/constraints, and genuine-unknown behavior remain unchanged; no fuzzy matching was added.
+Recommendation: evaluate bounded history, cached fits keyed by football evidence identity, incremental fitting, or another evidence-backed performance strategy in a dedicated ticket.
 
-Pass 5 focused validation: 47 passed. The single final `make check` passed 379 tests with 86.13% coverage; Black, Ruff, Django, dependency, security, and migration checks passed. Separate migration drift reported `No changes detected`, and `git diff --check` was clean. Migration `0010` did not change in Pass 5 and was not applied. Live provider calls and persistent side effects remained zero. No new technical finding remains; criteria `A06`, `A07`, `A09`, `A10`, and `A17` still require the maintainer's authorized real UAT.
+### Readiness revalidation
 
-### Pending manual/real UAT
+Evidence: initial profiles are based on the completed historical pool and chronological 2025 evaluation.
 
-- Apply migration `0010` to the persistent local DB under maintainer authorization.
-- Run `--reconcile-enabled` against the persistent DB.
-- Run approved live football-data backfills for the required pool.
-- Verify the exact final ten enabled competitions are all historical `COMPLETE` and all others are disabled.
-- Verify current-season operation on an enabled COMPLETE competition.
-- Execute UAT A–I and retain real DB/provider evidence.
+Impact: a completed new season or a model/configuration change can change the evidence supporting approval.
 
-Acceptance criteria `A06`, `A07`, `A09`, `A10`, and `A17` therefore remain PENDING. `AD1` and `AD2` pass with code and automated evidence. See `tmp/FS-011_acceptance_ledger.md`.
+Recommendation: re-run model/config evaluation and version the active readiness profile after each completed league season and whenever Dixon-Coles model/config semantics change.
 
-### Safety record
+### Prospective live smoke
 
-- Persistent migrations applied: 0.
-- Live API-Football calls: 0.
-- Live football-data calls: 0.
-- Live Inkabet calls: 0.
-- Bookmaker authentication/writes: 0.
-- Betting/financial side effects: 0.
-- Commits, staging, pushes, PRs and Planka actions: 0.
-- Persistent PostgreSQL/Redis data was not purged or recreated.
+Evidence: the 2026-09-04 live attempt occurred after the relevant fixtures had started/finished.
 
-### Research artifact
+Impact: individual components are validated, but a same-run pre-kickoff API-Football → pipeline → eligible Prediction → Decisions → `/daily/` smoke was not captured.
 
-`docs/research/Finsport_historical_ingestion_dixon_coles_research_2026-09-03.md` remained byte-for-byte unchanged. Observed SHA-256: `c936a46147e87c7309f7226e0a62c4827a6f808a58cc17182e86ace5a9863b55`.
+Recommendation: repeat this as an operational smoke test on the next suitable future fixture without reopening FS-011.
 
-### New Work Discovered
+### Inkabet timeout
 
-Evidence → The Pass 1 full-suite run crossed a UTC quota-epoch boundary and briefly exposed three existing time-sensitive capture tests; both the affected regressions and subsequent full gates passed.
+Evidence: one Inkabet request timed out during the authorized current-day sync while API-Football completed successfully.
 
-Impact → The tests are boundary-brittle around UTC rollover. This did not identify an FS-011 product defect and the repository gate is green.
+Impact: secondary-source enrichment degraded for that call only.
 
-Recommendation → In a separate maintenance ticket, freeze the quota clock or choose an epoch-relative test instant.
+Recommendation: observe recurrence separately; do not conflate it with historical readiness or Dixon-Coles correctness.
 
-### Blockers / contradictions
+## Research artifact
 
-No material ticket/research/addendum contradiction or implementation blocker remains. The only outstanding work is the intentionally deferred, authorization-dependent real UAT above.
+`docs/research/Finsport_historical_ingestion_dixon_coles_research_2026-09-03.md` remains the reference research artifact. Runtime and UAT decisions above supersede any earlier implementation snapshot that described real UAT as still pending.
