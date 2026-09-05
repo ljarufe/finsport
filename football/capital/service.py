@@ -11,6 +11,7 @@ from football.models import (
     CapitalLongitudinalSeries,
     CapitalPolicyRun,
     Decision,
+    Prediction,
     PredictionExperiment,
 )
 
@@ -51,6 +52,8 @@ def select_decision_basis(
             prediction__model_code=source_model_code,
             prediction__variant=source_model_variant,
         )
+        if source_model_code == Prediction.DIXON_COLES:
+            queryset = queryset.filter(prediction__bet_eligible=True)
     else:
         if source_comparator_code != decision_policy_code:
             raise CapitalInputError(

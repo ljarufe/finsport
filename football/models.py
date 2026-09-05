@@ -40,6 +40,126 @@ class Competition(TimeStampedModel):
         ordering = ("country", "name")
 
 
+class HistoricalCoverage(TimeStampedModel):
+    """One-shot completed-season history lifecycle for a Competition."""
+
+    class Status(models.TextChoices):
+        NOT_ATTEMPTED = "NOT_ATTEMPTED", "Not attempted"
+        RUNNING = "RUNNING", "Running"
+        COMPLETE = "COMPLETE", "Complete"
+        PARTIAL = "PARTIAL", "Partial"
+        UNAVAILABLE = "UNAVAILABLE", "Unavailable"
+        FAILED = "FAILED", "Failed"
+
+    competition = models.OneToOneField(
+        Competition, on_delete=models.CASCADE, related_name="historical_coverage"
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.PROTECT,
+        related_name="historical_coverages",
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.NOT_ATTEMPTED
+    )
+    strategy_version = models.CharField(max_length=80, default="fs011-v1")
+    activation_requested = models.BooleanField(default=False)
+    required_seasons = models.JSONField(default=list, blank=True)
+    covered_seasons = models.JSONField(default=list, blank=True)
+    unresolved_seasons = models.JSONField(default=list, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    download_count = models.PositiveIntegerField(default=0)
+    rows_fetched = models.PositiveIntegerField(default=0)
+    rows_mapped = models.PositiveIntegerField(default=0)
+    rows_reconciled = models.PositiveIntegerField(default=0)
+    rows_unchanged = models.PositiveIntegerField(default=0)
+    rows_created = models.PositiveIntegerField(default=0)
+    ambiguity_count = models.PositiveIntegerField(default=0)
+    conflict_count = models.PositiveIntegerField(default=0)
+    reason = models.CharField(max_length=200, blank=True)
+    diagnostics = models.JSONField(default=dict, blank=True)
+    requested_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.competition} — {self.status}"
+
+    class Meta:
+        ordering = ("competition",)
+
+
+class DixonColesReadinessProfile(TimeStampedModel):
+    """Explicit, versioned approval for using pure DC evidence in decisions."""
+
+    competition = models.ForeignKey(
+        Competition, on_delete=models.CASCADE, related_name="dc_readiness_profiles"
+    )
+    version = models.CharField(max_length=80)
+    model_version = models.CharField(max_length=100, blank=True)
+    model_config = models.JSONField(default=dict, blank=True)
+    approved = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+    requirements = models.JSONField(default=dict, blank=True)
+    rationale = models.TextField(blank=True)
+
+    def __str__(self):
+        state = "approved" if self.approved else "exploratory"
+        return f"{self.competition} {self.version} ({state})"
+
+    def clean(self):
+        super().clean()
+        if not isinstance(self.model_config, dict):
+            raise ValidationError({"model_config": "Model config must be an object."})
+        if self.approved and not self.model_version:
+            raise ValidationError(
+                {"model_version": "Approved profiles require a model version."}
+            )
+        supported = {
+            "require_connected",
+            "min_training_matches",
+            "min_home_team_matches",
+            "min_away_team_matches",
+        }
+        unknown = set(self.requirements) - supported
+        if unknown:
+            raise ValidationError(
+                {
+                    "requirements": f"Unsupported readiness requirements: {sorted(unknown)}"
+                }
+            )
+        if "require_connected" in self.requirements and not isinstance(
+            self.requirements["require_connected"], bool
+        ):
+            raise ValidationError(
+                {"requirements": "require_connected must be a boolean."}
+            )
+        for key in supported - {"require_connected"}:
+            value = self.requirements.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValidationError(
+                    {"requirements": f"{key} must be a non-negative integer."}
+                )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["competition", "version"],
+                name="football_dc_readiness_profile_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["competition"],
+                condition=Q(active=True),
+                name="football_dc_readiness_profile_active_unique",
+            ),
+        ]
+        ordering = ("competition", "-created")
+
+
 class Season(TimeStampedModel):
     competition = models.ForeignKey(
         Competition, on_delete=models.CASCADE, related_name="seasons"
@@ -680,6 +800,17 @@ class Prediction(TimeStampedModel):
     p_away = models.FloatField()
     predicted_outcome = models.CharField(max_length=4, choices=Match.OUTCOMES)
     diagnostics = models.JSONField(default=dict, blank=True)
+    evidence_identity = models.CharField(max_length=64, blank=True, db_index=True)
+    bet_eligible = models.BooleanField(default=True)
+    readiness_profile = models.ForeignKey(
+        DixonColesReadinessProfile,
+        on_delete=models.PROTECT,
+        related_name="predictions",
+        null=True,
+        blank=True,
+    )
+    readiness_profile_version = models.CharField(max_length=80, blank=True)
+    readiness_reason = models.CharField(max_length=200, blank=True)
     evaluated_at = models.DateTimeField(null=True, blank=True)
     actual_outcome = models.CharField(
         max_length=4, choices=Match.OUTCOMES, null=True, blank=True

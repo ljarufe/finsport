@@ -19,7 +19,7 @@ from .constants import (
     R45_VARIANTS,
     XI_GRID,
 )
-from .contracts import UnavailablePrediction
+from .contracts import FailedPrediction, UnavailablePrediction
 from .datasets import daily_batches, eligible_finished_matches, local_day
 from .elo import EloMultinomialAdapter
 from .goal_models import DixonColesAdapter, IndependentPoissonAdapter
@@ -28,6 +28,7 @@ from .metrics import policy_metrics, prediction_metrics
 from .policies import (
     POLICY_VERSIONS,
     modal_all,
+    readiness_no_bet,
     selective_confidence,
     value_policy,
 )
@@ -37,6 +38,7 @@ from .r45 import (
     predict_modernized,
     select_modernized_config,
 )
+from .readiness import assess_bet_eligibility
 
 
 def dependency_versions():
@@ -69,10 +71,10 @@ def _validation_loss(adapter_factory, config, training, validation):
         cutoff = min(match.kickoff for match in batch)
         adapter = adapter_factory(**config)
         fitted = adapter.fit(growing_history, cutoff)
-        if not isinstance(fitted, UnavailablePrediction):
+        if not isinstance(fitted, (UnavailablePrediction, FailedPrediction)):
             for match in batch:
                 result = adapter.predict(match, match.kickoff)
-                if isinstance(result, UnavailablePrediction):
+                if isinstance(result, (UnavailablePrediction, FailedPrediction)):
                     continue
                 actual.append(_outcome(match))
                 probabilities.append(list(result.as_tuple()))
@@ -128,7 +130,17 @@ def select_hyperparameters(inner_training, inner_validation):
     }
 
 
-def _persist_prediction(experiment, match, adapter, result, cutoff, *, variant=""):
+def _persist_prediction(
+    experiment, match, adapter, result, cutoff, *, variant="", evidence_identity=""
+):
+    assessment = None
+    if adapter.model_code == Prediction.DIXON_COLES:
+        assessment = assess_bet_eligibility(
+            match.competition,
+            result.diagnostics,
+            model_version=adapter.model_version,
+            model_config=adapter.config,
+        )
     prediction = Prediction(
         experiment=experiment,
         match=match,
@@ -141,7 +153,27 @@ def _persist_prediction(experiment, match, adapter, result, cutoff, *, variant="
         p_draw=result.p_draw,
         p_away=result.p_away,
         predicted_outcome=result.predicted_outcome,
-        diagnostics=result.diagnostics,
+        diagnostics={
+            **result.diagnostics,
+            **(
+                {
+                    "readiness_profile": (
+                        assessment.profile.version if assessment.profile else None
+                    ),
+                    "bet_eligible": assessment.eligible,
+                    "readiness_reason": assessment.reason,
+                }
+                if assessment
+                else {}
+            ),
+        },
+        evidence_identity=evidence_identity,
+        bet_eligible=assessment.eligible if assessment else True,
+        readiness_profile=assessment.profile if assessment else None,
+        readiness_profile_version=(
+            assessment.profile.version if assessment and assessment.profile else ""
+        ),
+        readiness_reason=assessment.reason if assessment else "",
         evaluated_at=timezone.now() if _canonical_outcome(match) else None,
         actual_outcome=_canonical_outcome(match),
     )
@@ -175,6 +207,32 @@ def _persist_policy_decision(
 
 
 def persist_standard_policies(experiment, match, prediction, result, cutoff):
+    if prediction.model_code == Prediction.DIXON_COLES and not prediction.bet_eligible:
+        gated = readiness_no_bet(prediction.readiness_reason, result)
+        _persist_policy_decision(
+            experiment, match, prediction, "MODAL_ALL", "", gated, cutoff
+        )
+        for threshold in CONFIDENCE_GRID:
+            _persist_policy_decision(
+                experiment,
+                match,
+                prediction,
+                "SELECTIVE_CONFIDENCE",
+                f"{threshold:.2f}",
+                gated,
+                cutoff,
+            )
+        for minimum_ev in MINIMUM_EV_GRID:
+            _persist_policy_decision(
+                experiment,
+                match,
+                prediction,
+                "VALUE",
+                f"{minimum_ev:.2f}",
+                gated,
+                cutoff,
+            )
+        return
     prices = best_prices_as_of(match, cutoff)
     _persist_policy_decision(
         experiment,
@@ -358,6 +416,7 @@ def run_backtest(competition, season):
     )
     history = [*inner_training, *inner_validation]
     unavailable_counts = defaultdict(int)
+    failed_counts = defaultdict(int)
     for _, batch in daily_batches(outer):
         batch_cutoff = min(match.kickoff for match in batch)
         adapters = (
@@ -375,6 +434,8 @@ def run_backtest(competition, season):
                 unavailable_counts[f"{adapter.model_code}:{fitted.reason}"] += len(
                     batch
                 )
+            elif isinstance(fitted, FailedPrediction):
+                failed_counts[f"{adapter.model_code}:{fitted.reason}"] += len(batch)
             else:
                 fitted_adapters.append(adapter)
         modernized = None
@@ -396,6 +457,9 @@ def run_backtest(competition, season):
                 result = adapter.predict(match, cutoff)
                 if isinstance(result, UnavailablePrediction):
                     unavailable_counts[f"{adapter.model_code}:{result.reason}"] += 1
+                    continue
+                if isinstance(result, FailedPrediction):
+                    failed_counts[f"{adapter.model_code}:{result.reason}"] += 1
                     continue
                 prediction = _persist_prediction(
                     experiment, match, adapter, result, cutoff
@@ -445,6 +509,7 @@ def run_backtest(competition, season):
             ).exists(),
         ),
         "unavailable_counts": dict(unavailable_counts),
+        "failed_counts": dict(failed_counts),
     }
     experiment.completed_at = timezone.now()
     experiment.save(update_fields=["summary", "completed_at", "modified"])

@@ -62,6 +62,34 @@ DECISION_REASONS = {
         "No disponible para replay",
         "La decisión no es utilizable por el replay conservado.",
     ),
+    "NO_APPROVED_READINESS_PROFILE": (
+        "Sin perfil de readiness aprobado",
+        "La predicción existe como evidencia exploratoria, pero no es elegible para apuesta.",
+    ),
+    "READINESS_MODEL_VERSION_MISMATCH": (
+        "Perfil no aplicable a esta versión",
+        "El perfil activo no aprueba la versión Dixon-Coles utilizada.",
+    ),
+    "READINESS_MODEL_CONFIG_MISMATCH": (
+        "Perfil no aplicable a esta configuración",
+        "El perfil activo no aprueba la configuración Dixon-Coles utilizada.",
+    ),
+    "TRAINING_HISTORY_BELOW_PROFILE": (
+        "Historia por debajo del perfil",
+        "La evidencia actual no alcanza el requisito versionado del perfil.",
+    ),
+    "HOME_TEAM_HISTORY_BELOW_PROFILE": (
+        "Historia local por debajo del perfil",
+        "El equipo local no alcanza el requisito versionado del perfil.",
+    ),
+    "AWAY_TEAM_HISTORY_BELOW_PROFILE": (
+        "Historia visitante por debajo del perfil",
+        "El equipo visitante no alcanza el requisito versionado del perfil.",
+    ),
+    "TRAINING_GRAPH_NOT_CONNECTED": (
+        "Grafo histórico no conectado",
+        "La evidencia actual no satisface la conectividad exigida por el perfil.",
+    ),
 }
 
 CAPITAL_STATUSES = {

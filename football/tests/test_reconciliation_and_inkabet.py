@@ -5,14 +5,7 @@ from unittest import mock
 import pytest
 from django_countries.fields import Country
 
-from football.api_inkabet import InkabetResponseError
 from football.country_mapping import country_code
-from football.inkabet import (
-    parse_categories,
-    parse_mw3w,
-    reconcile_categories,
-    sync_mw3w_payload,
-)
 from football.models import (
     Competition,
     CompetitionSourceRef,
@@ -23,6 +16,13 @@ from football.models import (
     ReconciliationStatus,
     Team,
     TeamSourceRef,
+)
+from football.providers.api_inkabet import InkabetResponseError
+from football.providers.inkabet import (
+    parse_categories,
+    parse_mw3w,
+    reconcile_categories,
+    sync_mw3w_payload,
 )
 from football.reconciliation import (
     reconcile_competition_ref,

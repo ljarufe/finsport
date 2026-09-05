@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from football.api_inkabet import (
+from football.providers.api_inkabet import (
     InkabetClient,
     InkabetConfigurationError,
     InkabetResponseError,

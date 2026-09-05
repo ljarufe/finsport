@@ -10,13 +10,6 @@ from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 
-from football.api_football import (
-    APIFootballClient,
-    APIFootballConfigurationError,
-    APIFootballPaginationError,
-    APIFootballResponseError,
-)
-from football.api_inkabet import InkabetResponseError
 from football.capture import run_capture
 from football.capture.contracts import CaptureConfig
 from football.capture.executor import CaptureExecutor
@@ -29,6 +22,13 @@ from football.models import (
     OddsObservation,
     OddsSnapshot,
 )
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballConfigurationError,
+    APIFootballPaginationError,
+    APIFootballResponseError,
+)
+from football.providers.api_inkabet import InkabetResponseError
 from football.sync import sync_catalog_payloads, sync_fixture_payloads
 from football.tasks import wake_capture_planner
 
@@ -567,7 +567,7 @@ def test_executor_revalidates_optional_bootstrap_opt_in_under_lock():
 
 @override_settings(**CAPTURE_SETTINGS)
 def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
@@ -604,7 +604,7 @@ def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
     )
 )
 def test_worst_case_admission_blocks_before_provider_call():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
@@ -997,7 +997,7 @@ def test_result_debt_has_priority_and_can_use_bounded_mandatory_reserve():
     )
 )
 def test_result_then_due_odds_precede_discovery_under_constrained_budget():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(
         league_id=39,
         name="Past League",

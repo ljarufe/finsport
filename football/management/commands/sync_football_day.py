@@ -1,9 +1,9 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from football.api_inkabet import InkabetClient
-from football.inkabet_capture import capture_inkabet_matches
 from football.models import CompetitionSourceRef, OddsMarket, ReconciliationStatus
+from football.providers.api_inkabet import InkabetClient
+from football.providers.inkabet_capture import capture_inkabet_matches
 from football.sync import (
     FootballSyncError,
     sync_fixture_payloads,

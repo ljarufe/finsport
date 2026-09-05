@@ -12,11 +12,14 @@ from football.models import (
     CapitalPolicyRun,
     Competition,
     Decision,
+    DixonColesReadinessProfile,
+    HistoricalCoverage,
     Match,
     Prediction,
     PredictionExperiment,
 )
 from football.prediction.metrics import prediction_metrics
+from football.providers.catalog import DIRECT_COMPETITIONS, EUROPE_COMPETITIONS
 
 from .presentation import (
     CAPITAL_STATUSES,
@@ -139,6 +142,53 @@ def _decision_metrics(rows):
         "flat_unit_pnl": pnl if economic else None,
         "roi": pnl / len(economic) if economic else None,
     }
+
+
+def _dc_reason(value):
+    if isinstance(value, dict):
+        return value.get("reason", "")
+    return str(value or "")
+
+
+def _dc_target_state(experiment, match_id, target_ids):
+    summary = experiment.summary or {}
+    aggregate = summary.get("dixon_coles")
+    if not isinstance(aggregate, dict):
+        return None
+    persisted = (aggregate.get("targets") or {}).get(str(match_id))
+    if isinstance(persisted, dict) and persisted.get("status") in {
+        "PRODUCED",
+        "UNAVAILABLE",
+        "FAILED",
+    }:
+        return persisted
+    key = f"{Prediction.DIXON_COLES}:{match_id}"
+    failed = summary.get("failed") or {}
+    unavailable = summary.get("unavailable") or {}
+    if key in failed:
+        reason = _dc_reason(failed[key])
+        return {"status": "FAILED", "reasons": [reason] if reason else []}
+    if key in unavailable:
+        reason = _dc_reason(unavailable[key])
+        return {"status": "UNAVAILABLE", "reasons": [reason] if reason else []}
+    if match_id in {row.match_id for row in experiment.dc_predictions}:
+        return {"status": "PRODUCED", "reasons": []}
+    if Prediction.DIXON_COLES in failed:
+        reason = _dc_reason(failed[Prediction.DIXON_COLES])
+        return {"status": "FAILED", "reasons": [reason] if reason else []}
+    if Prediction.DIXON_COLES in unavailable:
+        reason = _dc_reason(unavailable[Prediction.DIXON_COLES])
+        return {"status": "UNAVAILABLE", "reasons": [reason] if reason else []}
+    if len(target_ids) == 1 and aggregate.get("status") in {
+        "PRODUCED",
+        "UNAVAILABLE",
+        "FAILED",
+    }:
+        return {
+            "status": aggregate["status"],
+            "reasons": aggregate.get("reasons", []),
+        }
+    return None
 
 
 def historical(params):
@@ -431,6 +481,54 @@ def historical(params):
                 ),
             }
         )
+    approved_keys = set(EUROPE_COMPETITIONS) | set(DIRECT_COMPETITIONS)
+    coverage_competitions = (
+        Competition.objects.filter(competition_type="League", country__gt="")
+        .select_related("historical_coverage__source")
+        .prefetch_related(
+            Prefetch(
+                "dc_readiness_profiles",
+                queryset=DixonColesReadinessProfile.objects.filter(active=True),
+                to_attr="active_dc_profiles",
+            )
+        )
+        .order_by("country", "name")
+    )
+    historical_readiness = []
+    for item in coverage_competitions:
+        key = (str(item.country), item.name)
+        if not item.enabled and key not in approved_keys:
+            continue
+        try:
+            coverage = item.historical_coverage
+        except HistoricalCoverage.DoesNotExist:
+            coverage = None
+        profile = item.active_dc_profiles[0] if item.active_dc_profiles else None
+        historical_readiness.append(
+            {
+                "competition": item,
+                "enabled": item.enabled,
+                "status": (
+                    coverage.status
+                    if coverage
+                    else HistoricalCoverage.Status.NOT_ATTEMPTED
+                ),
+                "required_seasons": coverage.required_seasons if coverage else [],
+                "covered_seasons": coverage.covered_seasons if coverage else [],
+                "unresolved_seasons": (coverage.unresolved_seasons if coverage else []),
+                "source": coverage.source if coverage else None,
+                "strategy_version": coverage.strategy_version if coverage else "",
+                "reason": (
+                    coverage.reason
+                    if coverage
+                    and coverage.status != HistoricalCoverage.Status.COMPLETE
+                    else ""
+                ),
+                "automatic_retry": False,
+                "profile": profile,
+                "readiness_fail_closed": not (profile and profile.approved),
+            }
+        )
     return {
         "competitions": Competition.objects.filter(enabled=True),
         "competition": competition,
@@ -454,6 +552,7 @@ def historical(params):
             in (CapitalExperiment.MODE_MONTE_CARLO, CapitalExperiment.MODE_STRESS)
         ],
         "longitudinal_capital_groups": longitudinal_groups,
+        "historical_readiness": historical_readiness,
         "evidence": {"predictions": len(predictions), "decisions": len(decisions)},
     }
 
@@ -511,7 +610,43 @@ def daily(params):
     )
     if competition:
         matches = matches.filter(season__competition=competition)
+    matches = list(matches)
+    dc_experiments = (
+        PredictionExperiment.objects.filter(
+            mode=PredictionExperiment.MODE_PROSPECTIVE,
+            period_start=selected,
+            period_end=selected,
+            competition__enabled=True,
+        )
+        .select_related("competition")
+        .prefetch_related(
+            Prefetch(
+                "predictions",
+                queryset=Prediction.objects.filter(model_code=Prediction.DIXON_COLES),
+                to_attr="dc_predictions",
+            )
+        )
+    )
+    if competition:
+        dc_experiments = dc_experiments.filter(competition=competition)
+    dc_evidence = defaultdict(list)
+    for experiment in dc_experiments:
+        target_ids = (experiment.config or {}).get("target_match_ids", [])
+        aggregate = (experiment.summary or {}).get("dixon_coles") or {}
+        for match_id in target_ids:
+            persisted = _dc_target_state(experiment, match_id, target_ids)
+            if persisted is None:
+                continue
+            dc_evidence[match_id].append(
+                {
+                    "experiment_id": experiment.pk,
+                    "status": persisted["status"],
+                    "reasons": persisted.get("reasons", []),
+                    "evidence_identity": aggregate.get("evidence_identity", ""),
+                }
+            )
     for match in matches:
+        match.dc_evidence = dc_evidence[match.pk]
         match.outcome_label = outcome_label(match.outcome)
         match.status_presentation = match_status(match.status_short, match.status_long)
         for p in match.predictions.all():
@@ -521,6 +656,11 @@ def daily(params):
             p.identity_label = _model_name(p)
             p.config_label = compact_config(p.model_config)
             p.config_items = config_items(p.model_config)
+            if p.model_code == Prediction.DIXON_COLES:
+                p.dc_readiness_profile = p.readiness_profile_version or "—"
+                p.dc_readiness_reason_items = decision_reason_presentations(
+                    p.readiness_reason
+                )
         for d in match.decisions.all():
             outcome = d.prediction.actual_outcome if d.prediction_id else match.outcome
             d.action_label, d.actual_label, d.reason_items = (

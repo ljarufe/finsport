@@ -1,3 +1,5 @@
+"""Read-only Inkabet HTTP source integration."""
+
 import requests
 from django.conf import settings
 

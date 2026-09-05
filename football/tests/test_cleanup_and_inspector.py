@@ -22,6 +22,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "run_football_maintenance",
         "run_football_pipeline",
         "observe_pipeline",
+        "bootstrap_football_history",
     }
     for name in (
         "get_leagues",

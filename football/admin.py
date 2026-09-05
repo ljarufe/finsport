@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from .models import (
     Bookmaker,
@@ -11,6 +11,8 @@ from .models import (
     Competition,
     CompetitionSourceRef,
     Decision,
+    DixonColesReadinessProfile,
+    HistoricalCoverage,
     MaintenanceRun,
     Match,
     MatchSourceRef,
@@ -245,10 +247,90 @@ class SourceAdmin(admin.ModelAdmin):
 
 @admin.register(Competition)
 class CompetitionAdmin(admin.ModelAdmin):
-    list_display = ("name", "country", "competition_type", "enabled")
+    list_display = (
+        "name",
+        "country",
+        "competition_type",
+        "enabled",
+        "historical_status",
+    )
     list_filter = ("enabled", "competition_type", "country")
     search_fields = ("name",)
-    list_editable = ("enabled",)
+    readonly_fields = ("enabled",)
+    actions = ("request_activation", "request_historical_retry", "disable")
+
+    @admin.display(description="Historical coverage")
+    def historical_status(self, obj):
+        try:
+            return obj.historical_coverage.status
+        except HistoricalCoverage.DoesNotExist:
+            return HistoricalCoverage.Status.NOT_ATTEMPTED
+
+    @admin.action(description="Request activation after historical bootstrap")
+    def request_activation(self, request, queryset):
+        from football.historical import request_historical_bootstrap
+
+        for competition in queryset:
+            request_historical_bootstrap(competition, activate=True)
+        self.message_user(
+            request,
+            f"Requested one-shot historical bootstrap for {queryset.count()} competition(s).",
+            messages.INFO,
+        )
+
+    @admin.action(description="Request explicit historical retry")
+    def request_historical_retry(self, request, queryset):
+        from football.historical import request_historical_bootstrap
+
+        for competition in queryset:
+            coverage = request_historical_bootstrap(
+                competition, activate=True, reason="MANUAL_RETRY_REQUESTED"
+            )
+            if coverage.status != HistoricalCoverage.Status.RUNNING:
+                coverage.status = HistoricalCoverage.Status.NOT_ATTEMPTED
+                coverage.save(update_fields=["status", "modified"])
+        self.message_user(
+            request,
+            f"Recorded explicit retry for {queryset.count()} competition(s).",
+            messages.INFO,
+        )
+
+    @admin.action(description="Disable selected competitions")
+    def disable(self, request, queryset):
+        updated = queryset.update(enabled=False)
+        self.message_user(request, f"Disabled {updated} competition(s).", messages.INFO)
+
+
+@admin.register(HistoricalCoverage)
+class HistoricalCoverageAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "competition",
+        "status",
+        "source",
+        "strategy_version",
+        "attempt_count",
+        "download_count",
+        "reason",
+        "completed_at",
+    )
+    list_filter = ("status", "source", "activation_requested")
+    search_fields = ("competition__name", "reason")
+    raw_id_fields = ("competition", "source")
+
+
+@admin.register(DixonColesReadinessProfile)
+class DixonColesReadinessProfileAdmin(admin.ModelAdmin):
+    list_display = (
+        "competition",
+        "version",
+        "model_version",
+        "approved",
+        "active",
+        "modified",
+    )
+    list_filter = ("approved", "active", "competition")
+    search_fields = ("competition__name", "version", "rationale")
+    raw_id_fields = ("competition",)
 
 
 @admin.register(CompetitionSourceRef)

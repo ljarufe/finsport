@@ -6,12 +6,6 @@ from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
 
-from football.api_football import (
-    APIFootballClient,
-    APIFootballError,
-    APIFootballOperationBudgetError,
-    APIFootballQuotaReserveError,
-)
 from football.capture.contracts import CaptureConfig
 from football.capture.planner import quota_state
 from football.models import (
@@ -25,6 +19,12 @@ from football.models import (
 )
 from football.observability.events import emit_event, sanitize_text
 from football.prediction.evaluation import run_backtest
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballError,
+    APIFootballOperationBudgetError,
+    APIFootballQuotaReserveError,
+)
 from football.sync import sync_catalog_payloads, sync_fixture_payloads
 
 

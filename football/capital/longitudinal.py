@@ -239,6 +239,7 @@ def build_longitudinal_basis(series):
             experiment__mode=PredictionExperiment.MODE_PROSPECTIVE,
             experiment__competition_id__in=cohort,
             prediction__model_code=series.source_model_code,
+            prediction__bet_eligible=True,
             policy_code=series.decision_policy_code,
             decision_time__gte=series.epoch,
         )
