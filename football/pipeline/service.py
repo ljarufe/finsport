@@ -119,32 +119,35 @@ def _dixon_coles_candidates(at):
 
 def _sporting_candidates(at, *, model_code):
     horizon = at + timedelta(hours=settings.FOOTBALL_CAPTURE_HORIZON_HOURS)
-    matches = list(
-        Match.objects.filter(
-            season__competition__enabled=True,
-            season__competition__historical_coverage__status=HistoricalCoverage.Status.COMPLETE,
-            status_short__in=("TBD", "NS"),
-            kickoff__gt=at,
-            kickoff__lte=horizon,
+    queryset = Match.objects.filter(
+        season__competition__enabled=True,
+        status_short__in=("TBD", "NS"),
+        kickoff__gt=at,
+        kickoff__lte=horizon,
+    )
+    if model_code == "DIXON_COLES":
+        queryset = queryset.filter(
+            season__competition__historical_coverage__status=HistoricalCoverage.Status.COMPLETE
         )
-        .select_related(
+    matches = list(
+        queryset.select_related(
             "season",
             "season__competition",
             "season__competition__historical_coverage",
-        )
-        .order_by("season__competition_id", "kickoff", "id")
+        ).order_by("season__competition_id", "kickoff", "id")
     )
     local_timezone = ZoneInfo(settings.TIME_ZONE)
     groups = defaultdict(list)
     current_coverage = {}
     for match in matches:
         competition = match.season.competition
-        if competition.pk not in current_coverage:
-            current_coverage[competition.pk] = historical_coverage_is_current(
-                competition, competition.historical_coverage
-            )
-        if not current_coverage[competition.pk]:
-            continue
+        if model_code == "DIXON_COLES":
+            if competition.pk not in current_coverage:
+                current_coverage[competition.pk] = historical_coverage_is_current(
+                    competition, competition.historical_coverage
+                )
+            if not current_coverage[competition.pk]:
+                continue
         groups[
             (
                 match.season.competition_id,
@@ -156,13 +159,15 @@ def _sporting_candidates(at, *, model_code):
         competition = targets[0].season.competition
         selected, _ = latest_selected_config(competition)
         cutoff = min(match.kickoff for match in targets) - timedelta(microseconds=1)
-        evidence_identity, _, _ = sporting_evidence_basis(
+        evidence_identity, _, history = sporting_evidence_basis(
             competition,
             targets,
             cutoff=cutoff,
             config=selected[model_code.lower()],
             model_code=model_code,
         )
+        if model_code != "DIXON_COLES" and not history:
+            continue
         candidates.append(
             {
                 "competition_id": competition_id,

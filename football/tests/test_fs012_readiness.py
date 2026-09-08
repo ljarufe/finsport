@@ -15,7 +15,7 @@ from football.models import (
     ReadinessProfile,
     Team,
 )
-from football.pipeline.service import _sporting_candidates
+from football.pipeline.service import _dixon_coles_candidates, _sporting_candidates
 from football.prediction import calibration, evaluation
 from football.prediction import readiness_lifecycle as lifecycle
 from football.prediction.contracts import (
@@ -377,6 +377,34 @@ def test_price_only_no_work_and_sporting_pipeline_identity(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_poisson_and_elo_candidates_survive_stale_coverage_but_dc_does_not():
+    competition, _, history = create_synthetic_league()
+    coverage = complete_coverage(competition)
+    target = future_target(competition, [history[0].home_team, history[0].away_team])
+    for model in (POISSON, ELO):
+        profile_fixture(competition, model)
+    coverage.status = HistoricalCoverage.Status.PARTIAL
+    coverage.save(update_fields=["status", "modified"])
+
+    at = timezone.now()
+    assert _dixon_coles_candidates(at) == []
+    for model in (POISSON, ELO):
+        candidates = _sporting_candidates(at, model_code=model)
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate["match_ids"] == [target.pk]
+        kwargs = {
+            key: value
+            for key, value in candidate.items()
+            if key not in {"competition_id", "day"}
+        }
+        result = predict_competition_day(competition, candidate["day"], **kwargs)
+        prediction = result.experiment.predictions.get(model_code=model)
+        assert prediction.bet_eligible is False
+        assert prediction.readiness_reason == "READINESS_PROFILE_STALE"
+
+
+@pytest.mark.django_db
 def test_stale_revalidation_supersedes_auditable_profile(monkeypatch):
     competition, _, _ = create_synthetic_league()
     complete_coverage(competition)
@@ -507,6 +535,90 @@ def test_budget_defers_full_calibration_without_hiding_due_work(monkeypatch):
     assert result["full_calibrations"] == 0
     assert {r["outcome"] for r in result["results"]} == {"DEFERRED"}
     assert not ReadinessProfile.objects.exists()
+
+
+@pytest.mark.django_db
+def test_precalibration_competition_failure_does_not_consume_budget(monkeypatch):
+    failed_competition, _, _ = create_synthetic_league()
+    failed_competition.name = "A Basis Failure League"
+    failed_competition.country = "PE"
+    failed_competition.save(update_fields=["name", "country", "modified"])
+    complete_coverage(failed_competition)
+
+    due_competition, _, _ = create_synthetic_league()
+    due_competition.name = "B Due League"
+    due_competition.country = "DE"
+    due_competition.save(update_fields=["name", "country", "modified"])
+    complete_coverage(due_competition)
+
+    original_build = lifecycle.build_sporting_basis
+
+    def build_or_fail(competition):
+        if competition.pk == failed_competition.pk:
+            raise RuntimeError("basis failure before calibration")
+        return original_build(competition)
+
+    calibrate = Mock(wraps=calibration.run_model_competition)
+    monkeypatch.setattr(lifecycle, "build_sporting_basis", build_or_fail)
+    monkeypatch.setattr(calibration, "run_model_competition", calibrate)
+
+    result = lifecycle.run_readiness_maintenance(maximum_calibrations=2)
+
+    failed_rows = [
+        row
+        for row in result["results"]
+        if row["competition_id"] == failed_competition.pk
+    ]
+    due_rows = [
+        row for row in result["results"] if row["competition_id"] == due_competition.pk
+    ]
+    assert {row["outcome"] for row in failed_rows} == {"FAILED"}
+    assert not any(row["calibrated"] for row in failed_rows)
+    assert {row["outcome"] for row in due_rows} == {"CREATED"}
+    assert all(row["calibrated"] for row in due_rows)
+    assert calibrate.call_count == 2
+    assert {call.args[1] for call in calibrate.call_args_list} == {POISSON, ELO}
+    assert all(
+        call.args[0].pk == due_competition.pk for call in calibrate.call_args_list
+    )
+    assert result["full_calibrations"] == 2
+
+
+@pytest.mark.django_db
+def test_actual_failed_calibration_consumes_only_its_budget_unit(monkeypatch):
+    competition, _, _ = create_synthetic_league()
+    complete_coverage(competition)
+    calibrate = Mock(side_effect=RuntimeError("calibration failed"))
+    monkeypatch.setattr(calibration, "run_model_competition", calibrate)
+
+    result = lifecycle.run_readiness_maintenance(maximum_calibrations=1)
+
+    assert calibrate.call_count == 1
+    assert result["full_calibrations"] == 1
+    assert [row["outcome"] for row in result["results"]] == ["FAILED", "DEFERRED"]
+    assert [row["calibrated"] for row in result["results"]] == [True, False]
+
+
+@pytest.mark.django_db
+def test_postcalibration_persistence_failure_preserves_exact_attempt_count(
+    monkeypatch,
+):
+    competition, _, _ = create_synthetic_league()
+    complete_coverage(competition)
+    calibrate = Mock(wraps=calibration.run_model_competition)
+    monkeypatch.setattr(calibration, "run_model_competition", calibrate)
+    monkeypatch.setattr(
+        ReadinessProfile,
+        "save",
+        Mock(side_effect=RuntimeError("profile persistence failed")),
+    )
+
+    result = lifecycle.run_readiness_maintenance(maximum_calibrations=2)
+
+    assert calibrate.call_count == 1
+    assert result["full_calibrations"] == 1
+    assert [row["outcome"] for row in result["results"]] == ["FAILED", "FAILED"]
+    assert [row["calibrated"] for row in result["results"]] == [True, False]
 
 
 @pytest.mark.django_db

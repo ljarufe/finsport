@@ -51,6 +51,12 @@ Después:
 
 El contexto es efímero por operación; no hay Redis, cache persistente ni cache global stale.
 
+## Pass 3 — PR review corrections
+
+- P2 RESOLVED: Poisson/Elo permanecen como candidatos cuando existe historia deportiva local aunque `HistoricalCoverage` esté ausente, stale o incompleta. La Prediction se conserva y readiness decide `bet_eligible`; Dixon-Coles mantiene su gate COMPLETE/current.
+- P1 RESOLVED: el budget compartido registra únicamente invocaciones reales de full calibration, justo antes de ejecutarlas. Fallos pre-calibración consumen 0; fallos durante o después de una calibración iniciada consumen exactamente 1 por modelo intentado; frozen provisioning consume 0.
+- Evidencia: 83 regresiones focalizadas PASS; `make check` 430 PASS, cobertura 87.17%; `git diff --check` PASS.
+
 ## Evidencia automatizada
 
 - Pass 2 focused/regression: 79 passed.

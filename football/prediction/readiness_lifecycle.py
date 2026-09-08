@@ -1,7 +1,7 @@
 """Automatic DB-only provisioning owned by existing periodic maintenance."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +38,23 @@ class ReadinessCurrentness:
     identity: str
     payload: dict
     reason: str
+
+
+@dataclass
+class CalibrationBudget:
+    """Count only full calibration calls actually started during one wake."""
+
+    maximum: int
+    attempts: list[tuple[int, str]] = field(default_factory=list)
+
+    @property
+    def available(self):
+        return len(self.attempts) < self.maximum
+
+    def record_attempt(self, competition, model):
+        if not self.available:
+            raise RuntimeError("Full calibration budget exhausted.")
+        self.attempts.append((competition.pk, model))
 
 
 @lru_cache(maxsize=1)
@@ -181,7 +198,7 @@ def _event(
 
 
 def _provision_profile(
-    competition, model, currentness, sporting_basis, *, allow_calibration
+    competition, model, currentness, sporting_basis, *, calibration_budget
 ):
     previous = active_profile(competition, model_code=model)
     identity = currentness.identity
@@ -206,14 +223,14 @@ def _provision_profile(
     frozen = (
         matching_frozen_profile(competition, model, payload) if not reason else None
     )
-    if not reason and not frozen and not allow_calibration:
+    if not reason and not frozen and not calibration_budget.available:
         return {
             "model": model,
             "competition_id": competition.pk,
             "outcome": "DEFERRED",
             "calibrated": False,
         }
-    calibrated = not reason and not frozen
+    calibrated = False
     error = None
     evidence = {}
     if not reason:
@@ -221,6 +238,8 @@ def _provision_profile(
             if frozen:
                 evidence = frozen
             else:
+                calibration_budget.record_attempt(competition, model)
+                calibrated = True
                 result, _ = calibration.run_model_competition(
                     competition, model, seasons, by_year, payload["sporting_basis_hash"]
                 )
@@ -306,26 +325,24 @@ def provision_profile(competition, model, *, allow_calibration=True):
         model,
         currentness_for_model(sporting_basis, model),
         sporting_basis,
-        allow_calibration=allow_calibration,
+        calibration_budget=CalibrationBudget(1 if allow_calibration else 0),
     )
 
 
 @transaction.atomic
-def provision_competition_profiles(competition, *, maximum_calibrations):
+def provision_competition_profiles(competition, *, calibration_budget):
     """Provision both arms from one locked, operation-scoped SportingBasis."""
     competition = Competition.objects.select_for_update().get(pk=competition.pk)
     sporting_basis = build_sporting_basis(competition)
     results = []
-    calibrated = 0
     for model in AUTOMATIC_MODELS:
         result = _provision_profile(
             competition,
             model,
             currentness_for_model(sporting_basis, model),
             sporting_basis,
-            allow_calibration=calibrated < maximum_calibrations,
+            calibration_budget=calibration_budget,
         )
-        calibrated += bool(result["calibrated"])
         results.append(result)
     return results
 
@@ -337,16 +354,24 @@ def run_readiness_maintenance(*, maximum_calibrations=2):
     Expected unavailable basis is audited once and becomes due when evidence changes.
     """
     results = []
-    calibrated = 0
+    calibration_budget = CalibrationBudget(max(0, maximum_calibrations))
     for competition in Competition.objects.filter(
         enabled=True, competition_type="League", country__gt=""
     ).order_by("pk"):
+        attempts_before = len(calibration_budget.attempts)
         try:
             competition_results = provision_competition_profiles(
                 competition,
-                maximum_calibrations=maximum_calibrations - calibrated,
+                calibration_budget=calibration_budget,
             )
         except Exception as error:
+            attempted_models = {
+                model
+                for competition_id, model in calibration_budget.attempts[
+                    attempts_before:
+                ]
+                if competition_id == competition.pk
+            }
             competition_results = []
             for model in AUTOMATIC_MODELS:
                 _event(
@@ -362,10 +387,12 @@ def run_readiness_maintenance(*, maximum_calibrations=2):
                         "model": model,
                         "competition_id": competition.pk,
                         "outcome": "FAILED",
-                        "calibrated": True,
+                        "calibrated": model in attempted_models,
                     }
                 )
         for result in competition_results:
-            calibrated += bool(result["calibrated"])
             results.append(result)
-    return {"results": results, "full_calibrations": calibrated}
+    return {
+        "results": results,
+        "full_calibrations": len(calibration_budget.attempts),
+    }
