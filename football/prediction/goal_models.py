@@ -26,6 +26,7 @@ class GoalModelAdapter:
         self.model = None
         self.known_teams = set()
         self.training_count = 0
+        self.team_counts = {}
 
     @property
     def config(self):
@@ -43,6 +44,10 @@ class GoalModelAdapter:
             team for row in rows for team in (row.home_team, row.away_team)
         }
         self.training_count = len(rows)
+        self.team_counts = {}
+        for row in rows:
+            for team in (row.home_team, row.away_team):
+                self.team_counts[team] = self.team_counts.get(team, 0) + 1
         weights = dixon_coles_weights(
             [row.kickoff for row in rows], xi=self.xi, base_date=cutoff
         )
@@ -73,7 +78,12 @@ class GoalModelAdapter:
         probabilities = self.model.predict(*teams).home_draw_away
         return ProbabilityResult(
             *map(float, probabilities),
-            diagnostics={"xi": self.xi, "training_matches": self.training_count},
+            diagnostics={
+                "xi": self.xi,
+                "training_matches": self.training_count,
+                "home_team_history": self.team_counts.get(teams[0], 0),
+                "away_team_history": self.team_counts.get(teams[1], 0),
+            },
         )
 
 

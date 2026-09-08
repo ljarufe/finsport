@@ -31,7 +31,7 @@ from football.observability.events import emit_event
 from football.observability.pipeline import emit_pipeline_terminal, exception_diagnostic
 from football.observability.reconciliation import emit_reconciliation_pending
 from football.prediction.constants import ENGINE_VERSION as PREDICTION_ENGINE_VERSION
-from football.prediction.evidence import dixon_coles_evidence_basis
+from football.prediction.evidence import sporting_evidence_basis
 from football.prediction.service import latest_selected_config, predict_competition_day
 from football.prediction.settlement import settle_prospective_predictions
 
@@ -98,8 +98,6 @@ def _prediction_candidates(capture_result, at):
                 "logical_identity": identity,
                 "match_ids": [],
                 "model_codes": [
-                    "INDEPENDENT_POISSON",
-                    "ELO_MULTINOMIAL_LOGIT",
                     "MARKET_CONSENSUS",
                     "MODERNIZED_R45",
                 ],
@@ -116,6 +114,10 @@ def _prediction_candidates(capture_result, at):
 
 
 def _dixon_coles_candidates(at):
+    return _sporting_candidates(at, model_code="DIXON_COLES")
+
+
+def _sporting_candidates(at, *, model_code):
     horizon = at + timedelta(hours=settings.FOOTBALL_CAPTURE_HORIZON_HOURS)
     matches = list(
         Match.objects.filter(
@@ -154,11 +156,12 @@ def _dixon_coles_candidates(at):
         competition = targets[0].season.competition
         selected, _ = latest_selected_config(competition)
         cutoff = min(match.kickoff for match in targets) - timedelta(microseconds=1)
-        evidence_identity, _, _ = dixon_coles_evidence_basis(
+        evidence_identity, _, _ = sporting_evidence_basis(
             competition,
             targets,
             cutoff=cutoff,
-            config=selected["dixon_coles"],
+            config=selected[model_code.lower()],
+            model_code=model_code,
         )
         candidates.append(
             {
@@ -166,9 +169,13 @@ def _dixon_coles_candidates(at):
                 "day": day,
                 "intended_window": "football-evidence",
                 "target_at": None,
-                "logical_identity": f"fs011:dc:{evidence_identity}",
+                "logical_identity": (
+                    f"fs011:dc:{evidence_identity}"
+                    if model_code == "DIXON_COLES"
+                    else f"fs012:{model_code}:{evidence_identity}"
+                ),
                 "match_ids": [match.pk for match in targets],
-                "model_codes": ["DIXON_COLES"],
+                "model_codes": [model_code],
                 "cutoff": cutoff,
                 "evidence_identity": evidence_identity,
             }
@@ -443,6 +450,8 @@ def run_pipeline(
 
     candidates = _prediction_candidates(capture_result, at) if capture_result else []
     candidates.extend(_dixon_coles_candidates(at))
+    for model_code in ("INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT"):
+        candidates.extend(_sporting_candidates(at, model_code=model_code))
     experiment_rows = []
     prediction_unavailable = []
     prediction_errors = []

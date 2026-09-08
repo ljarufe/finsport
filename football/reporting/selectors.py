@@ -488,7 +488,9 @@ def historical(params):
         .prefetch_related(
             Prefetch(
                 "dc_readiness_profiles",
-                queryset=DixonColesReadinessProfile.objects.filter(active=True),
+                queryset=DixonColesReadinessProfile.objects.filter(
+                    active=True, model_code=Prediction.DIXON_COLES
+                ),
                 to_attr="active_dc_profiles",
             )
         )
@@ -656,7 +658,12 @@ def daily(params):
             p.identity_label = _model_name(p)
             p.config_label = compact_config(p.model_config)
             p.config_items = config_items(p.model_config)
-            if p.model_code == Prediction.DIXON_COLES:
+            if p.model_code in (
+                Prediction.DIXON_COLES,
+                Prediction.INDEPENDENT_POISSON,
+                Prediction.ELO_MULTINOMIAL_LOGIT,
+            ):
+                p.has_readiness = True
                 p.dc_readiness_profile = p.readiness_profile_version or "—"
                 p.dc_readiness_reason_items = decision_reason_presentations(
                     p.readiness_reason

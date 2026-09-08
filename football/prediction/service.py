@@ -20,7 +20,7 @@ from .evaluation import (
     dependency_versions,
     persist_standard_policies,
 )
-from .evidence import dixon_coles_evidence_basis
+from .evidence import dixon_coles_evidence_basis, sporting_evidence_basis
 from .goal_models import DixonColesAdapter, IndependentPoissonAdapter
 from .market import MarketConsensusAdapter
 from .r45 import (
@@ -29,13 +29,35 @@ from .r45 import (
     predict_modernized,
     select_modernized_config,
 )
-from .readiness import assess_bet_eligibility
+from .readiness import active_profile, assess_bet_eligibility
+from .readiness_lifecycle import currentness_context
 
 DEFAULT_CONFIG = {
     "dixon_coles": {"xi": 0.001},
     "independent_poisson": {"xi": 0.001},
     "elo_multinomial_logit": {"k": 20, "C": 1.0},
 }
+
+
+def _model_call(adapter, operation, competition, *args):
+    try:
+        return getattr(adapter, operation)(*args)
+    except Exception as error:
+        emit_event(
+            event_code="SPORTING_MODEL_FAILED",
+            severity="ERROR",
+            component="prediction",
+            operation=operation,
+            outcome="FAILED",
+            competition_id=competition.pk,
+            human_summary="Sporting model execution failed unexpectedly.",
+            exception=error,
+            context={"model": adapter.model_code},
+        )
+        return FailedPrediction(
+            "SPORTING_MODEL_RUNTIME_FAILED",
+            {"error_class": type(error).__name__, "error": str(error)[:500]},
+        )
 
 
 def latest_selected_config(competition):
@@ -49,8 +71,31 @@ def latest_selected_config(competition):
     if experiment:
         selected = experiment.config.get("selected_hyperparameters")
         if selected:
-            return selected, f"experiment:{experiment.id}"
-    return DEFAULT_CONFIG, "fs003-default-no-completed-backtest"
+            return (
+                _profile_configs(competition, selected),
+                f"experiment:{experiment.id}",
+            )
+    return (
+        _profile_configs(competition, DEFAULT_CONFIG),
+        "fs003-default-no-completed-backtest",
+    )
+
+
+def _profile_configs(competition, selected):
+    selected = {**selected}
+    for code in (Prediction.INDEPENDENT_POISSON, Prediction.ELO_MULTINOMIAL_LOGIT):
+        profile = active_profile(competition, model_code=code)
+        if profile and profile.approved:
+            selected[code.lower()] = profile.model_config
+        elif (
+            profile
+            and profile.evidence.get("reason") == "NO_FINITE_HYPERPARAMETER_WINNER"
+        ):
+            selected[code.lower()] = {
+                "status": "UNAVAILABLE",
+                "reason": f"NO_FINITE_{'ELO' if code == Prediction.ELO_MULTINOMIAL_LOGIT else 'POISSON'}_HYPERPARAMETER_CANDIDATE",
+            }
+    return selected
 
 
 def _select_prospective_modernized(history):
@@ -178,6 +223,31 @@ def predict_competition_day(
     )
     history = list(eligible_finished_matches(competition, before=cutoff))
     history = [match for match in history if local_day(match.kickoff) < day]
+    readiness_models = tuple(
+        code
+        for code in (Prediction.INDEPENDENT_POISSON, Prediction.ELO_MULTINOMIAL_LOGIT)
+        if code in requested_models
+    )
+    readiness_currentness = (
+        currentness_context(competition, readiness_models) if readiness_models else {}
+    )
+    sporting_identities = {}
+    for code in readiness_models:
+        identity, _, _ = sporting_evidence_basis(
+            competition,
+            targets,
+            cutoff=cutoff,
+            config=selected[code.lower()],
+            model_code=code,
+            history=history,
+        )
+        if (
+            len(requested_models) == 1
+            and evidence_identity
+            and evidence_identity != identity
+        ):
+            raise ValueError("Sporting evidence identity does not match its basis.")
+        sporting_identities[code] = identity
     dc_basis = None
     if Prediction.DIXON_COLES in requested_models:
         calculated_identity, dc_basis, history = dixon_coles_evidence_basis(
@@ -185,11 +255,15 @@ def predict_competition_day(
             targets,
             cutoff=cutoff,
             config=selected["dixon_coles"],
+            history=history,
         )
         if evidence_identity and evidence_identity != calculated_identity:
             raise ValueError("Dixon-Coles evidence identity does not match its basis.")
         evidence_identity = calculated_identity
-    if "modernized_r45" not in selected:
+    if (
+        Prediction.MODERNIZED_R45 in requested_models
+        and "modernized_r45" not in selected
+    ):
         modernized_config = _select_prospective_modernized(history)
         if modernized_config is not None:
             selected = {**selected, "modernized_r45": modernized_config}
@@ -213,21 +287,36 @@ def predict_competition_day(
             "target_at": target_at.isoformat() if target_at else None,
             "target_match_ids": sorted(match.pk for match in targets),
             "model_codes": sorted(requested_models),
-            "dixon_coles_evidence_identity": evidence_identity,
+            "dixon_coles_evidence_identity": evidence_identity if dc_basis else "",
             "dixon_coles_evidence_basis": dc_basis,
+            "sporting_evidence_identities": sporting_identities,
             "temporal_batch_policy": "FS-005 logical intended_window/target_at; historical-results-strict-prior-local-day",
             "confidence_grid": list(CONFIDENCE_GRID),
             "minimum_ev_grid": list(MINIMUM_EV_GRID),
         },
     )
     adapters = []
+    unavailable = {}
+    failed = {}
+    for code in (Prediction.INDEPENDENT_POISSON, Prediction.ELO_MULTINOMIAL_LOGIT):
+        if (
+            code in requested_models
+            and selected[code.lower()].get("status") == "UNAVAILABLE"
+        ):
+            unavailable[code] = selected[code.lower()]["reason"]
     if Prediction.DIXON_COLES in requested_models:
         adapters.append(DixonColesAdapter(xi=selected["dixon_coles"]["xi"]))
-    if Prediction.INDEPENDENT_POISSON in requested_models:
+    if (
+        Prediction.INDEPENDENT_POISSON in requested_models
+        and Prediction.INDEPENDENT_POISSON not in unavailable
+    ):
         adapters.append(
             IndependentPoissonAdapter(xi=selected["independent_poisson"]["xi"])
         )
-    if Prediction.ELO_MULTINOMIAL_LOGIT in requested_models:
+    if (
+        Prediction.ELO_MULTINOMIAL_LOGIT in requested_models
+        and Prediction.ELO_MULTINOMIAL_LOGIT not in unavailable
+    ):
         adapters.append(
             EloMultinomialAdapter(
                 k=selected["elo_multinomial_logit"]["k"],
@@ -235,8 +324,6 @@ def predict_competition_day(
             )
         )
     fitted = []
-    unavailable = {}
-    failed = {}
     for adapter in adapters:
         if adapter.model_code == Prediction.DIXON_COLES and hasattr(
             adapter, "fit_for_targets"
@@ -253,7 +340,7 @@ def predict_competition_day(
                 ),
             )
         else:
-            outcome = adapter.fit(history, cutoff)
+            outcome = _model_call(adapter, "fit", competition, history, cutoff)
         if isinstance(outcome, UnavailablePrediction):
             unavailable[adapter.model_code] = outcome.reason
         elif isinstance(outcome, FailedPrediction):
@@ -281,7 +368,7 @@ def predict_competition_day(
     market = MarketConsensusAdapter()
     for match in targets:
         for adapter in fitted:
-            result = adapter.predict(match, cutoff)
+            result = _model_call(adapter, "predict", competition, match, cutoff)
             if isinstance(result, UnavailablePrediction):
                 unavailable[f"{adapter.model_code}:{match.id}"] = result.reason
                 continue
@@ -300,8 +387,9 @@ def predict_competition_day(
                 evidence_identity=(
                     evidence_identity
                     if adapter.model_code == Prediction.DIXON_COLES
-                    else ""
+                    else sporting_identities.get(adapter.model_code, "")
                 ),
+                readiness_currentness=readiness_currentness.get(adapter.model_code),
             )
             persist_standard_policies(experiment, match, prediction, result, cutoff)
         if Prediction.MARKET_CONSENSUS in requested_models:

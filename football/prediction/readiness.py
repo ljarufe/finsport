@@ -12,9 +12,12 @@ class ReadinessAssessment:
     profile: DixonColesReadinessProfile | None = None
 
 
-def active_profile(competition):
+READINESS_MODELS = ("DIXON_COLES", "INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT")
+
+
+def active_profile(competition, *, model_code="DIXON_COLES"):
     return (
-        competition.dc_readiness_profiles.filter(active=True)
+        competition.dc_readiness_profiles.filter(active=True, model_code=model_code)
         .order_by("-created", "-id")
         .first()
     )
@@ -27,16 +30,30 @@ def config_identity(config):
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def assess_bet_eligibility(competition, diagnostics, *, model_version, model_config):
-    profile = active_profile(competition)
+def assess_bet_eligibility(
+    competition,
+    diagnostics,
+    *,
+    model_version,
+    model_config,
+    model_code="DIXON_COLES",
+    currentness=None,
+):
+    profile = active_profile(competition, model_code=model_code)
     if profile is None or not profile.approved:
         return ReadinessAssessment(False, "NO_APPROVED_READINESS_PROFILE", profile)
     if profile.model_version != model_version:
         return ReadinessAssessment(False, "READINESS_MODEL_VERSION_MISMATCH", profile)
     if config_identity(profile.model_config) != config_identity(model_config):
         return ReadinessAssessment(False, "READINESS_MODEL_CONFIG_MISMATCH", profile)
+    if model_code != "DIXON_COLES":
+        from .readiness_lifecycle import profile_is_current
+
+        if not profile_is_current(competition, profile, currentness=currentness):
+            return ReadinessAssessment(False, "READINESS_PROFILE_STALE", profile)
     requirements = profile.requirements or {}
     checks = (
+        ("min_class_support", "class_support_min", "CLASS_SUPPORT_BELOW_PROFILE"),
         ("min_training_matches", "training_matches", "TRAINING_HISTORY_BELOW_PROFILE"),
         (
             "min_home_team_matches",
@@ -53,6 +70,8 @@ def assess_bet_eligibility(competition, diagnostics, *, model_version, model_con
         minimum = requirements.get(requirement)
         if minimum is not None and diagnostics.get(diagnostic, 0) < minimum:
             return ReadinessAssessment(False, reason, profile)
-    if requirements.get("require_connected", True) and not diagnostics.get("connected"):
+    if requirements.get(
+        "require_connected", model_code == "DIXON_COLES"
+    ) and not diagnostics.get("connected"):
         return ReadinessAssessment(False, "TRAINING_GRAPH_NOT_CONNECTED", profile)
     return ReadinessAssessment(True, "APPROVED_READINESS_PROFILE_PASSED", profile)

@@ -6,20 +6,35 @@ from .datasets import eligible_finished_matches, local_day
 from .readiness import active_profile
 
 
-def dixon_coles_evidence_basis(competition, targets, *, cutoff, config):
+def dixon_coles_evidence_basis(competition, targets, *, cutoff, config, history=None):
+    return sporting_evidence_basis(
+        competition, targets, cutoff=cutoff, config=config, history=history
+    )
+
+
+def sporting_evidence_basis(
+    competition, targets, *, cutoff, config, model_code="DIXON_COLES", history=None
+):
+    from .calibration import model_version
+
     targets = sorted(targets, key=lambda match: match.pk)
     target_days = {local_day(match.kickoff) for match in targets}
     if len(target_days) != 1:
         raise ValueError("A Dixon-Coles evidence batch must use one local day.")
     day = next(iter(target_days))
-    history = [
-        match
-        for match in eligible_finished_matches(competition, before=cutoff)
-        if local_day(match.kickoff) < day
-    ]
-    profile = active_profile(competition)
+    if history is None:
+        history = [
+            match
+            for match in eligible_finished_matches(competition, before=cutoff)
+            if local_day(match.kickoff) < day
+        ]
+    profile = active_profile(competition, model_code=model_code)
     payload = {
-        "model_version": DIXON_COLES_VERSION,
+        "model_version": (
+            DIXON_COLES_VERSION
+            if model_code == "DIXON_COLES"
+            else model_version(model_code)
+        ),
         "model_config": config,
         "cutoff": cutoff.isoformat(),
         "readiness_profile": (
@@ -60,5 +75,12 @@ def dixon_coles_evidence_basis(competition, targets, *, cutoff, config):
             for match in history
         ],
     }
+    if model_code != "DIXON_COLES":
+        payload["model_code"] = model_code
+        if profile:
+            payload["readiness_profile"]["basis_identity"] = profile.basis_identity
+            payload["readiness_profile"]["active"] = profile.active
+        for row in [*payload["targets"], *payload["training"]]:
+            row.pop("modified", None)
     material = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(material.encode()).hexdigest(), payload, history

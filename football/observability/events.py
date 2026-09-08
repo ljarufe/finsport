@@ -34,6 +34,11 @@ ID_FIELDS = {
     "task_id",
 }
 CONTEXT_ALLOWLIST = {
+    "model",
+    "profile_version",
+    "calibration_strategy_version",
+    "selected_config",
+    "retry_trigger",
     "activated",
     "activation_requested",
     "actual_category",

@@ -555,10 +555,16 @@ def _backtest_population(competition):
 
 
 def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest):
+    from football.prediction.readiness_lifecycle import run_readiness_maintenance
+
+    readiness = run_readiness_maintenance()
     at = at or timezone.now()
     due, previous = _weekly_due(at, force=force)
     if not due:
-        return _not_due(previous, "WEEKLY_INTERVAL_NOT_ELAPSED")
+        return {
+            **_not_due(previous, "WEEKLY_INTERVAL_NOT_ELAPSED"),
+            "readiness": readiness,
+        }
     day = _local_day(at)
     identity = f"weekly-evaluation:{day.isoformat()}"
     with transaction.atomic():
@@ -576,7 +582,10 @@ def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest)
             },
         )
         if not created:
-            return _not_due(run, "WEEKLY_IDENTITY_ALREADY_EXISTS")
+            return {
+                **_not_due(run, "WEEKLY_IDENTITY_ALREADY_EXISTS"),
+                "readiness": readiness,
+            }
         _claim(run, at)
     signature = _evidence_signature()
     previous_signature = (
@@ -587,7 +596,11 @@ def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest)
             run,
             MaintenanceRun.Status.NO_WORK,
             at,
-            {"reason": "NO_NEW_RESOLVED_EVIDENCE", "evidence_signature": signature},
+            {
+                "reason": "NO_NEW_RESOLVED_EVIDENCE",
+                "evidence_signature": signature,
+                "readiness": readiness,
+            },
         )
     experiments = []
     unavailable = []
@@ -621,6 +634,7 @@ def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest)
             }
         )
     summary = {
+        "readiness": readiness,
         "reason": (
             "WEEKLY_EVALUATION_EXECUTED" if experiments else "NO_ELIGIBLE_POPULATION"
         ),

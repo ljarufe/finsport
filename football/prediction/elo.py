@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from penaltyblog.ratings import Elo
 from sklearn.linear_model import LogisticRegression
@@ -43,6 +43,9 @@ class EloMultinomialAdapter:
         self.c = float(c)
         self.classifier = None
         self.elo = None
+        self.team_counts = Counter()
+        self.class_counts = Counter()
+        self.training_count = 0
 
     @property
     def config(self):
@@ -58,7 +61,15 @@ class EloMultinomialAdapter:
 
     def fit(self, history, cutoff=None):
         del cutoff
+        history = list(history)
+        self.training_count = len(history)
+        self.team_counts = Counter(
+            str(team)
+            for match in history
+            for team in (match.home_team_id, match.away_team_id)
+        )
         features, labels, self.elo = sequential_elo_features(history, k=self.k)
+        self.class_counts = Counter(labels)
         if len(set(labels)) < 3:
             return UnavailablePrediction("INSUFFICIENT_OUTCOME_CLASSES")
         self.classifier = Pipeline(
@@ -90,5 +101,13 @@ class EloMultinomialAdapter:
                 "C": self.c,
                 "elo_diff": difference,
                 "classes": list(classes),
+                "training_matches": self.training_count,
+                "home_team_history": self.team_counts[home],
+                "away_team_history": self.team_counts[away],
+                "class_support_min": min(
+                    self.class_counts.get(label, 0) for label in OUTCOMES
+                ),
+                "home_pre_rating": self.elo.get_team_rating(home),
+                "away_pre_rating": self.elo.get_team_rating(away),
             },
         )
