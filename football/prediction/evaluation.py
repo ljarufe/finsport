@@ -1,3 +1,4 @@
+import math
 from collections import defaultdict
 from importlib.metadata import version
 
@@ -38,7 +39,7 @@ from .r45 import (
     predict_modernized,
     select_modernized_config,
 )
-from .readiness import assess_bet_eligibility
+from .readiness import READINESS_MODELS, assess_bet_eligibility
 
 
 def dependency_versions():
@@ -110,36 +111,73 @@ def select_hyperparameters(inner_training, inner_validation):
                 inner_validation,
             )
             elo_candidates.append((loss, k, c))
-    elo_loss, selected_k, selected_c = min(
-        elo_candidates, key=lambda item: (item[0], item[1], item[2])
-    )
+    finite_elo = [item for item in elo_candidates if math.isfinite(item[0])]
+    elo_config = {
+        "status": "UNAVAILABLE",
+        "reason": "NO_FINITE_ELO_HYPERPARAMETER_CANDIDATE",
+    }
+    if finite_elo:
+        elo_loss, selected_k, selected_c = min(finite_elo)
+        elo_config = {
+            "k": selected_k,
+            "C": selected_c,
+            "validation_log_loss": elo_loss,
+            "k_grid": list(ELO_K_GRID),
+            "C_grid": list(LOGISTIC_C_GRID),
+        }
+    poisson_candidates = [
+        (
+            _validation_loss(
+                IndependentPoissonAdapter, {"xi": xi}, inner_training, inner_validation
+            ),
+            xi,
+        )
+        for xi in XI_GRID
+    ]
+    finite_poisson = [item for item in poisson_candidates if math.isfinite(item[0])]
+    poisson_config = {
+        "status": "UNAVAILABLE",
+        "reason": "NO_FINITE_POISSON_HYPERPARAMETER_CANDIDATE",
+    }
+    if finite_poisson:
+        poisson_loss, poisson_xi = min(finite_poisson)
+        poisson_config = {
+            "xi": poisson_xi,
+            "validation_log_loss": poisson_loss,
+            "selected_by": "independent_poisson",
+            "grid": list(XI_GRID),
+        }
     return {
         "dixon_coles": {
             "xi": selected_xi,
             "validation_log_loss": dc_loss,
             "grid": list(XI_GRID),
         },
-        "independent_poisson": {"xi": selected_xi, "selected_by": "dixon_coles"},
-        "elo_multinomial_logit": {
-            "k": selected_k,
-            "C": selected_c,
-            "validation_log_loss": elo_loss,
-            "k_grid": list(ELO_K_GRID),
-            "C_grid": list(LOGISTIC_C_GRID),
-        },
+        "independent_poisson": poisson_config,
+        "elo_multinomial_logit": elo_config,
     }
 
 
 def _persist_prediction(
-    experiment, match, adapter, result, cutoff, *, variant="", evidence_identity=""
+    experiment,
+    match,
+    adapter,
+    result,
+    cutoff,
+    *,
+    variant="",
+    evidence_identity="",
+    readiness_currentness=None,
 ):
     assessment = None
-    if adapter.model_code == Prediction.DIXON_COLES:
+    if adapter.model_code in READINESS_MODELS:
         assessment = assess_bet_eligibility(
             match.competition,
             result.diagnostics,
             model_version=adapter.model_version,
             model_config=adapter.config,
+            model_code=adapter.model_code,
+            currentness=readiness_currentness,
         )
     prediction = Prediction(
         experiment=experiment,
@@ -207,7 +245,7 @@ def _persist_policy_decision(
 
 
 def persist_standard_policies(experiment, match, prediction, result, cutoff):
-    if prediction.model_code == Prediction.DIXON_COLES and not prediction.bet_eligible:
+    if prediction.model_code in READINESS_MODELS and not prediction.bet_eligible:
         gated = readiness_no_bet(prediction.readiness_reason, result)
         _persist_policy_decision(
             experiment, match, prediction, "MODAL_ALL", "", gated, cutoff
@@ -419,14 +457,18 @@ def run_backtest(competition, season):
     failed_counts = defaultdict(int)
     for _, batch in daily_batches(outer):
         batch_cutoff = min(match.kickoff for match in batch)
-        adapters = (
-            DixonColesAdapter(xi=selected["dixon_coles"]["xi"]),
-            IndependentPoissonAdapter(xi=selected["independent_poisson"]["xi"]),
-            EloMultinomialAdapter(
-                k=selected["elo_multinomial_logit"]["k"],
-                c=selected["elo_multinomial_logit"]["C"],
-            ),
-        )
+        adapters = [DixonColesAdapter(xi=selected["dixon_coles"]["xi"])]
+        for code, factory in (
+            (Prediction.INDEPENDENT_POISSON, IndependentPoissonAdapter),
+            (Prediction.ELO_MULTINOMIAL_LOGIT, EloMultinomialAdapter),
+        ):
+            config = selected[code.lower()]
+            if config.get("status") == "UNAVAILABLE":
+                unavailable_counts[f"{code}:{config['reason']}"] += len(batch)
+            elif code == Prediction.INDEPENDENT_POISSON:
+                adapters.append(factory(xi=config["xi"]))
+            else:
+                adapters.append(factory(k=config["k"], c=config["C"]))
         fitted_adapters = []
         for adapter in adapters:
             fitted = adapter.fit(history, batch_cutoff)

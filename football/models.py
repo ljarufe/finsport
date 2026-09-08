@@ -92,7 +92,7 @@ class HistoricalCoverage(TimeStampedModel):
 
 
 class DixonColesReadinessProfile(TimeStampedModel):
-    """Explicit, versioned approval for using pure DC evidence in decisions."""
+    """Shared readiness lifecycle; legacy ORM/table name preserves FS-011 links."""
 
     competition = models.ForeignKey(
         Competition, on_delete=models.CASCADE, related_name="dc_readiness_profiles"
@@ -104,6 +104,20 @@ class DixonColesReadinessProfile(TimeStampedModel):
     active = models.BooleanField(default=True)
     requirements = models.JSONField(default=dict, blank=True)
     rationale = models.TextField(blank=True)
+    model_code = models.CharField(max_length=30, default="DIXON_COLES")
+    calibration_strategy_version = models.CharField(max_length=80, blank=True)
+    profile_rule_version = models.CharField(max_length=80, blank=True)
+    basis_identity = models.CharField(max_length=64, blank=True, db_index=True)
+    disposition = models.CharField(max_length=80, blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    supersedes = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="successors",
+    )
 
     def __str__(self):
         state = "approved" if self.approved else "exploratory"
@@ -118,6 +132,7 @@ class DixonColesReadinessProfile(TimeStampedModel):
                 {"model_version": "Approved profiles require a model version."}
             )
         supported = {
+            "min_class_support",
             "require_connected",
             "min_training_matches",
             "min_home_team_matches",
@@ -148,16 +163,19 @@ class DixonColesReadinessProfile(TimeStampedModel):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["competition", "version"],
+                fields=["competition", "model_code", "version"],
                 name="football_dc_readiness_profile_version_unique",
             ),
             models.UniqueConstraint(
-                fields=["competition"],
+                fields=["competition", "model_code"],
                 condition=Q(active=True),
                 name="football_dc_readiness_profile_active_unique",
             ),
         ]
         ordering = ("competition", "-created")
+
+
+ReadinessProfile = DixonColesReadinessProfile
 
 
 class Season(TimeStampedModel):

@@ -30,6 +30,18 @@ AVAILABILITY_REASONS = {
 }
 
 DECISION_REASONS = {
+    "APPROVED_READINESS_PROFILE_PASSED": (
+        "Perfil de preparación aprobado y satisfecho",
+        "La predicción cumple los requisitos del perfil vigente de su modelo y competición.",
+    ),
+    "READINESS_PROFILE_STALE": (
+        "Perfil de preparación pendiente de actualización",
+        "La evidencia deportiva o las reglas cambiaron; el mantenimiento automático revalidará el perfil.",
+    ),
+    "CLASS_SUPPORT_BELOW_PROFILE": (
+        "Evidencia de resultados por debajo del perfil",
+        "La historia de resultados no alcanza el requisito versionado del perfil.",
+    ),
     "MODAL_OUTCOME": (
         "Resultado modal seleccionado",
         "Se seleccionó el resultado con mayor probabilidad.",
@@ -68,11 +80,11 @@ DECISION_REASONS = {
     ),
     "READINESS_MODEL_VERSION_MISMATCH": (
         "Perfil no aplicable a esta versión",
-        "El perfil activo no aprueba la versión Dixon-Coles utilizada.",
+        "El perfil activo no aprueba la versión del modelo utilizada.",
     ),
     "READINESS_MODEL_CONFIG_MISMATCH": (
         "Perfil no aplicable a esta configuración",
-        "El perfil activo no aprueba la configuración Dixon-Coles utilizada.",
+        "El perfil activo no aprueba la configuración del modelo utilizada.",
     ),
     "TRAINING_HISTORY_BELOW_PROFILE": (
         "Historia por debajo del perfil",

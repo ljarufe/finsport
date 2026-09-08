@@ -42,6 +42,7 @@ from football.providers.api_football import APIFootballResponseError
 from football.tasks import wake_pipeline
 
 from .capital_helpers import create_capital_stream
+from .prediction_helpers import create_synthetic_odds
 
 pytestmark = pytest.mark.django_db
 
@@ -521,7 +522,9 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
         )
 
     monkeypatch.setattr("football.pipeline.service.run_capture", capture_stub)
-    patch_fast_non_market_models(monkeypatch)
+    # FS-012 sporting arms have their own evidence batch; this temporal capture
+    # contract now uses real stored market evidence.
+    create_synthetic_odds([first_match, shared_match, later_match])
 
     run_pipeline(at=first_target)
     first_experiment = PredictionExperiment.objects.get(target_at=first_target)
@@ -533,7 +536,10 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
         first_match.pk,
         shared_match.pk,
     }
-    assert first_experiment.predictions.count() == 4
+    assert first_experiment.predictions.count() == 2
+    assert set(first_experiment.predictions.values_list("model_code", flat=True)) == {
+        Prediction.MARKET_CONSENSUS
+    }
     assert not first_experiment.predictions.filter(
         model_code=Prediction.DIXON_COLES
     ).exists()
