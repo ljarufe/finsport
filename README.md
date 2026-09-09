@@ -1,6 +1,6 @@
 # Finsport
 
-Finsport is currently a local-only, demo-only Django application. The supported developer workflow is Docker-first and preserves the existing PostgreSQL data volume.
+Finsport is currently a local-only, demo-only Django application. The Docker-first runtime keeps the stable operational stack running while ticket work uses a disposable, isolated development clone.
 
 ## Quick Start
 
@@ -17,23 +17,27 @@ Create local configuration once:
 cp .env.dist .env
 ```
 
-Do not add bookmaker credentials. Build and start the development/UAT-safe stack:
+Do not add bookmaker credentials. Keep the operational stack on deployed stable
+images with `make up`. Create a fresh ticket development stack from a consistent
+copy of the operational database with:
 
 ```bash
-make build
-make dev-up
+make dev-create
 ```
 
-`make dev-up` starts PostgreSQL, Redis, Django, the manual Celery worker, and
-Nginx, but never Celery Beat. It is safe even when the ignored operational
-`.env` contains `FOOTBALL_PIPELINE_ENABLED=True`.
+`make dev-create` fails if stale `finsport-dev` resources exist. It creates
+isolated PostgreSQL and Redis volumes, clones only from `finsport/db`, applies
+the current branch migrations, then starts Django, the worker, and Nginx. It
+never starts Celery Beat and explicitly disables automatic provider work.
+`make dev-up` only restarts an environment already created by that lifecycle.
 
-Open the normal browser/Admin endpoint at <http://localhost:8001/>. Nginx proxies Django and serves collected static files there.
+Open development Admin through Nginx at <http://localhost:18001/>. Direct
+development Django is at <http://localhost:18000/>.
 
-The direct Gunicorn/Django endpoint at <http://localhost:8000/> is intended for technical probing. It reaches the same root-mounted Admin but does not serve collected static files.
-
-Start the complete operational runtime, including Beat and local observability,
-only when automatic provider work is intended:
+The operational browser and direct endpoints remain at ports 8001 and 8000.
+`make up` starts only previously deployed immutable images; it never builds the
+current feature branch. The complete operational runtime includes Beat and
+local observability:
 
 ```bash
 make up
@@ -54,6 +58,14 @@ make safe-down
 
 `make down` delegates to the same fail-closed path. Neither command removes
 named volumes.
+
+At ticket end, `make dev-destroy` removes only `finsport-dev` containers,
+network, and volumes. After merge and synchronization on a clean `master`,
+`make deploy-local` refreshes the rolling backup, builds immutable operational
+images, performs a bounded safe shutdown and migration, then validates startup.
+
+Rolling backup commands are `make backup` and `make backup-verify`. See the
+[backup and local deployment runbook](docs/operations/backup_and_deploy.md).
 
 ## Development Commands
 
@@ -87,16 +99,16 @@ The read-only manual workflow is:
 
 ```bash
 # Occasional catalogue refresh. New competitions remain disabled.
-docker compose run --rm django-web python manage.py sync_football_catalog
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_catalog
 
 # Enable a selected Competition in Admin, then bootstrap one provider season.
-docker compose run --rm django-web python manage.py sync_football_season <competition-id> <year>
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_season <competition-id> <year>
 
 # Current fixtures plus per-fixture API-Football and reconciled Inkabet odds.
-docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD --with-odds
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_day --date YYYY-MM-DD --with-odds
 
 # Evening status/result refresh without odds calls.
-docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_day --date YYYY-MM-DD
 ```
 
 Every command reports created, updated, unchanged/skipped,

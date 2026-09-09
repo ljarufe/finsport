@@ -52,9 +52,13 @@ def test_compose_inspection_always_enables_all_profiles(monkeypatch):
     services = runtime_control.running_services()
 
     assert services == {"grafana", "celery-beat", "observability-watch"}
-    assert commands[0][0][:8] == (
+    assert commands[0][0][:12] == (
         "docker",
         "compose",
+        "-p",
+        "finsport",
+        "-f",
+        "compose.yml",
         "--profile",
         "operational",
         "--profile",

@@ -1,9 +1,10 @@
 {
   "name": "Finsport",
   "dockerComposeFile": [
-    "../compose.yml",
+    "../compose.dev.yml",
     "compose.yml"
   ],
+  "initializeCommand": "python3 tools/fs014_lifecycle.py dev-assert-created",
   "service": "django-web",
   "runServices": [
     "init-logs",
@@ -28,7 +29,6 @@
     "PYTEST_ADDOPTS": "-o cache_dir=/tmp/finsport-pytest-cache"
   },
   "forwardPorts": [
-    8000,
     8002
   ],
   "customizations": {

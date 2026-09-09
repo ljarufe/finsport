@@ -1,0 +1,131 @@
+name: finsport-dev
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-environment: &app-environment
+  DATABASE_NAME: finsport
+  DATABASE_USER: finsport
+  DATABASE_HOST: db
+  DATABASE_PORT: "5432"
+  FOOTBALL_CAPTURE_ENABLED: "False"
+  FOOTBALL_PIPELINE_ENABLED: "False"
+  INKABET_AUTOMATIC_ENABLED: "False"
+  CSRF_TRUSTED_ORIGINS: http://localhost:18000,http://localhost:18001,http://localhost:8002
+
+services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  init-logs:
+    image: busybox
+    volumes:
+      - logs_volume:/app/logs
+      - static_volume:/app/staticfiles
+    user: "0"
+    command: >-
+      sh -c "mkdir -p /app/logs /app/staticfiles &&
+      chown -R 1000:1000 /app/logs /app/staticfiles"
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: finsport
+      POSTGRES_USER: finsport
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finsport -d finsport"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  django-web:
+    image: finsport-dev-app:branch
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "18000:8000"
+    depends_on:
+      init-logs:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+      - logs_volume:/app/logs
+    env_file:
+      - .env
+    environment:
+      <<: *app-environment
+      OBSERVABILITY_SERVICE_NAME: django-web-dev
+    logging: *default-logging
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz/', timeout=2)"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  celery:
+    image: finsport-dev-app:branch
+    restart: unless-stopped
+    command: celery -A finsport worker -l info -Q finsport.local.safe
+    volumes:
+      - .:/app
+      - logs_volume:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      django-web:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *app-environment
+      OBSERVABILITY_SERVICE_NAME: celery-worker-dev
+    logging: *default-logging
+
+  nginx:
+    image: nginx:1.29
+    ports:
+      - "18001:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles
+    depends_on:
+      django-web:
+        condition: service_healthy
+    logging: *default-logging
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  logs_volume:

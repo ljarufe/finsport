@@ -11,6 +11,10 @@ import time
 COMPOSE = (
     "docker",
     "compose",
+    "-p",
+    "finsport",
+    "-f",
+    "compose.yml",
     "--profile",
     "operational",
     "--profile",

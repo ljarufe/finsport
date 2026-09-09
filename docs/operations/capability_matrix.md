@@ -28,8 +28,9 @@ make an otherwise automatic capability manual-by-design.
 One file-backed Celery Beat instance owns scheduling. When pipeline automation is
 enabled it registers only `football.pipeline.wake`; persistent maintenance
 identities keep daily/weekly capabilities from repeating on its frequent wake.
-`make up` starts the complete operational/observability profiles, `make dev-up`
-starts no Beat, and `make safe-down` drains and removes all profiles without
+`make up` starts the complete immutable operational/observability profiles.
+`make dev-create` and `make dev-up` use isolated PostgreSQL and Redis and start
+no Beat. `make safe-down` drains and removes operational containers without
 deleting named volumes.
 
 Prediction probabilities, Decision action space, selected temporal prices,

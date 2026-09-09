@@ -1,14 +1,16 @@
 IN_CONTAINER := $(shell test -f /.dockerenv && echo 1 || echo 0)
 COMPOSE = docker compose
+OPERATIONAL_COMPOSE = $(COMPOSE) -p finsport -f compose.yml
+DEV_COMPOSE = $(COMPOSE) -p finsport-dev -f compose.dev.yml
 PYTEST_CACHE_DIR = /tmp/finsport-pytest-cache
 COVERAGE_FILE = /tmp/finsport-coverage
 
-.PHONY: build up dev-up operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks
+.PHONY: build up dev-create dev-up dev-destroy deploy-local backup backup-verify operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks
 
 ifeq ($(IN_CONTAINER),1)
 APP =
 
-build up dev-up operational-up down safe-down status logs:
+build up dev-create dev-up dev-destroy deploy-local backup backup-verify operational-up down safe-down status logs:
 	@echo "This target controls Docker Compose and must run on the host."
 	@exit 1
 
@@ -20,24 +22,34 @@ hooks:
 	@echo "Git hooks must be installed from the host environment."
 	@exit 1
 else
-APP = $(COMPOSE) run --rm django-web
+APP = python3 tools/fs014_lifecycle.py dev-assert-ready && $(DEV_COMPOSE) run --rm --no-deps django-web
 
 build:
-	$(COMPOSE) build
+	$(DEV_COMPOSE) build django-web
 
 up:
 	@grep -Eq '^GRAFANA_ADMIN_PASSWORD=.+$$' .env || (echo "Set a non-empty GRAFANA_ADMIN_PASSWORD in the ignored .env file." && exit 1)
-	$(COMPOSE) --profile operational --profile observability up -d
+	@python3 tools/fs014_lifecycle.py operational-image-check
+	$(OPERATIONAL_COMPOSE) --profile operational --profile observability up -d --wait
+	@python3 tools/fs014_lifecycle.py operational-running-check
+
+dev-create:
+	python3 tools/fs014_lifecycle.py dev-create
 
 dev-up:
-	python3 tools/runtime_control.py safe-down
-	$(COMPOSE) up -d --wait db redis
-	@depth=$$($(COMPOSE) exec -T redis redis-cli -n 14 LLEN finsport.local.safe); \
-	if [ "$$depth" != "0" ]; then \
-		echo "Refusing dev-up: finsport.local.safe contains $$depth queued task(s). Review/drain them operationally; the queue was not purged."; \
-		exit 1; \
-	fi
-	$(COMPOSE) up -d django-web celery nginx
+	python3 tools/fs014_lifecycle.py dev-up
+
+dev-destroy:
+	python3 tools/fs014_lifecycle.py dev-destroy
+
+deploy-local:
+	python3 tools/fs014_lifecycle.py deploy-local
+
+backup:
+	python3 tools/finsport_backup.py
+
+backup-verify:
+	python3 tools/fs014_lifecycle.py backup-verify
 
 operational-up: up
 
@@ -50,15 +62,15 @@ status:
 	python3 tools/runtime_control.py status
 
 logs:
-	$(COMPOSE) logs -f
+	$(OPERATIONAL_COMPOSE) logs -f
 
 observability-up: operational-up
 
 observability-stop:
-	$(COMPOSE) --profile observability stop observability-watch alloy loki grafana
+	$(OPERATIONAL_COMPOSE) --profile observability stop observability-watch alloy loki grafana
 
 observability-logs:
-	$(COMPOSE) --profile observability logs -f observability-watch alloy loki grafana
+	$(OPERATIONAL_COMPOSE) --profile observability logs -f observability-watch alloy loki grafana
 
 hooks:
 	pre-commit install --install-hooks

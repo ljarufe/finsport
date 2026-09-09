@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Finsport rolling backup
+
+[Timer]
+OnCalendar=Mon *-*-* 20:00:00 America/Lima
+Persistent=true
+AccuracySec=1min
+Unit=finsport-backup.service
+
+[Install]
+WantedBy=timers.target
