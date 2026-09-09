@@ -224,8 +224,12 @@ class MarketConsensusAdapter:
         )
 
 
-def best_prices_as_of(match, cutoff):
-    quotes = market_quotes_as_of(match, cutoff)
+def best_prices_as_of(match, cutoff, *, not_before=None):
+    quotes = market_selection_as_of(
+        match,
+        cutoff,
+        not_before=not_before,
+    ).quotes
     if not quotes:
         return {}
     best = {}

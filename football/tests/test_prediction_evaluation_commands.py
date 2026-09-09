@@ -183,6 +183,10 @@ def test_predict_day_history_respects_explicit_cutoff(monkeypatch):
     assert all(before_cutoff.id in history for history in fitted_histories)
     assert all(after_cutoff.id not in history for history in fitted_histories)
     experiment = experiments[0]
+    assert Prediction.MARKET_CONSENSUS not in experiment.config["model_codes"]
+    assert not experiment.predictions.filter(
+        model_code=Prediction.MARKET_CONSENSUS
+    ).exists()
     assert experiment.summary["r45_arms"]["MODERNIZED_R45"]["status"] == ("UNAVAILABLE")
     assert experiment.summary["r45_arms"]["MODERNIZED_R45"]["classification"] == (
         "ACTIVE"

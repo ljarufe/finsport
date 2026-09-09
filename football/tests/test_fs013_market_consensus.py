@@ -32,6 +32,7 @@ from football.models import (
 from football.pipeline import run_pipeline
 from football.prediction.contracts import ProbabilityResult, UnavailablePrediction
 from football.prediction.market import MarketConsensusAdapter
+from football.prediction.service import predict_competition_day
 
 pytestmark = pytest.mark.django_db
 
@@ -479,6 +480,7 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
     )
     first, _ = canonical_bookmaker(source, "first")
     second, _ = canonical_bookmaker(source, "second")
+    stale, _ = canonical_bookmaker(source, "stale")
     historical_experiment = PredictionExperiment.objects.create(
         competition=match.competition,
         mode=PredictionExperiment.MODE_BACKTEST,
@@ -506,6 +508,14 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
     )
     first_target = match.kickoff - timedelta(hours=1)
     first_cutoff = first_target + timedelta(minutes=1)
+    stale_observation = observation(
+        match,
+        source,
+        stale,
+        market,
+        first_target - timedelta(minutes=5),
+        ("99", "3", "3"),
+    )
     first_observation = observation(
         match,
         source,
@@ -561,6 +571,12 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
     assert first_prediction.diagnostics["canonical_bookmaker_count"] == 2
     first_experiment = first_prediction.experiment
     assert first_experiment.config["model_codes"] == [Prediction.MARKET_CONSENSUS]
+    modal = first_experiment.decisions.get(
+        prediction=first_prediction,
+        policy_code="MODAL_ALL",
+    )
+    assert modal.selected_odds_observation_id != stale_observation.pk
+    assert modal.selected_odds_observation.observed_at >= first_target
     assert not first_experiment.predictions.exclude(
         model_code=Prediction.MARKET_CONSENSUS
     ).exists()
@@ -611,6 +627,22 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
         historical.model_version,
         historical.modified,
     ) == historical_original
+
+
+def test_market_consensus_v2_requires_completed_capture_evidence():
+    match = target_match()
+
+    with pytest.raises(
+        ValueError,
+        match="requires a capture evidence identity",
+    ):
+        predict_competition_day(
+            match.competition,
+            match.kickoff.date(),
+            match.kickoff - timedelta(hours=1),
+            match_ids=[match.pk],
+            model_codes=[Prediction.MARKET_CONSENSUS],
+        )
 
 
 def test_completed_empty_batch_persists_explicit_unavailable_evidence(monkeypatch):

@@ -244,7 +244,15 @@ def _persist_policy_decision(
     return decision
 
 
-def persist_standard_policies(experiment, match, prediction, result, cutoff):
+def persist_standard_policies(
+    experiment,
+    match,
+    prediction,
+    result,
+    cutoff,
+    *,
+    price_not_before=None,
+):
     if prediction.model_code in READINESS_MODELS and not prediction.bet_eligible:
         gated = readiness_no_bet(prediction.readiness_reason, result)
         _persist_policy_decision(
@@ -271,7 +279,11 @@ def persist_standard_policies(experiment, match, prediction, result, cutoff):
                 cutoff,
             )
         return
-    prices = best_prices_as_of(match, cutoff)
+    prices = best_prices_as_of(
+        match,
+        cutoff,
+        not_before=price_not_before,
+    )
     _persist_policy_decision(
         experiment,
         match,

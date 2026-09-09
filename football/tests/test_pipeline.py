@@ -600,13 +600,11 @@ def test_prediction_identity_allows_later_window_and_missing_market_keeps_models
     assert PredictionExperiment.objects.count() == 2
     assert first.experiment.predictions.count() == 3
     assert first.experiment.config["target_match_ids"] == [match.pk]
+    assert Prediction.MARKET_CONSENSUS not in first.experiment.config["model_codes"]
     assert not first.experiment.predictions.filter(
         model_code=Prediction.MARKET_CONSENSUS
     ).exists()
-    unavailable = first.experiment.summary["unavailable"][
-        f"MARKET_CONSENSUS:{match.pk}"
-    ]
-    assert unavailable["reason"] == "NO_VALID_MARKET"
+    assert f"MARKET_CONSENSUS:{match.pk}" not in first.experiment.summary["unavailable"]
 
 
 def test_settlement_requires_canonical_finished_outcome_and_never_rewrites_decision():

@@ -232,6 +232,19 @@ def predict_competition_day(
             Prediction.MODERNIZED_R45,
         )
     )
+    if model_codes is None and not market_evidence_identity:
+        requested_models.discard(Prediction.MARKET_CONSENSUS)
+    if Prediction.MARKET_CONSENSUS in requested_models:
+        if not market_evidence_identity:
+            raise ValueError(
+                "MARKET_CONSENSUS v2 requires a capture evidence identity."
+            )
+        target_ids = {match.pk for match in targets}
+        if set(normalized_market_not_before) != target_ids:
+            raise ValueError(
+                "MARKET_CONSENSUS v2 requires one capture lower bound "
+                "per target Match."
+            )
     history = list(eligible_finished_matches(competition, before=cutoff))
     history = [match for match in history if local_day(match.kickoff) < day]
     readiness_models = tuple(
@@ -428,7 +441,14 @@ def predict_competition_day(
                     cutoff,
                     evidence_identity=market_evidence_identity,
                 )
-                persist_standard_policies(experiment, match, prediction, result, cutoff)
+                persist_standard_policies(
+                    experiment,
+                    match,
+                    prediction,
+                    result,
+                    cutoff,
+                    price_not_before=normalized_market_not_before[match.pk],
+                )
         if modernized is not None:
             result = predict_modernized(modernized, history, match, cutoff)
             if isinstance(result, UnavailablePrediction):
