@@ -1,90 +1,257 @@
-# FS-013 — Feedback de implementación
+## Final PR review and closure
 
-## Resultado
+El review del PR #18 detectó dos findings P1 válidos sobre la frontera temporal de `MARKET_CONSENSUS v2`.
 
-`MARKET_CONSENSUS` queda operativo en el pipeline prospectivo normal con:
+### P1 — policy prices must respect the capture batch lower bound
+
+La Prediction de Market Consensus ya aplicaba correctamente el `not_before` del lote de captura, pero las decisiones derivadas mediante `persist_standard_policies()` consultaban `best_prices_as_of(match, cutoff)` sin ese mismo límite inferior.
+
+Eso permitía que una Prediction T-60 usara exclusivamente evidencia T-60 mientras una decisión modal/selective asociada seleccionara un precio proveniente de una observación anterior, por ejemplo T-6h.
+
+La corrección:
 
 ```text
-football.pipeline.wake
-→ FOOTBALL_MARKET_CONSENSUS_WINDOWS (T-6h/T-60m/T-30m)
-→ un CapturePlanner/CaptureExecutor y límites bounded
-→ OddsObservation real y durable
-├─ MARKET_CONSENSUS v2 por lote completado
-└─ MODERNIZED_R45 + Decision consumers reutilizan evidencia DB
+best_prices_as_of(...)
+→ acepta not_before
+
+persist_standard_policies(...)
+→ acepta price_not_before
+
+MARKET_CONSENSUS v2
+→ propaga el not_before del mismo capture batch hasta la selección de precios
 ```
 
-No existe comando, calibración, perfil aprendido ni activación específica de Market Consensus. La habilitación del pipeline continúa siendo la configuración operativa genérica existente de Finsport.
+Resultado:
 
-## Arquitectura implementada
+```text
+Prediction evidence window
+==
+Decision price evidence window
+```
 
-- `CanonicalBookmaker` y `CanonicalOddsMarket` representan las unidades estadísticas.
-- `BookmakerCanonicalRef` y `OddsMarketCanonicalRef` preservan la fila raw, estado de reconciliación, versión, razón y contexto.
-- `fs013-governed-v1` resuelve por `source + external_id`; el nombre sólo es diagnóstico. Los IDs desconocidos permanecen `PENDING` y no votan.
-- La migración `0012_fs013_market_consensus_identity` crea el esquema y reconcilia los bookmakers API-Football presentes en el checkout, Inkabet y los mercados API-Football Match Winner / Inkabet MW3W hacia `1x2`.
-- La selección usa como máximo una observación válida por bookmaker canónico. Prefiere la observación real válida más reciente y usa source/external IDs/PK como desempate estable.
-- `CaptureConfig.windows` tiene una sola autoridad: `FOOTBALL_MARKET_CONSENSUS_WINDOWS`. La configuración histórica local `FOOTBALL_CAPTURE_WINDOWS` ya no se lee y no puede activar `early/middle`.
-- El planner produce únicamente tres identidades de adquisición actuales por fixture: `market-t6h`, `market-t60m`, `market-t30m`. No existen roles, colecciones paralelas ni namespace dual.
-- La predicción MC prospectiva nace sólo de trabajo actual `SUCCESS`, `SUCCESS_EMPTY` o `LATE_CAPTURE` durable. Su intervalo de evidencia va desde `CaptureWorkItem.executed_at` hasta el cutoff estricto `CaptureRun.completed_at`.
-- R45 se evalúa desde la misma ventana actual debida y reutiliza `OddsObservation` persistido; no posee un schedule ni una adquisición propios. El candidato MC contiene exclusivamente `MARKET_CONSENSUS`; Dixon-Coles, Poisson y Elo continúan con sus candidatos deportivos independientes.
-- El `PredictionExperiment.logical_identity` y el hash `Prediction.evidence_identity` hacen idempotente el lote. Una ventana posterior crea evidencia nueva sin modificar la anterior.
-- Una respuesta real posterior con precios idénticos sigue insertando `OddsObservation`; `OddsSnapshot` permanece como proyección current separada.
+Las decisiones derivadas ya no pueden mezclar precios de ventanas anteriores.
 
-## Versiones
+### P1 — prospective MARKET_CONSENSUS v2 requires capture evidence
 
-- Canonicalización: `fs013-governed-v1`.
-- Modelo: `fs013-market-consensus-v2`.
-- Versión histórica preservada: `fs003-market-consensus-v1`.
-- Único schedule de adquisición: exactamente `market-t6h`, `market-t60m`, `market-t30m`.
+El camino genérico soportado por:
 
-## Evidencia automatizada
+```text
+predict_football_day
+→ predict_day()
+→ predict_competition_day()
+```
 
-- Focused Pass 4: 61 pruebas relevantes PASS. Prueban bootstrap automático con una adquisición falsa, transición a headers autoritativos y reserva, fallo headerless consumido durablemente sin repetición, y comportamiento manual conservador.
-- Focused Pass 3: 66 pruebas relevantes PASS; incluye exactamente tres adquisiciones con proveedor falso para un fixture, reutilización MC+R45 sin llamadas extra y `makemigrations --check --dry-run` sin cambios.
-- Focused Pass 2: 69 pruebas relevantes PASS y `makemigrations --check --dry-run` sin cambios.
-- `make check` Pass 2 se ejecutó una sola vez: Black, Ruff, Django check, migration check, dependency check, security audit y cobertura 87.10% PASS; la suite terminó 431 PASS / 7 FAIL por pruebas FS-011/FS-012 dependientes de la hora UTC/local (hallazgo documentado abajo). El gate general, por tanto, no se declara verde.
-- `python manage.py check`: PASS.
-- `python -m pip check`: PASS.
-- `pip-audit --local`: sin vulnerabilidades conocidas.
-- `git diff --check`: PASS.
-- Prueba de migración disposable: 0011 → creación de raw Bet365/Match Winner → 0012 → refs `RESOLVED` a `bet365`/`1x2`, PASS.
-- Configuración y planner probados sin provider call: tres ventanas exactas, ningún trabajo `early/middle`, un único Beat owner `football.pipeline.wake` y ningún incremento de adquisiciones al agregar consumidores MC+R45.
+seguía solicitando todos los modelos por defecto.
 
-## UAT manual
+Después de FS-013 eso permitía producir `fs013-market-consensus-v2` sin:
 
-El primer UAT automático real ejecutado por execution chat alcanzó correctamente Beat → `football.pipeline.wake` → `run_pipeline(trigger=SCHEDULER)` y creó `CaptureWorkItem id=3578` para `match_id=53550`, fixture `1552142`, ventana `market-t60m`. Terminó `QUOTA_RESERVE`, con cero intentos/páginas/retries/observaciones, porque el pipeline no habilitaba el bootstrap bounded al no existir todavía un header de cuota del epoch UTC.
+```text
+market_evidence_identity
+market_evidence_not_before_by_match
+```
 
-Pass 4 corrige exclusivamente ese límite: el pipeline pasa `allow_bootstrap=True` a `run_capture` cuando el trigger es `SCHEDULER`. El allowance existente continúa limitado por `FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS`; los intentos headerless quedan contabilizados durablemente y los headers recibidos cambian la autoridad a `HEADER_CURRENT_UTC_EPOCH`, tras lo cual vuelve a aplicar la reserva normal. El camino manual sigue conservador por defecto.
+y por tanto fuera de la semántica definida para Market Consensus v2:
 
-Codex no repitió el UAT real. A15 y A16 quedan `PENDING_UAT_RETEST` para que execution chat verifique la corrección en runtime real. El hallazgo original se conserva en `tmp/FS-013_uat_quota_reserve_finding.txt`.
+```text
+completed real capture batch
+→ versioned prospective Market Consensus Prediction
+```
 
-La migración no fue aplicada a la PostgreSQL persistente del maintainer. Su comportamiento se validó exclusivamente en la DB disposable de pytest.
+La corrección mantiene el comportamiento genérico de los modelos deportivos, pero excluye Market Consensus cuando no existe evidencia de capture batch.
 
-## Seguridad financiera
+Además, si un caller solicita explícitamente `MARKET_CONSENSUS`, ahora debe aportar:
 
-- Provider HTTP calls reales: 0.
-- Autenticación a bookmaker: 0.
-- Escrituras a bookmaker/apuestas/movimiento de dinero: 0.
-- Ejecución de `run_betting_cycle`, Selenium histórico o `make_bets`: 0.
-- Commits, push, PR y Planka: 0.
+```text
+non-empty market_evidence_identity
++
+one market evidence lower bound per target Match
+```
 
-## Hallazgos y recomendaciones
+El pipeline automático FS-013 ya proporciona ambos valores, por lo que su ruta operativa no cambia.
 
-### Pruebas históricas sensibles al cambio de día local
+### Regression adjustment
 
-**Evidencia:** el único `make check` de Pass 2 se ejecutó a las 15:04 UTC / 10:04 America/Lima. Seis pruebas en `test_fs011_dixon_coles.py` construyen un target con `timezone.now() + 12h` pero llaman `predict_competition_day()` con `target.kickoff.date()` en UTC; a esa hora, ese día UTC no coincide con el día local usado por producción. La prueba multitarget FS-012 añade dos horas al segundo target y cruza el mismo límite. Esos archivos no tienen diff FS-013.
+Un test heredado de pipeline esperaba todavía que Market Consensus fuese solicitado por el camino genérico y apareciera como `UNAVAILABLE`.
 
-**Impacto:** siete fallos no relacionados impiden declarar verde el gate general aunque los 69 tests focalizados y todos los subgates no-pytest pasen.
+Esa expectativa quedó obsoleta por la corrección anterior.
 
-**Recomendación:** estabilizar esas pruebas en su ticket propietario usando un instante fijo y `local_day(target.kickoff)`. No se absorbió esa corrección en FS-013.
+El test fue actualizado para verificar la nueva semántica:
 
-### Registro gobernado extensible
+```text
+generic prospective call without capture evidence
+→ MARKET_CONSENSUS not requested
+→ no MARKET_CONSENSUS Prediction
+→ no synthetic MARKET_CONSENSUS unavailable entry
+```
 
-**Evidencia:** los raw IDs soportados actuales quedan resueltos por el registro `fs013-governed-v1`; un ID futuro desconocido queda `PENDING` con `UNMAPPED_SOURCE_EXTERNAL_ID`.
+### Final validation
 
-**Impacto:** un bookmaker nuevo del proveedor no participa silenciosamente hasta ser revisado; no puede duplicar votos por heurística de nombre.
+La corrección de PR review se valida mediante la suite focalizada:
 
-**Recomendación:** ampliar el registro mediante cambio versionado y review cuando aparezcan IDs nuevos. No es trabajo pendiente para los refs actualmente soportados.
+```text
+football/tests/test_fs013_market_consensus.py
+football/tests/test_prediction_market.py
+football/tests/test_prediction_evaluation_commands.py
+football/tests/test_pipeline.py
+```
 
-## Estado de aceptación
+y:
 
-A01–A18: 16 PASS, 2 PENDING_UAT_RETEST, 0 otros. A15 y A16 requieren el retest real del ciclo automático/proveedor. El detalle y la evidencia están en `tmp/FS-013_acceptance_ledger.md`.
+```text
+git diff --check
+```
+
+No se repite `make check` porque no existe un nuevo delta transversal que justifique repetir el full gate y ya existe un finding heredado conocido de FS-011/FS-012 sensible al rollover UTC/America-Lima.
+
+No se repite UAT real ni se realizan nuevas llamadas a providers: los cambios de review endurecen las fronteras de evidencia ya demostradas durante el UAT automático y quedan cubiertos por regresiones locales.
+
+### Real automatic UAT retained as acceptance evidence
+
+El UAT automático real de FS-013 queda como evidencia de cierre:
+
+```text
+match_id=53551
+Moreirense vs Benfica
+
+T-60
+→ SCHEDULER
+→ 1 attempt
+→ 1 page
+→ 0 retries
+→ 14 OddsObservation
+
+T-30
+→ SCHEDULER
+→ 1 attempt
+→ 1 page
+→ 0 retries
+→ 14 OddsObservation
+```
+
+Ambas ventanas produjeron Predictions reales:
+
+```text
+model_version
+→ fs013-market-consensus-v2
+
+canonical bookmakers
+→ 14
+
+de-vig
+→ multiplicative
+
+consensus
+→ equal_weight_arithmetic_mean
+```
+
+La recuperación T-30 devolvió los mismos precios observados en T-60:
+
+```text
+14 new OddsObservation
+snapshots_changed=0
+identical_response=True
+```
+
+confirmando que una recuperación real posterior e idéntica continúa siendo evidencia auditable sin fabricar movimiento del mercado.
+
+La similitud T-60/T-30 se conserva como evidencia prospectiva y no provoca un cambio de parámetros después de un solo fixture.
+
+Configuración inicial retenida:
+
+```text
+T-6h
+T-60m
+T-30m
+```
+
+Una auditoría futura podrá determinar si conviene eliminar una de las dos ventanas near-kickoff cuando exista evidencia suficiente.
+
+### Non-blocking operational findings
+
+Durante el UAT real, Inkabet agotó su timeout de transporte y dejó los ciclos `PARTIAL` / `DEGRADED`.
+
+Esto no impidió:
+
+```text
+API-Football acquisition
+→ OddsObservation persistence
+→ canonical reconciliation
+→ MARKET_CONSENSUS v2 Prediction
+```
+
+Por tanto se conserva como finding operacional secundario y no como blocker de FS-013.
+
+Los siete fallos previamente observados en el full `make check`, relacionados con tests heredados FS-011/FS-012 sensibles al rollover temporal, permanecen fuera del scope de FS-013.
+
+### Process learnings
+
+No se modificaron artefactos `tmp/**` para fabricar un estado final de aceptación.
+
+Los artefactos temporales conservan el estado histórico que tenían cuando fueron generados; la evidencia posterior de UAT y PR review se registra en este feedback durable.
+
+También queda registrado un problema repetido en la aplicación de pequeñas correcciones locales:
+
+```text
+git apply
+```
+
+no debe utilizarse con hunks abreviados del tipo:
+
+```text
+@@
+```
+
+generados manualmente desde chat.
+
+`git apply` requiere unified diffs reales con rangos completos:
+
+```text
+@@ -x,y +x,y @@
+```
+
+Para modificaciones pequeñas entregadas desde chat se debe preferir:
+
+```text
+exact-context replacement
++
+assert expected occurrence count
++
+abort before writing on mismatch
+```
+
+No instalar `apply_patch` ni herramientas adicionales para resolver este caso.
+
+### Final acceptance
+
+Con el UAT automático real y las dos correcciones P1 del PR review:
+
+```text
+A01–A18
+→ PASS
+
+MARKET_CONSENSUS operational
+→ YES
+
+normal automatic pipeline
+→ YES
+
+completed capture batch required for v2
+→ YES
+
+Prediction/Decision temporal batch consistency
+→ YES
+
+manual activation required
+→ NO
+
+continuous polling
+→ NO
+
+future empirical calibration
+→ DEFERRED / NOT BLOCKING
+
+real betting
+→ FORBIDDEN
+```
+
+FS-013 queda listo para merge una vez que la suite focalizada final y `git diff --check` estén verdes y el PR review no presente nuevos findings materiales.
