@@ -4,6 +4,12 @@ from typing import Any
 
 from django.conf import settings
 
+MARKET_CONSENSUS_WINDOW_NAMES = (
+    "market-t6h",
+    "market-t60m",
+    "market-t30m",
+)
+
 
 @dataclass(frozen=True)
 class CaptureWindow:
@@ -57,18 +63,15 @@ class CaptureConfig:
 
     @classmethod
     def from_settings(cls, *, max_provider_attempts=None):
-        raw_windows = settings.FOOTBALL_CAPTURE_WINDOWS
+        raw_windows = settings.FOOTBALL_MARKET_CONSENSUS_WINDOWS
         windows = tuple(CaptureWindow.from_mapping(value) for value in raw_windows)
         names = [window.name for window in windows]
-        normalized_names = {name.casefold() for name in names}
-        if len(windows) > 3 or len(names) != len(normalized_names):
-            raise ValueError("Capture windows require at most three unique names.")
-        extras = normalized_names - {"early", "middle"}
-        if not {"early", "middle"}.issubset(normalized_names) or any(
-            not name.startswith("near") for name in extras
+        if len(names) != len(set(names)) or set(names) != set(
+            MARKET_CONSENSUS_WINDOW_NAMES
         ):
             raise ValueError(
-                "Capture windows require early + middle and at most one near candidate."
+                "Market Consensus windows require exactly market-t6h, "
+                "market-t60m, and market-t30m."
             )
         if any(
             window.offset.total_seconds() < 0
@@ -81,6 +84,20 @@ class CaptureConfig:
                 "Window offsets/tolerances must be non-negative and late tolerance "
                 "must include normal tolerance."
             )
+        effective_ranges = sorted(
+            (
+                window.offset - window.late_tolerance,
+                window.offset + window.before_tolerance,
+                window.name,
+            )
+            for window in windows
+        )
+        for previous, current in zip(effective_ranges, effective_ranges[1:]):
+            if current[0] <= previous[1]:
+                raise ValueError(
+                    "Capture windows must have non-overlapping execution opportunities: "
+                    f"{previous[2]} and {current[2]}."
+                )
         configured_max = settings.FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS
         if max_provider_attempts is not None:
             configured_max = min(configured_max, max_provider_attempts)

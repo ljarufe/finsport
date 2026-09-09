@@ -2,6 +2,9 @@ from django.contrib import admin, messages
 
 from .models import (
     Bookmaker,
+    BookmakerCanonicalRef,
+    CanonicalBookmaker,
+    CanonicalOddsMarket,
     CapitalExperiment,
     CapitalLedgerEntry,
     CapitalLongitudinalSeries,
@@ -17,6 +20,7 @@ from .models import (
     Match,
     MatchSourceRef,
     OddsMarket,
+    OddsMarketCanonicalRef,
     OddsObservation,
     OddsSnapshot,
     PipelineRun,
@@ -457,11 +461,59 @@ class BookmakerAdmin(admin.ModelAdmin):
     search_fields = ("name", "external_id")
 
 
+@admin.register(CanonicalBookmaker)
+class CanonicalBookmakerAdmin(admin.ModelAdmin):
+    list_display = ("code", "name")
+    search_fields = ("code", "name")
+
+
+@admin.register(BookmakerCanonicalRef)
+class BookmakerCanonicalRefAdmin(admin.ModelAdmin):
+    list_display = (
+        "bookmaker",
+        "canonical_bookmaker",
+        "reconciliation_status",
+        "mapping_version",
+        "reason",
+    )
+    list_filter = ("reconciliation_status", "mapping_version", "bookmaker__source")
+    search_fields = (
+        "bookmaker__name",
+        "bookmaker__external_id",
+        "canonical_bookmaker__code",
+    )
+    raw_id_fields = ("bookmaker", "canonical_bookmaker")
+
+
 @admin.register(OddsMarket)
 class OddsMarketAdmin(admin.ModelAdmin):
     list_display = ("name", "external_id", "source")
     list_filter = ("source",)
     search_fields = ("name", "external_id")
+
+
+@admin.register(CanonicalOddsMarket)
+class CanonicalOddsMarketAdmin(admin.ModelAdmin):
+    list_display = ("code", "name")
+    search_fields = ("code", "name")
+
+
+@admin.register(OddsMarketCanonicalRef)
+class OddsMarketCanonicalRefAdmin(admin.ModelAdmin):
+    list_display = (
+        "market",
+        "canonical_market",
+        "reconciliation_status",
+        "mapping_version",
+        "reason",
+    )
+    list_filter = ("reconciliation_status", "mapping_version", "market__source")
+    search_fields = (
+        "market__name",
+        "market__external_id",
+        "canonical_market__code",
+    )
+    raw_id_fields = ("market", "canonical_market")
 
 
 @admin.register(OddsSnapshot)

@@ -168,8 +168,8 @@ def test_predict_day_history_respects_explicit_cutoff(monkeypatch):
             return UnavailablePrediction("TEST_UNAVAILABLE")
 
     class NoMarket:
-        def predict(self, match, prediction_cutoff):
-            del match, prediction_cutoff
+        def predict(self, match, prediction_cutoff, *, not_before=None):
+            del match, prediction_cutoff, not_before
             return UnavailablePrediction("NO_VALID_MARKET")
 
     monkeypatch.setattr(service, "DixonColesAdapter", RecordingAdapter)

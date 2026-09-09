@@ -5,9 +5,13 @@ from django.utils import timezone
 
 from football.models import (
     Bookmaker,
+    BookmakerCanonicalRef,
+    CanonicalBookmaker,
+    CanonicalOddsMarket,
     Competition,
     Match,
     OddsMarket,
+    OddsMarketCanonicalRef,
     OddsObservation,
     Season,
     Source,
@@ -108,12 +112,29 @@ def create_synthetic_odds(matches):
     market = OddsMarket.objects.create(
         source=source, external_id="1", name="Match Winner"
     )
+    canonical_market = CanonicalOddsMarket.objects.create(code="1x2", name="1X2")
+    OddsMarketCanonicalRef.objects.create(
+        market=market,
+        canonical_market=canonical_market,
+        reconciliation_status="RESOLVED",
+        reason="TEST_FIXTURE",
+    )
     bookmakers = [
         Bookmaker.objects.create(
             source=source, external_id=str(index), name=f"Book {index}"
         )
         for index in range(1, 5)
     ]
+    for index, bookmaker in enumerate(bookmakers, start=1):
+        canonical = CanonicalBookmaker.objects.create(
+            code=f"synthetic-book-{index}", name=f"Book {index}"
+        )
+        BookmakerCanonicalRef.objects.create(
+            bookmaker=bookmaker,
+            canonical_bookmaker=canonical,
+            reconciliation_status="RESOLVED",
+            reason="TEST_FIXTURE",
+        )
     observations = []
     offsets = (timedelta(hours=24), timedelta(hours=3), timedelta(minutes=30))
     for match_index, match in enumerate(matches):

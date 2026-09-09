@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from .country_mapping import country_code, normalized_text
+from .market_identity import reconcile_bookmaker_identity, reconcile_market_identity
 from .models import (
     Bookmaker,
     Competition,
@@ -258,6 +259,7 @@ def sync_catalog_payloads(leagues, bets):
             {"source": source, "external_id": str(bet["id"])},
             {"name": name},
         )
+        reconcile_market_identity(match_winner)
         stats.add(result)
         break
     if match_winner is None:
@@ -597,6 +599,7 @@ def upsert_current_odds(
 @transaction.atomic
 def sync_odds_payloads(payloads, matches_by_external_id, market):
     source = get_api_football_source()
+    reconcile_market_identity(market)
     stats = SyncStats()
     observed_at = timezone.now()
     labels = (("home", "1"), ("draw", "x"), ("away", "2"))
@@ -621,6 +624,7 @@ def sync_odds_payloads(payloads, matches_by_external_id, market):
                 {"source": source, "external_id": str(bookmaker_id)},
                 {"name": bookmaker_name},
             )
+            reconcile_bookmaker_identity(bookmaker)
             stats.add(result)
             for bet in bookmaker_data.get("bets") or []:
                 if str(bet.get("id")) != market.external_id:

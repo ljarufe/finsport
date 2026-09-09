@@ -52,7 +52,9 @@ def test_market_consensus_and_best_prices_keep_fair_probability_separate():
 
     assert isinstance(result, ProbabilityResult)
     assert result.diagnostics["book_count"] == 4
+    assert result.diagnostics["canonical_bookmaker_count"] == 4
     assert result.diagnostics["de_vig_method"] == "multiplicative"
+    assert result.diagnostics["consensus_method"] == "equal_weight_arithmetic_mean"
     assert abs(sum(result.as_tuple()) - 1) < 1e-9
     assert set(prices) == {"HOME", "DRAW", "AWAY"}
     assert all(observation.match_id == target.id for observation, _ in prices.values())

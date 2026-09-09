@@ -42,7 +42,6 @@ from football.providers.api_football import APIFootballResponseError
 from football.tasks import wake_pipeline
 
 from .capital_helpers import create_capital_stream
-from .prediction_helpers import create_synthetic_odds
 
 pytestmark = pytest.mark.django_db
 
@@ -84,7 +83,7 @@ def fake_capture(at, targets, *, status="NO_WORK"):
                 "status": "ALREADY_FULFILLED",
                 "match_id": match.pk,
                 "competition_id": competition.pk,
-                "intended_window": "early",
+                "intended_window": "market-t6h",
                 "target_at": target_at.isoformat(),
                 "not_before": (at - timedelta(minutes=5)).isoformat(),
                 "not_after": (at + timedelta(minutes=5)).isoformat(),
@@ -124,8 +123,8 @@ def patch_fast_non_market_models(monkeypatch):
         model_code = Prediction.ELO_MULTINOMIAL_LOGIT
 
     class MissingMarket:
-        def predict(self, target, cutoff):
-            del target, cutoff
+        def predict(self, target, cutoff, *, not_before=None):
+            del target, cutoff, not_before
             return UnavailablePrediction("NO_VALID_MARKET")
 
     monkeypatch.setattr("football.prediction.service.DixonColesAdapter", Adapter)
@@ -164,6 +163,7 @@ def test_pipeline_dry_run_is_provider_and_write_free(monkeypatch):
             "dry_run": True,
             "trigger": "MANUAL",
             "max_provider_attempts": 2,
+            "allow_bootstrap": False,
         }
     ]
     assert result.run_id is None
@@ -496,7 +496,7 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
             "status": "ALREADY_FULFILLED",
             "match_id": match.pk,
             "competition_id": competition.pk,
-            "intended_window": "early",
+            "intended_window": "market-t6h",
             "target_at": target.isoformat(),
             "not_before": (target - timedelta(minutes=5)).isoformat(),
             "not_after": (target + timedelta(minutes=5)).isoformat(),
@@ -522,27 +522,17 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
         )
 
     monkeypatch.setattr("football.pipeline.service.run_capture", capture_stub)
-    # FS-012 sporting arms have their own evidence batch; this temporal capture
-    # contract now uses real stored market evidence.
-    create_synthetic_odds([first_match, shared_match, later_match])
-
     run_pipeline(at=first_target)
     first_experiment = PredictionExperiment.objects.get(target_at=first_target)
 
     assert first_experiment.config["target_match_ids"] == sorted(
         [first_match.pk, shared_match.pk]
     )
-    assert set(first_experiment.predictions.values_list("match_id", flat=True)) == {
-        first_match.pk,
-        shared_match.pk,
-    }
-    assert first_experiment.predictions.count() == 2
-    assert set(first_experiment.predictions.values_list("model_code", flat=True)) == {
-        Prediction.MARKET_CONSENSUS
-    }
-    assert not first_experiment.predictions.filter(
-        model_code=Prediction.DIXON_COLES
-    ).exists()
+    assert first_experiment.config["model_codes"] == [Prediction.MODERNIZED_R45]
+    assert first_experiment.summary["unavailable"][Prediction.MODERNIZED_R45] == (
+        "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
+    )
+    assert not first_experiment.predictions.exists()
     assert first_experiment.decisions.filter(match=later_match).count() == 0
 
     run_pipeline(at=later_target)
@@ -550,9 +540,7 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
 
     assert later_experiment.logical_identity != first_experiment.logical_identity
     assert later_experiment.config["target_match_ids"] == [later_match.pk]
-    assert set(later_experiment.predictions.values_list("match_id", flat=True)) == {
-        later_match.pk
-    }
+    assert later_experiment.config["model_codes"] == [Prediction.MODERNIZED_R45]
     assert later_experiment.decisions.exclude(match=later_match).count() == 0
 
 
@@ -615,9 +603,10 @@ def test_prediction_identity_allows_later_window_and_missing_market_keeps_models
     assert not first.experiment.predictions.filter(
         model_code=Prediction.MARKET_CONSENSUS
     ).exists()
-    assert first.experiment.summary["unavailable"][f"MARKET_CONSENSUS:{match.pk}"] == (
-        "NO_VALID_MARKET"
-    )
+    unavailable = first.experiment.summary["unavailable"][
+        f"MARKET_CONSENSUS:{match.pk}"
+    ]
+    assert unavailable["reason"] == "NO_VALID_MARKET"
 
 
 def test_settlement_requires_canonical_finished_outcome_and_never_rewrites_decision():
