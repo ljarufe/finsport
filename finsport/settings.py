@@ -172,8 +172,8 @@ API_FOOTBALL_MAX_PAGES = env.int("API_FOOTBALL_MAX_PAGES", default=25)
 API_FOOTBALL_MAX_RETRIES = env.int("API_FOOTBALL_MAX_RETRIES", default=2)
 API_FOOTBALL_MINIMUM_INTERVAL = env.float("API_FOOTBALL_MINIMUM_INTERVAL", default=6.0)
 
-# FS-005 temporal capture. These are local research controls, not a frozen
-# market-timing policy. Automatic wakeup is safe/default-off.
+# FS-005 temporal capture with the FS-013 single bounded acquisition schedule.
+# Automatic wakeup remains owned by the normal football pipeline.
 FOOTBALL_CAPTURE_ENABLED = env.bool("FOOTBALL_CAPTURE_ENABLED", default=False)
 FOOTBALL_PIPELINE_ENABLED = env.bool("FOOTBALL_PIPELINE_ENABLED", default=False)
 FOOTBALL_CAPTURE_WAKE_SECONDS = env.int("FOOTBALL_CAPTURE_WAKE_SECONDS", default=900)
@@ -195,22 +195,29 @@ if OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS < 1:
     raise ImproperlyConfigured(
         "OBSERVABILITY_WATCHDOG_INTERVAL_SECONDS must be positive."
     )
-FOOTBALL_CAPTURE_WINDOWS = env.json(
-    "FOOTBALL_CAPTURE_WINDOWS",
+FOOTBALL_MARKET_CONSENSUS_WINDOWS = env.json(
+    "FOOTBALL_MARKET_CONSENSUS_WINDOWS",
     default=[
         {
-            "name": "early",
-            "offset_minutes": 2880,
-            "before_tolerance_minutes": 180,
-            "normal_tolerance_minutes": 60,
-            "late_tolerance_minutes": 360,
+            "name": "market-t6h",
+            "offset_minutes": 360,
+            "before_tolerance_minutes": 0,
+            "normal_tolerance_minutes": 10,
+            "late_tolerance_minutes": 15,
         },
         {
-            "name": "middle",
-            "offset_minutes": 720,
-            "before_tolerance_minutes": 180,
-            "normal_tolerance_minutes": 60,
-            "late_tolerance_minutes": 360,
+            "name": "market-t60m",
+            "offset_minutes": 60,
+            "before_tolerance_minutes": 0,
+            "normal_tolerance_minutes": 10,
+            "late_tolerance_minutes": 15,
+        },
+        {
+            "name": "market-t30m",
+            "offset_minutes": 30,
+            "before_tolerance_minutes": 0,
+            "normal_tolerance_minutes": 10,
+            "late_tolerance_minutes": 15,
         },
     ],
 )

@@ -7,6 +7,10 @@ from django.utils.dateparse import parse_datetime
 from django_countries.fields import Country
 
 from football.country_mapping import country_code, normalized_text
+from football.market_identity import (
+    reconcile_bookmaker_identity,
+    reconcile_market_identity,
+)
 from football.models import (
     Bookmaker,
     MatchSourceRef,
@@ -433,12 +437,14 @@ def sync_mw3w_payload(payload, match_ref):
         {"source": source, "external_id": "inkabet"},
         {"name": "Inkabet"},
     )
+    reconcile_bookmaker_identity(bookmaker)
     stats.add(result)
     market, result = _upsert(
         OddsMarket,
         {"source": source, "external_id": MW3W},
         {"name": "Match Winner"},
     )
+    reconcile_market_identity(market)
     stats.add(result)
     _, result = upsert_current_odds(
         match=match,

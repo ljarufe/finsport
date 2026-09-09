@@ -3,7 +3,7 @@ ENGINE_VERSION = "fs003-v1"
 DIXON_COLES_VERSION = "fs011-dixon-coles-v2"
 INDEPENDENT_POISSON_VERSION = "fs003-independent-poisson-v1"
 ELO_MULTINOMIAL_LOGIT_VERSION = "fs003-elo-multinomial-logit-v1"
-MARKET_CONSENSUS_VERSION = "fs003-market-consensus-v1"
+MARKET_CONSENSUS_VERSION = "fs013-market-consensus-v2"
 MODERNIZED_R45_VERSION = "fs003-modernized-r45-v1"
 
 MODAL_ALL_VERSION = "fs003-modal-all-v1"

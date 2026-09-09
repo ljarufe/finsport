@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -17,6 +19,7 @@ from football.capital.longitudinal import (
     recompute_longitudinal_capital,
 )
 from football.capture import run_capture
+from football.capture.contracts import MARKET_CONSENSUS_WINDOW_NAMES
 from football.historical import historical_coverage_is_current
 from football.models import (
     CaptureRun,
@@ -48,20 +51,20 @@ def _parse_instant(value):
     return datetime.fromisoformat(value)
 
 
-def _prediction_candidates(capture_result, at):
-    match_ids = {
-        item.get("match_id")
-        for item in capture_result.plan.get("items", [])
-        if item.get("match_id")
-    }
+def _r45_capture_prediction_candidates(capture_result, at):
+    """Evaluate R45 from current due acquisition work without another capture."""
+    work_items = capture_result.plan.get("items", [])
+    match_ids = {item.get("match_id") for item in work_items if item.get("match_id")}
     local_timezone = ZoneInfo(settings.TIME_ZONE)
     matches = {
         match.pk: match
         for match in Match.objects.filter(pk__in=match_ids).select_related("season")
     }
     candidates = {}
-    for item in capture_result.plan.get("items", []):
+    for item in work_items:
         if item.get("purpose") != CaptureWorkItem.Purpose.ODDS_CAPTURE:
+            continue
+        if item.get("intended_window") not in MARKET_CONSENSUS_WINDOW_NAMES:
             continue
         if not all(
             item.get(key)
@@ -97,10 +100,7 @@ def _prediction_candidates(capture_result, at):
                 "target_at": target_at,
                 "logical_identity": identity,
                 "match_ids": [],
-                "model_codes": [
-                    "MARKET_CONSENSUS",
-                    "MODERNIZED_R45",
-                ],
+                "model_codes": ["MODERNIZED_R45"],
                 "cutoff": at,
                 "evidence_identity": "",
             },
@@ -111,6 +111,120 @@ def _prediction_candidates(capture_result, at):
         candidate["match_ids"] = sorted(set(candidate["match_ids"]))
         normalized.append(candidate)
     return normalized
+
+
+def _market_consensus_prediction_candidates(capture_result, at):
+    """Create MC v2 candidates only from a completed durable MC capture batch."""
+    work_items = capture_result.completed_work
+    accepted_statuses = {
+        CaptureWorkItem.Status.SUCCESS,
+        CaptureWorkItem.Status.SUCCESS_EMPTY,
+        CaptureWorkItem.Status.LATE_CAPTURE,
+    }
+    batch_cutoff = at
+    executed_at_by_identity = {}
+    if capture_result.run_id:
+        completed_at = (
+            CaptureRun.objects.filter(pk=capture_result.run_id)
+            .values_list("completed_at", flat=True)
+            .first()
+        )
+        if completed_at is not None:
+            batch_cutoff = completed_at
+        executed_at_by_identity = dict(
+            CaptureWorkItem.objects.filter(
+                run_id=capture_result.run_id,
+                purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
+                status__in=(
+                    CaptureWorkItem.Status.SUCCESS,
+                    CaptureWorkItem.Status.SUCCESS_EMPTY,
+                    CaptureWorkItem.Status.LATE_CAPTURE,
+                ),
+                executed_at__isnull=False,
+            ).values_list("logical_identity", "executed_at")
+        )
+    match_ids = {item.get("match_id") for item in work_items if item.get("match_id")}
+    local_timezone = ZoneInfo(settings.TIME_ZONE)
+    matches = {
+        match.pk: match
+        for match in Match.objects.filter(pk__in=match_ids).select_related("season")
+    }
+    candidates = {}
+    for item in work_items:
+        if item.get("purpose") != CaptureWorkItem.Purpose.ODDS_CAPTURE:
+            continue
+        if item.get("intended_window") not in MARKET_CONSENSUS_WINDOW_NAMES:
+            continue
+        if item.get("status") not in accepted_statuses:
+            continue
+        if not all(
+            item.get(key)
+            for key in (
+                "match_id",
+                "competition_id",
+                "intended_window",
+                "target_at",
+                "not_before",
+                "not_after",
+            )
+        ):
+            continue
+        target_at = _parse_instant(item["target_at"])
+        match = matches.get(item["match_id"])
+        if match is None:
+            continue
+        day = match.kickoff.astimezone(local_timezone).date()
+        identity = (
+            f"fs013:market-consensus:{item['competition_id']}:{day}:"
+            f"{item['intended_window']}:{target_at.isoformat()}"
+        )
+        candidates.setdefault(
+            identity,
+            {
+                "competition_id": item["competition_id"],
+                "day": day,
+                "intended_window": item["intended_window"],
+                "target_at": target_at,
+                "logical_identity": identity,
+                "match_ids": [],
+                "model_codes": ["MARKET_CONSENSUS"],
+                "cutoff": batch_cutoff,
+                "evidence_identity": "",
+                "market_evidence_identity": "",
+                "capture_work_identities": [],
+                "market_evidence_not_before_by_match": {},
+            },
+        )
+        candidates[identity]["match_ids"].append(match.pk)
+        candidates[identity]["capture_work_identities"].append(item["logical_identity"])
+        executed_at = executed_at_by_identity.get(item["logical_identity"])
+        if executed_at is not None:
+            candidates[identity]["market_evidence_not_before_by_match"][
+                str(match.pk)
+            ] = executed_at
+    normalized = []
+    for key in sorted(candidates):
+        candidate = candidates[key]
+        candidate["match_ids"] = sorted(set(candidate["match_ids"]))
+        candidate["capture_work_identities"] = sorted(
+            set(candidate["capture_work_identities"])
+        )
+        evidence_payload = {
+            "cutoff": candidate["cutoff"].isoformat(),
+            "capture_work_identities": candidate["capture_work_identities"],
+        }
+        candidate["market_evidence_identity"] = hashlib.sha256(
+            json.dumps(evidence_payload, sort_keys=True).encode()
+        ).hexdigest()
+        normalized.append(candidate)
+    return normalized
+
+
+def _prediction_candidates(capture_result, at, *, dry_run=False):
+    candidates = _r45_capture_prediction_candidates(capture_result, at)
+    if not dry_run:
+        candidates.extend(_market_consensus_prediction_candidates(capture_result, at))
+    return candidates
 
 
 def _dixon_coles_candidates(at):
@@ -432,6 +546,7 @@ def run_pipeline(
                 else CaptureRun.Trigger.MANUAL
             ),
             max_provider_attempts=max_provider_attempts,
+            allow_bootstrap=trigger == PipelineRun.Trigger.SCHEDULER,
         )
         capture_data = capture_result.as_dict()
         if capture_result.operational_cause:
@@ -453,7 +568,11 @@ def run_pipeline(
         errors.append({"phase": "CAPTURE", "error": message})
         phases["CAPTURE"] = PhaseResult(PhaseState.FAILED, reason=message)
 
-    candidates = _prediction_candidates(capture_result, at) if capture_result else []
+    candidates = (
+        _prediction_candidates(capture_result, at, dry_run=dry_run)
+        if capture_result
+        else []
+    )
     candidates.extend(_dixon_coles_candidates(at))
     for model_code in ("INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT"):
         candidates.extend(_sporting_candidates(at, model_code=model_code))
@@ -493,6 +612,12 @@ def run_pipeline(
                     match_ids=candidate["match_ids"],
                     model_codes=candidate["model_codes"],
                     evidence_identity=candidate["evidence_identity"],
+                    market_evidence_identity=candidate.get(
+                        "market_evidence_identity", ""
+                    ),
+                    market_evidence_not_before_by_match=candidate.get(
+                        "market_evidence_not_before_by_match", {}
+                    ),
                 )
                 if outcome.experiment is None:
                     prediction_unavailable.append(

@@ -163,18 +163,24 @@ docker compose run --rm django-web \
   --dry-run
 ```
 
-Dry-run is the normal first step. It makes no provider call and writes no `CaptureRun`, `CaptureWorkItem`, `OddsObservation`, or other data. Its JSON shows planning time, quota basis/freshness, reserve, eligible/due work, min/max cost, deterministic priorities, planned calls, and skips/reasons. Safe UAT filters are `--match-id`, `--purpose`, `--window`, and `--max-provider-attempts`; they do not affect scheduler eligibility. `--allow-bootstrap` explicitly permits an optional odds call only within `FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS` when no header exists in the current UTC quota epoch. Mandatory result/discovery work can use the same bounded bootstrap without that flag; the scheduler never opts optional odds into bootstrap.
+Dry-run is the normal first step. It makes no provider call and writes no `CaptureRun`, `CaptureWorkItem`, `OddsObservation`, or other data. Its JSON shows planning time, quota basis/freshness, reserve, eligible/due work, min/max cost, deterministic priorities, planned calls, and skips/reasons. Safe UAT filters are `--match-id`, `--purpose`, `--window`, and `--max-provider-attempts`; they do not affect scheduler eligibility. For manual capture, `--allow-bootstrap` explicitly permits an optional odds call only within `FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS` when no header exists in the current UTC quota epoch. The scheduler-owned pipeline opts in automatically to that same bounded allowance so it can initiate normal acquisition without a manual seed call. A headerless attempt is counted durably against the UTC epoch; a successful header becomes quota authority and restores normal mandatory-reserve behavior. Mandatory result/discovery work can use the same bounded bootstrap without the manual flag.
 
 Capture policy is local configuration:
 
-- `FOOTBALL_CAPTURE_WINDOWS`: JSON list containing `early`, `middle`, and at most one optional `near...` name; each item has `offset_minutes`, `before_tolerance_minutes`, `normal_tolerance_minutes`, and `late_tolerance_minutes`;
+- `FOOTBALL_MARKET_CONSENSUS_WINDOWS`: the sole scheduled prospective odds-acquisition collection. Its non-overlapping windows are exactly `market-t6h`, `market-t60m`, and `market-t30m`; each item has `offset_minutes`, `before_tolerance_minutes`, `normal_tolerance_minutes`, and `late_tolerance_minutes`. Historical local `FOOTBALL_CAPTURE_WINDOWS` values are no longer read and cannot schedule `early`/`middle` provider work;
 - `FOOTBALL_CAPTURE_HORIZON_HOURS`: future eligibility horizon;
 - `FOOTBALL_CAPTURE_MANDATORY_RESERVE`: absolute quota protected from optional odds work;
 - `FOOTBALL_CAPTURE_MAX_OPERATION_PAGES`, `FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS`, and `FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS`: independent safety bounds;
 - `FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED`, `FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES`, and `FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES`: bounded canonical outcome refresh;
 - `FOOTBALL_CAPTURE_DISCOVERY_ENABLED`, `FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES`, and `FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD`: optional canonical date discovery horizon/cadence, disabled by default. The free-plan-safe baseline is `1`, meaning today and tomorrow only; a genuinely unsupported request remains an actionable `provider_access_denied` failure.
 
-The shipped offsets are research defaults, not product truth. `target_at`, `not_before`, `not_after`, actual execution time, observation time, and lateness remain distinct aware timestamps. A kickoff change produces new future targets; observations always retain actual capture time.
+The single collection is owned by `football.pipeline.wake` and the existing planner, executor, quota, and provider bounds. One acquisition persists temporal evidence that Market Consensus, R45, and Decision policies can reuse from the database; consumers do not schedule additional provider work. The shipped opportunities open at their T-6h/T-60m/T-30m targets and close 15 minutes later. They therefore cannot collapse into one scheduler wake and are not continuous polling. These research defaults may be revised only by later evidence. `target_at`, `not_before`, `not_after`, actual execution time, observation time, and lateness remain distinct aware timestamps. A kickoff change produces new future targets; observations always retain actual capture time.
+
+### Market Consensus identity and batch lifecycle
+
+`Bookmaker` and `OddsMarket` remain raw source-provenance records. `BookmakerCanonicalRef` and `OddsMarketCanonicalRef` resolve supported `source + external_id` values through the versioned `fs013-governed-v1` registry to `CanonicalBookmaker` and canonical `1x2`. Names are diagnostic and are not identity authority. Unknown mappings remain `PENDING`, are excluded from statistical voting, and appear in bounded prediction diagnostics.
+
+For `fs013-market-consensus-v2`, one completed `ODDS_CAPTURE` work item/window is the durable prediction boundary. The owning `CaptureRun.completed_at` is the strict cutoff, and only observations acquired from that work item's real execution onward may enter the window. The latest valid observation per canonical bookmaker wins with a stable raw-provenance tie-break; multiplicative de-vig is applied independently and the canonical bookmaker vectors are pooled by equal arithmetic weight. A completed empty batch persists explicit `NO_VALID_CANONICAL_1X2_QUOTES` evidence instead of borrowing a prior window. Retrying the same completed identity reuses the existing prospective experiment; a later window creates a new immutable prediction record.
 
 ### Automatic wake lifecycle
 
@@ -251,9 +257,10 @@ FOOTBALL_PIPELINE_ENABLED=False
 When explicitly changed to `True`, use `make up`. Beat registers
 `football.pipeline.wake` and suppresses the standalone `football.capture.wake`
 schedule, preserving one automatic provider-calling path. The callable capture
-task and both manual commands remain available. Prediction candidates continue
-to originate from due `ODDS_CAPTURE` work in an intended window, not every match
-on every wake.
+task and both manual commands remain available. Current due acquisition work may
+evaluate `MODERNIZED_R45` against already persisted evidence, while Market
+Consensus candidates originate only from completed durable current
+`ODDS_CAPTURE` work. Neither consumer adds a provider acquisition.
 
 ### Daily and weekly experimental maintenance
 

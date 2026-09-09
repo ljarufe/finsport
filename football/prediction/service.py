@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -176,6 +176,8 @@ def predict_competition_day(
     match_ids=None,
     model_codes=None,
     evidence_identity="",
+    market_evidence_identity="",
+    market_evidence_not_before_by_match=None,
 ):
     if isinstance(day, str):
         day = date.fromisoformat(day)
@@ -210,6 +212,15 @@ def predict_competition_day(
     targets = list(target_queryset)
     if not targets:
         return ProspectivePredictionResult(None, False, "NO_ELIGIBLE_TARGETS")
+    market_evidence_not_before_by_match = market_evidence_not_before_by_match or {}
+    normalized_market_not_before = {}
+    for match_id, value in market_evidence_not_before_by_match.items():
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+        if timezone.is_naive(parsed):
+            raise ValueError(
+                "Market evidence not-before must include a timezone offset."
+            )
+        normalized_market_not_before[int(match_id)] = parsed
     selected, config_source = latest_selected_config(competition)
     requested_models = set(
         model_codes
@@ -221,6 +232,19 @@ def predict_competition_day(
             Prediction.MODERNIZED_R45,
         )
     )
+    if model_codes is None and not market_evidence_identity:
+        requested_models.discard(Prediction.MARKET_CONSENSUS)
+    if Prediction.MARKET_CONSENSUS in requested_models:
+        if not market_evidence_identity:
+            raise ValueError(
+                "MARKET_CONSENSUS v2 requires a capture evidence identity."
+            )
+        target_ids = {match.pk for match in targets}
+        if set(normalized_market_not_before) != target_ids:
+            raise ValueError(
+                "MARKET_CONSENSUS v2 requires one capture lower bound "
+                "per target Match."
+            )
     history = list(eligible_finished_matches(competition, before=cutoff))
     history = [match for match in history if local_day(match.kickoff) < day]
     readiness_models = tuple(
@@ -290,6 +314,11 @@ def predict_competition_day(
             "dixon_coles_evidence_identity": evidence_identity if dc_basis else "",
             "dixon_coles_evidence_basis": dc_basis,
             "sporting_evidence_identities": sporting_identities,
+            "market_consensus_evidence_identity": market_evidence_identity,
+            "market_evidence_not_before_by_match": {
+                str(match_id): value.isoformat()
+                for match_id, value in sorted(normalized_market_not_before.items())
+            },
             "temporal_batch_policy": "FS-005 logical intended_window/target_at; historical-results-strict-prior-local-day",
             "confidence_grid": list(CONFIDENCE_GRID),
             "minimum_ev_grid": list(MINIMUM_EV_GRID),
@@ -393,14 +422,33 @@ def predict_competition_day(
             )
             persist_standard_policies(experiment, match, prediction, result, cutoff)
         if Prediction.MARKET_CONSENSUS in requested_models:
-            result = market.predict(match, cutoff)
+            result = market.predict(
+                match,
+                cutoff,
+                not_before=normalized_market_not_before.get(match.pk),
+            )
             if isinstance(result, UnavailablePrediction):
-                unavailable[f"MARKET_CONSENSUS:{match.id}"] = result.reason
+                unavailable[f"MARKET_CONSENSUS:{match.id}"] = {
+                    "reason": result.reason,
+                    "diagnostics": result.diagnostics,
+                }
             else:
                 prediction = _persist_prediction(
-                    experiment, match, market, result, cutoff
+                    experiment,
+                    match,
+                    market,
+                    result,
+                    cutoff,
+                    evidence_identity=market_evidence_identity,
                 )
-                persist_standard_policies(experiment, match, prediction, result, cutoff)
+                persist_standard_policies(
+                    experiment,
+                    match,
+                    prediction,
+                    result,
+                    cutoff,
+                    price_not_before=normalized_market_not_before[match.pk],
+                )
         if modernized is not None:
             result = predict_modernized(modernized, history, match, cutoff)
             if isinstance(result, UnavailablePrediction):

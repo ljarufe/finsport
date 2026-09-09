@@ -482,6 +482,62 @@ class Bookmaker(TimeStampedModel):
         ordering = ("name",)
 
 
+class CanonicalBookmaker(TimeStampedModel):
+    code = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=250)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ("name",)
+
+
+class BookmakerCanonicalRef(TimeStampedModel):
+    bookmaker = models.OneToOneField(
+        Bookmaker, on_delete=models.CASCADE, related_name="canonical_ref"
+    )
+    canonical_bookmaker = models.ForeignKey(
+        CanonicalBookmaker,
+        on_delete=models.PROTECT,
+        related_name="raw_refs",
+        null=True,
+        blank=True,
+    )
+    reconciliation_status = models.CharField(
+        max_length=10,
+        choices=ReconciliationStatus.choices,
+        default=ReconciliationStatus.PENDING,
+    )
+    mapping_version = models.CharField(max_length=80, default="fs013-governed-v1")
+    reason = models.CharField(max_length=120, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.bookmaker.source.code}:{self.bookmaker.external_id}"
+
+    def clean(self):
+        if (
+            self.reconciliation_status == ReconciliationStatus.RESOLVED
+            and not self.canonical_bookmaker_id
+        ):
+            raise ValidationError(
+                "A resolved BookmakerCanonicalRef needs a canonical bookmaker."
+            )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    ~Q(reconciliation_status=ReconciliationStatus.RESOLVED)
+                    | Q(canonical_bookmaker__isnull=False)
+                ),
+                name="football_bookmaker_ref_resolved_has_canonical",
+            )
+        ]
+        ordering = ("bookmaker__source__code", "bookmaker__external_id")
+
+
 class OddsMarket(TimeStampedModel):
     source = models.ForeignKey(Source, on_delete=models.PROTECT)
     external_id = models.CharField(max_length=150)
@@ -498,6 +554,62 @@ class OddsMarket(TimeStampedModel):
             )
         ]
         ordering = ("name",)
+
+
+class CanonicalOddsMarket(TimeStampedModel):
+    code = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=250)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ("name",)
+
+
+class OddsMarketCanonicalRef(TimeStampedModel):
+    market = models.OneToOneField(
+        OddsMarket, on_delete=models.CASCADE, related_name="canonical_ref"
+    )
+    canonical_market = models.ForeignKey(
+        CanonicalOddsMarket,
+        on_delete=models.PROTECT,
+        related_name="raw_refs",
+        null=True,
+        blank=True,
+    )
+    reconciliation_status = models.CharField(
+        max_length=10,
+        choices=ReconciliationStatus.choices,
+        default=ReconciliationStatus.PENDING,
+    )
+    mapping_version = models.CharField(max_length=80, default="fs013-governed-v1")
+    reason = models.CharField(max_length=120, blank=True)
+    context = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.market.source.code}:{self.market.external_id}"
+
+    def clean(self):
+        if (
+            self.reconciliation_status == ReconciliationStatus.RESOLVED
+            and not self.canonical_market_id
+        ):
+            raise ValidationError(
+                "A resolved OddsMarketCanonicalRef needs a canonical market."
+            )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    ~Q(reconciliation_status=ReconciliationStatus.RESOLVED)
+                    | Q(canonical_market__isnull=False)
+                ),
+                name="football_market_ref_resolved_has_canonical",
+            )
+        ]
+        ordering = ("market__source__code", "market__external_id")
 
 
 class OddsSnapshot(models.Model):
