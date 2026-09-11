@@ -164,7 +164,7 @@ def test_event_spool_rotates_at_a_bounded_size(tmp_path, settings, monkeypatch):
             }
         )
 
-    files = list(tmp_path.glob("django-web.jsonl*"))
+    files = list(tmp_path.glob(f"{settings.OBSERVABILITY_SERVICE_NAME}.jsonl*"))
     data_files = [path for path in files if not path.name.endswith(".lock")]
     assert len(data_files) <= 3
     assert all(path.stat().st_size <= 800 for path in data_files)
@@ -507,7 +507,7 @@ def test_provider_application_error_is_secret_safe_in_event_and_jsonl(
 
     event = emit_pipeline_terminal(run, causes=[cause])
     serialized = json.dumps(event)
-    persisted = (tmp_path / "django-web.jsonl").read_text()
+    persisted = (tmp_path / f"{settings.OBSERVABILITY_SERVICE_NAME}.jsonl").read_text()
 
     assert event["pipeline_run_id"] == "15"
     assert event["capture_run_id"] == "38"

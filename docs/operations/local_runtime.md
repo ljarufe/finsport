@@ -2,48 +2,57 @@
 
 Finsport is local-only and demo-only. This document describes the supported runtime; it does not define any external server or deployment path.
 
-## Development / Normal UAT Startup
+## Isolated Development / Normal UAT Startup
 
-Create `.env` from `.env.dist`, then run:
+Create `.env` from `.env.dist`, keep the operational stack running, then run:
 
 ```bash
-make build
-make dev-up
+make dev-create
 ```
 
-This path explicitly starts PostgreSQL, Redis, Django, the manual Celery worker,
-and Nginx. It does not start `celery-beat` or the watchdog. Scheduled provider
-dispatch is therefore impossible even when the unchanged operational `.env`
-contains `FOOTBALL_PIPELINE_ENABLED=True`. Use only `make dev-up` for this
-development-safe contract.
+This command refuses stale `finsport-dev` resources, creates isolated PostgreSQL
+and Redis, streams a consistent dump from the operational database only into the
+development database, applies current branch migrations, and starts Django, the
+manual Celery worker, and Nginx. It does not define or start `celery-beat` or the
+watchdog. Environment overrides disable automatic capture, pipeline, and
+Inkabet work even when the operational `.env` enables them. `make dev-up` only
+restarts a previously created development stack; it never clones or changes the
+operational project.
 
 | Port | Service |
 | --- | --- |
-| 5432 (or `DATABASE_PORT`) | PostgreSQL |
-| 6379 | Redis |
-| 8000 | Direct Django/Gunicorn technical endpoint |
-| 8001 | Normal browser/Admin endpoint through Nginx |
+| 15432 | Development PostgreSQL |
+| 16379 | Development Redis |
+| 18000 | Direct development Django/Gunicorn endpoint |
+| 18001 | Development browser/Admin endpoint through Nginx |
 | 8002 | VS Code Django debug server |
 
-Admin is mounted at the root `/`, not `/admin/`. The supported normal browser endpoint is <http://localhost:8001/>. Nginx proxies Django and serves collected files under `/static/`, including Django Admin CSS.
+Admin is mounted at the root `/`, not `/admin/`. The supported development
+browser endpoint is <http://localhost:18001/>. Nginx proxies development Django
+and serves collected files under `/static/`, including Django Admin CSS.
 
-The direct endpoint <http://localhost:8000/> reaches Gunicorn/Django and is useful for technical probes. It is not expected to serve collected static files and may therefore appear unstyled in a browser.
+The direct development endpoint <http://localhost:18000/> reaches
+Gunicorn/Django and is useful for technical probes. It is not expected to serve
+collected static files and may therefore appear unstyled in a browser.
 
 ## Operational Startup
 
-Use the complete runtime only when scheduled provider work is intended:
+The operational project is always `finsport`; its ports remain PostgreSQL 5432,
+Redis 6379, Django 8000, and Nginx 8001. Use:
 
 ```bash
 make up
 make status
 ```
 
-This starts the `operational` and `observability` profiles: Beat, watchdog,
-Loki, Alloy, and Grafana in addition to the base services. Grafana is available
-at <http://localhost:3000/>. `make observability-up` is a compatibility alias for
-the same complete operational path; `make operational-up` is the descriptive
-alias for `make up`. The ignored `.env` still controls whether the pipeline task
-is registered and whether read-only provider work is authorized.
+This starts the `operational` and `observability` profiles from already deployed
+local images: Beat, watchdog, Loki, Alloy, and Grafana in addition to the base
+services. No operational service bind-mounts application or repository
+configuration from the mutable checkout, and `make up` never builds it. A
+missing deployed image fails visibly. Grafana is available at
+<http://localhost:3000/>. `make observability-up` and `make operational-up` are
+compatibility aliases. The ignored `.env` still controls whether the pipeline
+task is registered and whether read-only provider work is authorized.
 
 ## Graceful Shutdown
 
@@ -62,10 +71,43 @@ timeout is 120 seconds and can be narrowed or extended with
 `FINSPORT_SAFE_DOWN_TIMEOUT_SECONDS`; timeout leaves the stack running with
 dispatchers stopped. `make down` delegates to this same path.
 
-Never add `-v`. The named `postgres_data` volume is the persistent development
-database and must not be deleted, recreated, or restored from `finsport.sql` as
-part of routine development. Django tests use Django's separate test database
-isolation.
+Never add `-v` to the operational project. `finsport_postgres_data` is the
+irreplaceable operational database and must not be deleted, recreated, or
+restored from `finsport.sql`. `make dev-destroy` is the only supported
+volume-removing lifecycle and verifies that every target belongs to
+`finsport-dev` and mounts no protected operational volume.
+
+At ticket end run `make dev-destroy`. After merge, clean synchronized `master`
+is deployed with `make deploy-local`; see
+[Backup and local deployment](backup_and_deploy.md).
+
+## Disposable CI Validation
+
+Local host `make check` intentionally requires an existing, ready
+`finsport-dev`. Fresh CI and optional local CI simulation instead use:
+
+```bash
+FINSPORT_CI_PROJECT=finsport-ci-local-example make ci-check
+```
+
+`make ci-check` validates the `finsport-ci-*` identity, refuses stale resources
+for that exact identity, builds the fixed reusable `finsport-ci-app:check`
+image, starts only PostgreSQL 17 and Redis 7 on tmpfs with no published ports,
+and runs the authoritative `make check` inside an ephemeral application
+container. Capture, pipeline, and automatic Inkabet activity are explicitly
+disabled and the topology has no Beat. A `finally` cleanup removes only that CI
+project and verifies zero container, network, and volume residue.
+
+GitHub Actions supplies a run/attempt-specific project name. If a runner is
+interrupted outside normal cleanup, the workflow invokes the explicit scoped
+fallback:
+
+```bash
+FINSPORT_CI_PROJECT=finsport-ci-local-example make ci-clean
+```
+
+`ci-clean` requires an explicit valid CI identity and cannot target `finsport`
+or `finsport-dev`.
 
 ## Celery And Redis Safety Model
 
@@ -106,20 +148,20 @@ authentication remain forbidden.
 Store `API_FOOTBALL_KEY`, `INKABET_BRAND_ID`, and `INKABET_MARKET_CODE` only in the ignored local `.env`. Do not place their local values in commands, source, tests, logs, or feedback. Run the occasional catalogue operation first:
 
 ```bash
-docker compose run --rm django-web python manage.py sync_football_catalog
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_catalog
 ```
 
 This refreshes canonical Competition and Season lifecycle/coverage metadata from `/leagues`, resolves Match Winner from `/odds/bets`, seeds resolved API-Football CompetitionSourceRefs, and leaves newly discovered competitions disabled. Enable only a selected domestic professional Competition in Admin. Use its canonical local ID for a supported historical season bootstrap:
 
 ```bash
-docker compose run --rm django-web python manage.py sync_football_season <competition-id> <provider-year>
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_season <competition-id> <provider-year>
 ```
 
 The season command gets all fixture/team identity from the fixture payload; it does not call `/teams`. The daily morning/evening flow is:
 
 ```bash
-docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD --with-odds
-docker compose run --rm django-web python manage.py sync_football_day --date YYYY-MM-DD
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_day --date YYYY-MM-DD --with-odds
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py sync_football_day --date YYYY-MM-DD
 ```
 
 The first global Lima-timezone fixture-date response is filtered locally by `Competition.enabled`. API-Football Teams and Matches are canonicalized through resolved source refs. With odds enabled, API Match Winner calls are per relevant fixture and require explicit Season API odds coverage. Inkabet categories are fetched once, mappings are reconciled without prompts, and accordion MW3W is fetched only for resolved relevant Match refs. Pending mappings are skipped and reported for Django Admin review.
@@ -157,7 +199,7 @@ It returns a `CaptureResult`; `as_dict()` contains the audit run ID, quota befor
 The operator interface is:
 
 ```bash
-docker compose run --rm django-web \
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web \
   python manage.py run_football_capture \
   --at 2026-08-29T13:00:00-05:00 \
   --dry-run
@@ -200,7 +242,7 @@ Then restart with `make operational-up`; no additional activation command is
 needed after later operational starts while the setting remains enabled. Django
 settings add `football.capture.wake` to the file-backed Beat schedule. Beat only
 wakes `run_capture`; a no-due plan instantiates no provider client, records a
-`NO_WORK` run, and consumes zero quota. `make dev-up` never starts Beat.
+`NO_WORK` run, and consumes zero quota. Development Compose contains no Beat.
 
 The required processes are PostgreSQL, Redis, Django, the `finsport.local.safe` Celery worker, and Celery Beat. Verify wake delivery with:
 
@@ -234,7 +276,7 @@ result = run_pipeline(
 The operator entry point requires an explicit offset-aware cutoff:
 
 ```bash
-docker compose run --rm django-web \
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web \
   python manage.py run_football_pipeline \
   --at 2026-08-29T03:00:00-05:00 \
   --dry-run
@@ -281,9 +323,9 @@ quota-deferred catalogue refresh has a bounded same-day retry time; failed or
 denied season work waits for a later daily check. The manual commands remain:
 
 ```bash
-docker compose run --rm django-web python manage.py run_football_maintenance
-docker compose run --rm django-web python manage.py run_football_maintenance --force-weekly
-docker compose run --rm django-web python manage.py evaluate_football_predictions <competition-id> <season-year>
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py run_football_maintenance
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py run_football_maintenance --force-weekly
+docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web python manage.py evaluate_football_predictions <competition-id> <season-year>
 ```
 
 The weekly backtest performs chronological inner selection and outer

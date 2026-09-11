@@ -10,12 +10,18 @@ Finsport is Docker-first. The recommended editor workflow attaches VS Code to th
 
 ## Open The Repository
 
-1. Open the repository folder in VS Code.
-2. Run `Dev Containers: Reopen in Container` from the Command Palette.
-3. Wait for VS Code to attach to `django-web`.
-4. Confirm the integrated terminal opens in `/app` and `python` resolves to `/usr/local/bin/python`.
+1. From a host terminal, run `make dev-create` once for the current ticket.
+2. Open the repository folder in VS Code.
+3. Run `Dev Containers: Reopen in Container` from the Command Palette.
+4. Wait for VS Code to attach to `django-web`.
+5. Confirm the integrated terminal opens in `/app` and `python` resolves to `/usr/local/bin/python`.
 
-The Dev Container has an explicit service allowlist: `init-logs`, PostgreSQL, Redis, and `django-web`. Its application command is `sleep infinity`. Opening it does not start Celery, Celery Beat, Nginx, or Selenium and therefore does not consume legacy queue state or load historical Beat schedules.
+The Dev Container uses the existing `finsport-dev` project and refuses to open
+if its cloned database lifecycle has not been completed. It has an explicit
+service allowlist: `init-logs`, isolated PostgreSQL, isolated Redis, and
+`django-web`. Its application command is `sleep infinity`. Opening it does not
+start Celery, Celery Beat, Nginx, or Selenium. The operational `finsport`
+project remains untouched.
 
 VS Code connects as the non-root `appuser` and updates its UID/GID to reduce bind-mount ownership problems. The container does not require Docker-in-Docker or the host Docker socket.
 
@@ -45,7 +51,8 @@ Select `Django: Debug server` in Run and Debug. It starts:
 python manage.py runserver 0.0.0.0:8002 --noreload
 ```
 
-Open <http://localhost:8002/>. The separate debug port avoids the normal Django port (`8000`) and Nginx port (`8001`).
+Open <http://localhost:8002/>. The separate debug port avoids the development
+Django port (`18000`) and Nginx port (`18001`).
 
 ## Host Git Hooks And Extensions
 

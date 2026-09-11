@@ -52,9 +52,8 @@ services:
       retries: 15
 
   django-web:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: finsport-app:operational
+    pull_policy: never
     ports:
       - "8000:8000"
     depends_on:
@@ -65,7 +64,6 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
       - static_volume:/app/staticfiles
       - logs_volume:/app/logs
     env_file:
@@ -73,13 +71,22 @@ services:
     environment:
       OBSERVABILITY_SERVICE_NAME: django-web
     logging: *default-logging
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz/', timeout=2)"
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   celery:
-    build: .
+    image: finsport-app:operational
+    pull_policy: never
     restart: always
     command: celery -A finsport worker -l info -Q finsport.local.safe
     volumes:
-      - .:/app
       - logs_volume:/app/logs
     depends_on:
       - redis
@@ -91,12 +98,12 @@ services:
     logging: *default-logging
 
   celery-beat:
-    build: .
+    image: finsport-app:operational
+    pull_policy: never
     restart: always
     command: celery -A finsport beat -l info --schedule=/tmp/finsport-celerybeat-schedule
     profiles: ["operational"]
     volumes:
-      - .:/app
       - logs_volume:/app/logs
     depends_on:
       - redis
@@ -108,23 +115,23 @@ services:
     logging: *default-logging
 
   nginx:
-    image: nginx:1.29
+    image: finsport-nginx:operational
+    pull_policy: never
     ports:
       - "8001:80"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - static_volume:/app/staticfiles
     depends_on:
       - django-web
     logging: *default-logging
 
   observability-watch:
-    build: .
+    image: finsport-app:operational
+    pull_policy: never
     restart: unless-stopped
     command: python manage.py observe_pipeline
     profiles: ["observability"]
     volumes:
-      - .:/app
       - logs_volume:/app/logs
     depends_on:
       init-logs:
@@ -138,17 +145,18 @@ services:
     logging: *default-logging
 
   loki:
-    image: grafana/loki:3.7.6
+    image: finsport-loki:operational
+    pull_policy: never
     restart: unless-stopped
     command: -config.file=/etc/loki/local-config.yaml
     profiles: ["observability"]
     volumes:
-      - ./config/loki/loki.yaml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
     logging: *default-logging
 
   alloy:
-    image: grafana/alloy:v1.19.0
+    image: finsport-alloy:operational
+    pull_policy: never
     restart: unless-stopped
     command:
       - run
@@ -156,7 +164,6 @@ services:
       - /etc/alloy/config.alloy
     profiles: ["observability"]
     volumes:
-      - ./config/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - logs_volume:/app/logs:ro
       - alloy_data:/var/lib/alloy/data
     depends_on:
@@ -165,15 +172,13 @@ services:
     logging: *default-logging
 
   grafana:
-    image: grafana/grafana:13.2.0
+    image: finsport-grafana:operational
+    pull_policy: never
     restart: unless-stopped
     profiles: ["observability"]
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on:
       - loki
@@ -189,6 +194,8 @@ services:
 
 volumes:
   postgres_data:
+    external: true
+    name: finsport_postgres_data
   static_volume:
   logs_volume:
   redis_data:

@@ -1,0 +1,7 @@
+[Unit]
+Description=Finsport rolling operational PostgreSQL backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=%h/.local/libexec/finsport/finsport-backup

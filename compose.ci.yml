@@ -1,0 +1,55 @@
+name: finsport-ci-default
+
+x-ci-environment: &ci-environment
+  DEBUG: "True"
+  SECRET_KEY: finsport-ci-disposable-only
+  ALLOWED_HOSTS: 127.0.0.1,localhost,django-web
+  DATABASE_NAME: finsport
+  DATABASE_USER: finsport
+  DATABASE_PASSWORD: finsport-ci-disposable-only
+  DATABASE_HOST: db
+  DATABASE_PORT: "5432"
+  FOOTBALL_CAPTURE_ENABLED: "False"
+  FOOTBALL_PIPELINE_ENABLED: "False"
+  INKABET_AUTOMATIC_ENABLED: "False"
+  OBSERVABILITY_EVENTS_ENABLED: "False"
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: finsport
+      POSTGRES_USER: finsport
+      POSTGRES_PASSWORD: finsport-ci-disposable-only
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finsport -d finsport"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  django-web:
+    image: finsport-ci-app:check
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ci-check
+    command: make check
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *ci-environment
