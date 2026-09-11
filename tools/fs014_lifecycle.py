@@ -3,6 +3,8 @@
 
 import argparse
 import json
+import os
+import re
 import stat
 import subprocess
 import sys
@@ -26,6 +28,8 @@ OPERATIONAL_COMPOSE = (
     "compose.yml",
 )
 DEV_COMPOSE = ("docker", "compose", "-p", DEV_PROJECT, "-f", "compose.dev.yml")
+CI_COMPOSE_FILE = "compose.ci.yml"
+CI_PROJECT_PATTERN = re.compile(r"^finsport-ci-[a-z0-9][a-z0-9_-]{0,62}$")
 OPERATIONAL_VOLUME = "finsport_postgres_data"
 DEV_VOLUMES = {
     "finsport-dev_postgres_data",
@@ -124,6 +128,128 @@ def dev_resources():
         "volumes": _ids_for_label("volume", project_label)
         | _existing_named("volume", DEV_VOLUMES),
     }
+
+
+def ci_project_name(value=None):
+    candidate = value or os.environ.get("FINSPORT_CI_PROJECT")
+    if not candidate:
+        candidate = f"finsport-ci-local-{os.getpid()}"
+    if not CI_PROJECT_PATTERN.fullmatch(candidate):
+        raise LifecycleError(
+            "FINSPORT_CI_PROJECT must match finsport-ci-[a-z0-9][a-z0-9_-]*; "
+            f"refusing unsafe project identity {candidate!r}."
+        )
+    if candidate in {OPERATIONAL_PROJECT, DEV_PROJECT}:
+        raise LifecycleError(f"Refusing protected Compose project {candidate!r}.")
+    return candidate
+
+
+def ci_compose(project):
+    project = ci_project_name(project)
+    return ("docker", "compose", "-p", project, "-f", CI_COMPOSE_FILE)
+
+
+def ci_resources(project):
+    project = ci_project_name(project)
+    project_label = f"com.docker.compose.project={project}"
+    return {
+        "containers": _ids_for_label("container", project_label),
+        "networks": _ids_for_label("network", project_label),
+        "volumes": _ids_for_label("volume", project_label),
+    }
+
+
+def assert_ci_absent(project):
+    resources = ci_resources(project)
+    present = {kind: sorted(values) for kind, values in resources.items() if values}
+    if present:
+        raise LifecycleError(
+            f"Unexpected resources exist for {project}; refusing implicit cleanup: "
+            f"{present}. Run FINSPORT_CI_PROJECT={project} make ci-clean explicitly."
+        )
+
+
+def ci_cleanup(project):
+    project = ci_project_name(project)
+    compose(
+        ci_compose(project),
+        "down",
+        "--volumes",
+        "--remove-orphans",
+        capture_output=False,
+    )
+    remaining = ci_resources(project)
+    if any(remaining.values()):
+        raise LifecycleError(f"Scoped CI cleanup left {project} residue: {remaining}")
+
+
+def ci_check(project=None):
+    project = ci_project_name(project)
+    validation_returncode = None
+    primary_error = None
+    cleanup_error = None
+    cleanup_authorized = False
+    try:
+        assert_ci_absent(project)
+        cleanup_authorized = True
+        compose(ci_compose(project), "build", "django-web", capture_output=False)
+        compose(
+            ci_compose(project),
+            "up",
+            "-d",
+            "--wait",
+            "db",
+            "redis",
+            capture_output=False,
+        )
+        result = compose(
+            ci_compose(project),
+            "run",
+            "--rm",
+            "--no-deps",
+            "django-web",
+            "make",
+            "check",
+            check=False,
+            capture_output=False,
+        )
+        validation_returncode = result.returncode
+    except (LifecycleError, OSError) as error:
+        primary_error = error
+    finally:
+        if cleanup_authorized:
+            try:
+                ci_cleanup(project)
+            except (LifecycleError, OSError) as error:
+                cleanup_error = error
+
+    if primary_error is not None:
+        if cleanup_error is not None:
+            raise LifecycleError(
+                f"CI setup failed: {primary_error}; scoped cleanup also failed: "
+                f"{cleanup_error}"
+            ) from primary_error
+        raise primary_error
+    if validation_returncode:
+        message = f"Repository make check failed with exit {validation_returncode}."
+        if cleanup_error is not None:
+            message += f" Scoped cleanup also failed: {cleanup_error}"
+        print(message, file=sys.stderr)
+        return validation_returncode
+    if cleanup_error is not None:
+        raise LifecycleError(
+            f"Repository make check passed, but scoped cleanup failed: {cleanup_error}"
+        )
+    print(f"Repository make check passed; {project} resources removed.")
+    return 0
+
+
+def ci_clean_from_environment():
+    project = os.environ.get("FINSPORT_CI_PROJECT")
+    if not project:
+        raise LifecycleError("ci-clean requires explicit FINSPORT_CI_PROJECT.")
+    ci_cleanup(project)
+    print(f"Scoped CI cleanup complete for {project}.")
 
 
 def assert_dev_absent():
@@ -800,6 +926,8 @@ def main():
             "dev-destroy",
             "dev-assert-created",
             "dev-assert-ready",
+            "ci-check",
+            "ci-clean",
             "operational-image-check",
             "operational-running-check",
             "deploy-local",
@@ -813,16 +941,20 @@ def main():
         "dev-destroy": dev_destroy,
         "dev-assert-created": assert_dev_topology,
         "dev-assert-ready": assert_dev_ready,
+        "ci-check": ci_check,
+        "ci-clean": ci_clean_from_environment,
         "operational-image-check": operational_image_check,
         "operational-running-check": operational_running_check,
         "deploy-local": deploy_local,
         "backup-verify": backup_verify,
     }
     try:
-        operations[arguments.operation]()
+        return_code = operations[arguments.operation]()
     except (LifecycleError, finsport_backup.BackupError, OSError) as error:
         print(f"FS-014 lifecycle failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
+    if return_code:
+        raise SystemExit(return_code)
 
 
 if __name__ == "__main__":

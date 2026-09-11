@@ -18,15 +18,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Prepare disposable local configuration
-        run: cp .env.dist .env
-
-      - name: Build application image
-        run: make build
-
       - name: Run stable repository gate
-        run: make check
+        env:
+          FINSPORT_CI_PROJECT: finsport-ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: make ci-check
 
-      - name: Stop disposable services
+      - name: Remove scoped CI residue
         if: always()
-        run: docker compose --profile operational --profile observability down
+        env:
+          FINSPORT_CI_PROJECT: finsport-ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: make ci-clean

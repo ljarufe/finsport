@@ -29,8 +29,8 @@ COPY requirements.txt /app/
 # Install the required Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Create the final image
-FROM python:3.13-slim
+# Stage 2: Create the application image shared by runtime targets
+FROM python:3.13-slim AS application
 
 # Create a non-root user and switch to it
 RUN addgroup --gid 1000 appuser && \
@@ -62,3 +62,15 @@ EXPOSE 8000
 
 # Run the Django development server
 CMD ["/app/entrypoint.sh"]
+
+# CI alone needs GNU Make to invoke the authoritative repository gate.
+FROM application AS ci-check
+
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends make && \
+    rm -rf /var/lib/apt/lists/*
+USER appuser
+
+# Keep the default build target identical to the normal application runtime.
+FROM application AS runtime

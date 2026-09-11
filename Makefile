@@ -5,12 +5,12 @@ DEV_COMPOSE = $(COMPOSE) -p finsport-dev -f compose.dev.yml
 PYTEST_CACHE_DIR = /tmp/finsport-pytest-cache
 COVERAGE_FILE = /tmp/finsport-coverage
 
-.PHONY: build up dev-create dev-up dev-destroy deploy-local backup backup-verify operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks
+.PHONY: build up dev-create dev-up dev-destroy ci-check ci-clean deploy-local backup backup-verify operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks
 
 ifeq ($(IN_CONTAINER),1)
 APP =
 
-build up dev-create dev-up dev-destroy deploy-local backup backup-verify operational-up down safe-down status logs:
+build up dev-create dev-up dev-destroy ci-check ci-clean deploy-local backup backup-verify operational-up down safe-down status logs:
 	@echo "This target controls Docker Compose and must run on the host."
 	@exit 1
 
@@ -41,6 +41,12 @@ dev-up:
 
 dev-destroy:
 	python3 tools/fs014_lifecycle.py dev-destroy
+
+ci-check:
+	python3 tools/fs014_lifecycle.py ci-check
+
+ci-clean:
+	python3 tools/fs014_lifecycle.py ci-clean
 
 deploy-local:
 	python3 tools/fs014_lifecycle.py deploy-local

@@ -247,3 +247,198 @@ def test_deploy_refuses_non_master_branch(monkeypatch):
 
     with pytest.raises(fs014_lifecycle.LifecycleError, match="requires branch master"):
         fs014_lifecycle._git_deploy_preconditions()
+
+
+def test_ci_workflow_uses_only_the_repository_ci_contract():
+    workflow = (ROOT / ".github/workflows/pr-validation.yml").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert "run: make ci-check" in workflow
+    assert "run: make ci-clean" in workflow
+    assert "run: make check\n" not in workflow
+    assert "make dev-create" not in workflow
+    assert "docker compose" not in workflow
+    assert "make up" not in workflow
+    assert "finsport-ci-${{ github.run_id }}-${{ github.run_attempt }}" in workflow
+    assert "APP = python3 tools/fs014_lifecycle.py dev-assert-ready" in makefile
+    assert "check: format-check lint django-check" in makefile
+    assert "FROM application AS ci-check" in dockerfile
+    assert "apt-get install -y --no-install-recommends make" in dockerfile
+
+
+def test_ci_compose_is_disposable_portless_and_provider_safe():
+    ci_compose = (ROOT / "compose.ci.yml").read_text()
+
+    assert "name: finsport-ci-default" in ci_compose
+    assert "image: postgres:17" in ci_compose
+    assert "image: redis:7" in ci_compose
+    assert "ports:" not in ci_compose
+    assert "volumes:" not in ci_compose
+    assert ci_compose.count("tmpfs:") == 2
+    assert "finsport_postgres_data" not in ci_compose
+    assert "external:" not in ci_compose
+    assert "celery-beat" not in ci_compose
+    assert "  celery:" not in ci_compose
+    assert "  nginx:" not in ci_compose
+    assert "  grafana:" not in ci_compose
+    assert "  loki:" not in ci_compose
+    assert "  alloy:" not in ci_compose
+    assert "  observability-watch:" not in ci_compose
+    assert 'FOOTBALL_CAPTURE_ENABLED: "False"' in ci_compose
+    assert 'FOOTBALL_PIPELINE_ENABLED: "False"' in ci_compose
+    assert 'INKABET_AUTOMATIC_ENABLED: "False"' in ci_compose
+    assert "image: finsport-ci-app:check" in ci_compose
+    assert "target: ci-check" in ci_compose
+    assert "command: make check" in ci_compose
+
+
+@pytest.mark.parametrize(
+    "project",
+    (
+        "finsport",
+        "finsport-dev",
+        "other-project",
+        "finsport-ci-UPPER",
+        "finsport-ci-bad.name",
+    ),
+)
+def test_ci_project_validation_rejects_unsafe_names(project):
+    with pytest.raises(fs014_lifecycle.LifecycleError):
+        fs014_lifecycle.ci_project_name(project)
+
+
+def test_ci_project_identities_are_independent_and_use_one_compose_file():
+    first = fs014_lifecycle.ci_compose("finsport-ci-run-1")
+    second = fs014_lifecycle.ci_compose("finsport-ci-run-2")
+
+    assert first != second
+    assert first[2:6] == ("-p", "finsport-ci-run-1", "-f", "compose.ci.yml")
+    assert second[2:6] == ("-p", "finsport-ci-run-2", "-f", "compose.ci.yml")
+
+
+def test_ci_cleanup_is_scoped_to_selected_project(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "compose",
+        lambda base, *arguments, **kwargs: calls.append((base, arguments)),
+    )
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_resources",
+        lambda project: {"containers": set(), "networks": set(), "volumes": set()},
+    )
+
+    fs014_lifecycle.ci_cleanup("finsport-ci-selected")
+
+    assert calls == [
+        (
+            (
+                "docker",
+                "compose",
+                "-p",
+                "finsport-ci-selected",
+                "-f",
+                "compose.ci.yml",
+            ),
+            ("down", "--volumes", "--remove-orphans"),
+        )
+    ]
+
+
+def test_ci_check_runs_existing_gate_and_cleans_after_failure(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "assert_ci_absent",
+        lambda project: events.append(("absent", project)),
+    )
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_cleanup",
+        lambda project: events.append(("cleanup", project)),
+    )
+
+    def fake_compose(base, *arguments, **kwargs):
+        events.append(("compose", base, arguments, kwargs.get("check", True)))
+        return subprocess.CompletedProcess(
+            [], 17 if arguments[0] == "run" else 0, "", ""
+        )
+
+    monkeypatch.setattr(fs014_lifecycle, "compose", fake_compose)
+
+    result = fs014_lifecycle.ci_check("finsport-ci-failure")
+
+    assert result == 17
+    assert ("cleanup", "finsport-ci-failure") in events
+    validation = next(
+        event for event in events if event[0] == "compose" and event[2][0] == "run"
+    )
+    assert validation[2][-3:] == ("django-web", "make", "check")
+    assert validation[3] is False
+
+
+def test_ci_check_reports_cleanup_failure_without_hiding_check_status(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(fs014_lifecycle, "assert_ci_absent", lambda project: None)
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "compose",
+        lambda base, *arguments, **kwargs: subprocess.CompletedProcess(
+            [], 9 if arguments[0] == "run" else 0, "", ""
+        ),
+    )
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_cleanup",
+        lambda project: (_ for _ in ()).throw(
+            fs014_lifecycle.LifecycleError("residue remains")
+        ),
+    )
+
+    result = fs014_lifecycle.ci_check("finsport-ci-double-failure")
+
+    assert result == 9
+    error = capsys.readouterr().err
+    assert "exit 9" in error
+    assert "residue remains" in error
+
+
+def test_ci_check_fails_when_cleanup_fails_after_success(monkeypatch):
+    monkeypatch.setattr(fs014_lifecycle, "assert_ci_absent", lambda project: None)
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "compose",
+        lambda base, *arguments, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_cleanup",
+        lambda project: (_ for _ in ()).throw(
+            fs014_lifecycle.LifecycleError("residue remains")
+        ),
+    )
+
+    with pytest.raises(fs014_lifecycle.LifecycleError, match="passed, but"):
+        fs014_lifecycle.ci_check("finsport-ci-cleanup-failure")
+
+
+def test_ci_check_refuses_stale_exact_project_without_cleanup(monkeypatch):
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_resources",
+        lambda project: {"containers": {"stale"}, "networks": set(), "volumes": set()},
+    )
+    cleanup_calls = []
+    monkeypatch.setattr(
+        fs014_lifecycle,
+        "ci_cleanup",
+        lambda project: cleanup_calls.append(project),
+    )
+
+    with pytest.raises(fs014_lifecycle.LifecycleError, match="Unexpected resources"):
+        fs014_lifecycle.ci_check("finsport-ci-stale")
+
+    assert cleanup_calls == []

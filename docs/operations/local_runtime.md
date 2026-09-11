@@ -81,6 +81,34 @@ At ticket end run `make dev-destroy`. After merge, clean synchronized `master`
 is deployed with `make deploy-local`; see
 [Backup and local deployment](backup_and_deploy.md).
 
+## Disposable CI Validation
+
+Local host `make check` intentionally requires an existing, ready
+`finsport-dev`. Fresh CI and optional local CI simulation instead use:
+
+```bash
+FINSPORT_CI_PROJECT=finsport-ci-local-example make ci-check
+```
+
+`make ci-check` validates the `finsport-ci-*` identity, refuses stale resources
+for that exact identity, builds the fixed reusable `finsport-ci-app:check`
+image, starts only PostgreSQL 17 and Redis 7 on tmpfs with no published ports,
+and runs the authoritative `make check` inside an ephemeral application
+container. Capture, pipeline, and automatic Inkabet activity are explicitly
+disabled and the topology has no Beat. A `finally` cleanup removes only that CI
+project and verifies zero container, network, and volume residue.
+
+GitHub Actions supplies a run/attempt-specific project name. If a runner is
+interrupted outside normal cleanup, the workflow invokes the explicit scoped
+fallback:
+
+```bash
+FINSPORT_CI_PROJECT=finsport-ci-local-example make ci-clean
+```
+
+`ci-clean` requires an explicit valid CI identity and cannot target `finsport`
+or `finsport-dev`.
+
 ## Celery And Redis Safety Model
 
 Redis is persistent and can contain unknown legacy messages. It is not purged. The current local boundaries are:
