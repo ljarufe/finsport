@@ -710,6 +710,200 @@ class OddsObservation(models.Model):
         ordering = ("-observed_at", "id")
 
 
+class HistoricalMarketEvidence(TimeStampedModel):
+    """Real historical 1X2 prices whose observation time is explicitly imputed."""
+
+    class PriceGroup(models.TextChoices):
+        PINNACLE_CLOSING = "PINNACLE_CLOSING", "Pinnacle closing"
+        BET365_CLOSING = "BET365_CLOSING", "Bet365 closing"
+        AVG_CLOSING = "AVG_CLOSING", "Average closing"
+        MAX_CLOSING = "MAX_CLOSING", "Maximum closing"
+        PINNACLE_PRE = "PINNACLE_PRE", "Pinnacle pre"
+        BET365_PRE = "BET365_PRE", "Bet365 pre"
+        AVG_PRE = "AVG_PRE", "Average pre"
+        MAX_PRE = "MAX_PRE", "Maximum pre"
+
+    class TimeSemantics(models.TextChoices):
+        ASSUMED_T30M = "ASSUMED_T30M", "Assumed T-30m"
+        ASSUMED_T6H = "ASSUMED_T6H", "Assumed T-6h"
+
+    EVIDENCE_CLASS = "SYNTHETIC_TIME_RESEARCH_ONLY"
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="historical_market_evidence"
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.PROTECT,
+        related_name="historical_market_evidence",
+    )
+    home_price = models.DecimalField(max_digits=10, decimal_places=4)
+    draw_price = models.DecimalField(max_digits=10, decimal_places=4)
+    away_price = models.DecimalField(max_digits=10, decimal_places=4)
+    selected_group = models.CharField(max_length=30, choices=PriceGroup.choices)
+    time_semantics = models.CharField(max_length=20, choices=TimeSemantics.choices)
+    source_price_is_real = models.BooleanField(default=True)
+    timestamp_is_imputed = models.BooleanField(default=True)
+    evidence_class = models.CharField(max_length=40, default=EVIDENCE_CLASS)
+    source_competition = models.CharField(max_length=150)
+    source_season = models.CharField(max_length=40)
+    source_file = models.CharField(max_length=500)
+    source_file_checksum = models.CharField(max_length=64)
+    source_row_identity = models.CharField(max_length=150)
+    provenance_version = models.CharField(max_length=80, default="fs015-v1")
+    ingested_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("match_id", "source_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "source"],
+                name="football_historical_1x2_match_source_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(home_price__gt=1) & Q(draw_price__gt=1) & Q(away_price__gt=1)
+                ),
+                name="football_historical_1x2_prices_gt_one",
+            ),
+            models.CheckConstraint(
+                condition=Q(source_price_is_real=True),
+                name="football_historical_1x2_real_price",
+            ),
+            models.CheckConstraint(
+                condition=Q(timestamp_is_imputed=True),
+                name="football_historical_1x2_imputed_time",
+            ),
+            models.CheckConstraint(
+                condition=Q(evidence_class="SYNTHETIC_TIME_RESEARCH_ONLY"),
+                name="football_historical_1x2_research_only",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        closing = self.selected_group.endswith("_CLOSING")
+        expected = (
+            self.TimeSemantics.ASSUMED_T30M
+            if closing
+            else self.TimeSemantics.ASSUMED_T6H
+        )
+        if self.time_semantics != expected:
+            raise ValidationError(
+                {"time_semantics": "Time semantics must match the selected group."}
+            )
+        if not self.source_price_is_real or not self.timestamp_is_imputed:
+            raise ValidationError("Historical evidence provenance is immutable.")
+        if self.evidence_class != self.EVIDENCE_CLASS:
+            raise ValidationError("Historical evidence must remain research-only.")
+
+
+class HistoricalMarketUnavailable(TimeStampedModel):
+    """Explicit market-only absence; it does not change sporting availability."""
+
+    SOURCE_NO_COMPLETE_1X2 = "SOURCE_NO_COMPLETE_1X2"
+    REASONS = ((SOURCE_NO_COMPLETE_1X2, "Source has no complete 1X2"),)
+
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name="historical_market_unavailable",
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.PROTECT,
+        related_name="historical_market_unavailable",
+    )
+    reason = models.CharField(max_length=40, choices=REASONS)
+    source_file = models.CharField(max_length=500)
+    source_file_checksum = models.CharField(max_length=64)
+    source_row_identity = models.CharField(max_length=150)
+    provenance_version = models.CharField(max_length=80, default="fs015-v1")
+
+    class Meta:
+        ordering = ("match_id", "source_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "source"],
+                name="football_historical_1x2_unavailable_unique",
+            )
+        ]
+
+
+class HistoricalMarketCoverage(TimeStampedModel):
+    """One-shot processing/currentness state for a source, Competition and Season."""
+
+    class Status(models.TextChoices):
+        NOT_ATTEMPTED = "NOT_ATTEMPTED", "Not attempted"
+        RUNNING = "RUNNING", "Running"
+        COMPLETE = "COMPLETE", "Complete"
+        PARTIAL = "PARTIAL", "Partial"
+        UNSUPPORTED_SOURCE = "UNSUPPORTED_SOURCE", "Unsupported source"
+        FAILED = "FAILED", "Failed"
+
+    competition = models.ForeignKey(
+        Competition,
+        on_delete=models.CASCADE,
+        related_name="historical_market_coverages",
+    )
+    season = models.ForeignKey(
+        Season,
+        on_delete=models.CASCADE,
+        related_name="historical_market_coverages",
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.PROTECT,
+        related_name="historical_market_coverages",
+    )
+    status = models.CharField(
+        max_length=30, choices=Status.choices, default=Status.NOT_ATTEMPTED
+    )
+    strategy_version = models.CharField(max_length=80, default="fs015-v1")
+    source_url = models.URLField(max_length=500, blank=True)
+    source_file = models.CharField(max_length=500, blank=True)
+    source_file_checksum = models.CharField(max_length=64, blank=True)
+    attempted = models.BooleanField(default=False)
+    available = models.BooleanField(default=False)
+    source_rows = models.PositiveIntegerField(default=0)
+    valid_rows = models.PositiveIntegerField(default=0)
+    complete_triplet_rows = models.PositiveIntegerField(default=0)
+    imported_rows = models.PositiveIntegerField(default=0)
+    unavailable_rows = models.PositiveIntegerField(default=0)
+    outside_canonical_pool_rows = models.PositiveIntegerField(default=0)
+    unresolved_rows = models.PositiveIntegerField(default=0)
+    conflict_rows = models.PositiveIntegerField(default=0)
+    invalid_rows = models.PositiveIntegerField(default=0)
+    attempt_count = models.PositiveIntegerField(default=0)
+    download_count = models.PositiveIntegerField(default=0)
+    reason = models.CharField(max_length=200, blank=True)
+    time_semantics = models.JSONField(default=list, blank=True)
+    diagnostics = models.JSONField(default=dict, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("competition_id", "season__year", "source_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["competition", "season", "source"],
+                name="football_historical_market_coverage_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(season__isnull=False),
+                name="football_historical_market_coverage_has_season",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.season_id and self.competition_id:
+            if self.season.competition_id != self.competition_id:
+                raise ValidationError(
+                    "Historical market coverage Season must belong to Competition."
+                )
+
+
 class CaptureRun(TimeStampedModel):
     class Trigger(models.TextChoices):
         MANUAL = "MANUAL", "Manual"
@@ -1299,6 +1493,11 @@ class MaintenanceRun(TimeStampedModel):
     class Capability(models.TextChoices):
         CATALOGUE = "CATALOGUE", "Catalogue"
         SEASON_BOOTSTRAP = "SEASON_BOOTSTRAP", "Season bootstrap"
+        HISTORICAL_BOOTSTRAP = "HISTORICAL_BOOTSTRAP", "Historical bootstrap"
+        HISTORICAL_MARKET_BOOTSTRAP = (
+            "HISTORICAL_MARKET_BOOTSTRAP",
+            "Historical market bootstrap",
+        )
         WEEKLY_EVALUATION = "WEEKLY_EVALUATION", "Weekly evaluation"
 
     class Status(models.TextChoices):

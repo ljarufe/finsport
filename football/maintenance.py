@@ -8,9 +8,20 @@ from django.utils import timezone
 
 from football.capture.contracts import CaptureConfig
 from football.capture.planner import quota_state
+from football.historical import (
+    historical_coverage_is_current,
+    process_historical_bootstrap,
+)
+from football.historical_market import (
+    historical_market_is_terminal,
+    historical_market_required_years,
+    market_baseline_is_promoted,
+    process_competition_market_bootstrap,
+)
 from football.models import (
     Competition,
     CompetitionSourceRef,
+    HistoricalCoverage,
     MaintenanceRun,
     Match,
     OddsObservation,
@@ -655,12 +666,162 @@ def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest)
     return _finish(run, status, at, summary)
 
 
+def _one_shot_identity(prefix, competition, years, request_key=""):
+    year_key = ",".join(str(year) for year in years)
+    suffix = f":{request_key}" if request_key else ""
+    return f"{prefix}:{competition.pk}:{year_key}{suffix}"
+
+
+def _claim_one_shot(capability, identity, competition, at):
+    with transaction.atomic():
+        run, created = MaintenanceRun.objects.select_for_update().get_or_create(
+            logical_identity=identity,
+            defaults={
+                "capability": capability,
+                "period_start": _local_day(at),
+                "subject_type": "Competition",
+                "subject_id": competition.pk,
+                "started_at": at,
+                "last_attempt_at": at,
+                "config_snapshot": {"owner": "football.pipeline.wake"},
+            },
+        )
+        if not created:
+            return None
+        return _claim(run, at)
+
+
+def run_historical_bootstrap_maintenance(
+    *, at=None, runner=process_historical_bootstrap
+):
+    at = at or timezone.now()
+    candidates = list(
+        HistoricalCoverage.objects.filter(
+            activation_requested=True,
+            status=HistoricalCoverage.Status.NOT_ATTEMPTED,
+        )
+        .select_related("competition")
+        .order_by("competition_id")
+    )
+    if not candidates:
+        return {"status": MaintenanceRun.Status.NO_WORK, "due": False}
+    competition = None
+    run = None
+    for coverage in candidates:
+        candidate = coverage.competition
+        years = (
+            candidate.seasons.filter(is_current=False)
+            .order_by("year")
+            .values_list("year", flat=True)
+        )
+        request_key = coverage.requested_at.isoformat() if coverage.requested_at else ""
+        identity = _one_shot_identity(
+            "historical-bootstrap", candidate, years, request_key
+        )
+        run = _claim_one_shot(
+            MaintenanceRun.Capability.HISTORICAL_BOOTSTRAP,
+            identity,
+            candidate,
+            at,
+        )
+        if run is not None:
+            competition = candidate
+            break
+    if competition is None or run is None:
+        return {"status": MaintenanceRun.Status.NO_WORK, "due": False}
+    try:
+        coverage = runner(competition)
+        status = (
+            MaintenanceRun.Status.SUCCESS
+            if historical_coverage_is_current(competition, coverage)
+            else MaintenanceRun.Status.DEGRADED
+        )
+        return _finish(
+            run,
+            status,
+            at,
+            {
+                "competition_id": competition.pk,
+                "coverage_status": coverage.status,
+                "reason": coverage.reason,
+            },
+        )
+    except Exception as error:
+        return _finish(
+            run,
+            MaintenanceRun.Status.FAILED,
+            at,
+            {"competition_id": competition.pk, "reason": "HISTORICAL_BOOTSTRAP_FAILED"},
+            error=error,
+        )
+
+
+def run_historical_market_maintenance(
+    *, at=None, runner=process_competition_market_bootstrap
+):
+    at = at or timezone.now()
+    if not market_baseline_is_promoted():
+        return {
+            "status": MaintenanceRun.Status.NO_WORK,
+            "due": False,
+            "reason": "FS015_MARKET_BASELINE_NOT_PROMOTED",
+        }
+    candidates = [
+        competition
+        for competition in Competition.objects.filter(enabled=True).order_by("id")
+        if historical_coverage_is_current(competition)
+        and not historical_market_is_terminal(competition)
+    ]
+    if not candidates:
+        return {"status": MaintenanceRun.Status.NO_WORK, "due": False}
+    competition = None
+    run = None
+    for candidate in candidates:
+        identity = _one_shot_identity(
+            "historical-market-bootstrap",
+            candidate,
+            historical_market_required_years(candidate),
+        )
+        run = _claim_one_shot(
+            MaintenanceRun.Capability.HISTORICAL_MARKET_BOOTSTRAP,
+            identity,
+            candidate,
+            at,
+        )
+        if run is not None:
+            competition = candidate
+            break
+    if competition is None or run is None:
+        return {"status": MaintenanceRun.Status.NO_WORK, "due": False}
+    try:
+        result = runner(competition)
+        status = (
+            MaintenanceRun.Status.SUCCESS
+            if result["status"] in {"COMPLETE", "UNSUPPORTED_SOURCE"}
+            else MaintenanceRun.Status.DEGRADED
+        )
+        return _finish(run, status, at, result)
+    except Exception as error:
+        return _finish(
+            run,
+            MaintenanceRun.Status.FAILED,
+            at,
+            {
+                "competition_id": competition.pk,
+                "reason": "HISTORICAL_MARKET_BOOTSTRAP_FAILED",
+            },
+            error=error,
+        )
+
+
 def run_periodic_maintenance(
     *,
     at=None,
     force_weekly=False,
     api_client_factory=APIFootballClient,
     backtest_runner=run_backtest,
+    historical_runner=process_historical_bootstrap,
+    historical_market_runner=process_competition_market_bootstrap,
 ):
     at = at or timezone.now()
     if not settings.FOOTBALL_MAINTENANCE_ENABLED:
@@ -678,6 +839,10 @@ def run_periodic_maintenance(
         if catalogue_allows_seasons
         else {"status": "SKIPPED", "reason": "CATALOGUE_NOT_HEALTHY"}
     )
+    historical = run_historical_bootstrap_maintenance(at=at, runner=historical_runner)
+    historical_market = run_historical_market_maintenance(
+        at=at, runner=historical_market_runner
+    )
     weekly = run_weekly_evaluation(
         at=at,
         force=force_weekly,
@@ -687,5 +852,7 @@ def run_periodic_maintenance(
         "status": "COMPLETED",
         "catalogue": catalogue,
         "seasons": seasons,
+        "historical": historical,
+        "historical_market": historical_market,
         "weekly": weekly,
     }

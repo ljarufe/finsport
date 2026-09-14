@@ -16,6 +16,9 @@ from .models import (
     Decision,
     DixonColesReadinessProfile,
     HistoricalCoverage,
+    HistoricalMarketCoverage,
+    HistoricalMarketEvidence,
+    HistoricalMarketUnavailable,
     MaintenanceRun,
     Match,
     MatchSourceRef,
@@ -320,6 +323,44 @@ class HistoricalCoverageAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
     list_filter = ("status", "source", "activation_requested")
     search_fields = ("competition__name", "reason")
     raw_id_fields = ("competition", "source")
+
+
+@admin.register(HistoricalMarketCoverage)
+class HistoricalMarketCoverageAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "competition",
+        "season",
+        "status",
+        "imported_rows",
+        "unavailable_rows",
+        "unresolved_rows",
+        "conflict_rows",
+        "completed_at",
+    )
+    list_filter = ("status", "source", "competition")
+    raw_id_fields = ("competition", "season", "source")
+
+
+@admin.register(HistoricalMarketEvidence)
+class HistoricalMarketEvidenceAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "match",
+        "selected_group",
+        "home_price",
+        "draw_price",
+        "away_price",
+        "time_semantics",
+        "ingested_at",
+    )
+    list_filter = ("selected_group", "time_semantics", "source")
+    raw_id_fields = ("match", "source")
+
+
+@admin.register(HistoricalMarketUnavailable)
+class HistoricalMarketUnavailableAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = ("match", "source", "reason", "created")
+    list_filter = ("reason", "source")
+    raw_id_fields = ("match", "source")
 
 
 @admin.register(DixonColesReadinessProfile)

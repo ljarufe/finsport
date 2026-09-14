@@ -116,6 +116,15 @@ def test_compose_boundaries_are_frozen_and_dev_has_no_beat():
     assert "urlopen('http://127.0.0.1:8000/'," not in development
 
 
+def test_nginx_resolves_recreated_django_service_at_request_time():
+    nginx = (ROOT / "nginx.conf").read_text()
+
+    assert "resolver 127.0.0.11 valid=10s ipv6=off;" in nginx
+    assert 'set $django_upstream "django-web:8000";' in nginx
+    assert "proxy_pass http://$django_upstream;" in nginx
+    assert "proxy_pass http://django-web:8000;" not in nginx
+
+
 def test_healthz_is_constant_and_does_not_require_database_access():
     response = Client().get("/healthz/")
 
