@@ -55,9 +55,22 @@ class MarketSourceRow:
     price: PriceTriplet | None
 
 
+@dataclass(frozen=True)
+class InvalidMarketSourceRow:
+    csv_line: int
+    reason: str
+    match_date: date | None
+    home_name: str
+    away_name: str
+    external_id: str
+    row_identity: str
+    empty_match_fields: bool
+
+
 @dataclass
 class ParsedMarketFile:
     rows: list[MarketSourceRow] = field(default_factory=list)
+    invalid: list[InvalidMarketSourceRow] = field(default_factory=list)
     source_rows: int = 0
     invalid_rows: int = 0
     invalid_reasons: dict[str, int] = field(default_factory=dict)

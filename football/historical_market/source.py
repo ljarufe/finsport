@@ -18,6 +18,7 @@ from football.providers.football_data import _external_id
 
 from .contracts import (
     CachedSource,
+    InvalidMarketSourceRow,
     MarketSourceRow,
     ParsedMarketFile,
     PriceTriplet,
@@ -308,17 +309,53 @@ def parse_market_file(cached, season):
             if _direct_year(row.get("Season")) != season.year:
                 continue
         result.source_rows += 1
+        raw_date = str(row.get("Date") or "").strip()
+        home_name = str(row.get(home_field) or "").strip()
+        away_name = str(row.get(away_field) or "").strip()
+        raw_home_score = str(row.get(home_score_field) or "").strip()
+        raw_away_score = str(row.get(away_score_field) or "").strip()
+        match_date = None
         try:
-            match_date = _date(row.get("Date"))
+            match_date = _date(raw_date)
             match_time = _time(row.get("Time"))
-            home_name = str(row.get(home_field) or "").strip()
-            away_name = str(row.get(away_field) or "").strip()
             if not home_name or not away_name:
                 raise ValueError("MISSING_TEAM")
-            home_score = _score(row.get(home_score_field))
-            away_score = _score(row.get(away_score_field))
+            home_score = _score(raw_home_score)
+            away_score = _score(raw_away_score)
         except (InvalidOperation, ValueError) as error:
-            invalid[str(error) or "INVALID_ROW"] += 1
+            reason = str(error) or "INVALID_ROW"
+            invalid[reason] += 1
+            external_id = ""
+            if match_date is not None and home_name and away_name:
+                external_id = _external_id(
+                    cached.spec.external_competition,
+                    season.year,
+                    match_date,
+                    home_name,
+                    away_name,
+                )
+            result.invalid.append(
+                InvalidMarketSourceRow(
+                    csv_line=csv_line,
+                    reason=reason,
+                    match_date=match_date,
+                    home_name=home_name,
+                    away_name=away_name,
+                    external_id=external_id,
+                    row_identity=hashlib.sha256(
+                        f"{cached.checksum}:{csv_line}".encode()
+                    ).hexdigest(),
+                    empty_match_fields=not any(
+                        (
+                            raw_date,
+                            home_name,
+                            away_name,
+                            raw_home_score,
+                            raw_away_score,
+                        )
+                    ),
+                )
+            )
             continue
         external_id = _external_id(
             cached.spec.external_competition,
@@ -344,6 +381,6 @@ def parse_market_file(cached, season):
                 price=select_price_triplet(row, header),
             )
         )
-    result.invalid_rows = sum(invalid.values())
+    result.invalid_rows = len(result.invalid)
     result.invalid_reasons = dict(sorted(invalid.items()))
     return result

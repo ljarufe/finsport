@@ -89,6 +89,14 @@ def historical_market_required_years(competition):
     return [season.year for season in historical_market_required_seasons(competition)]
 
 
+def _coverage_has_no_structural_loss(coverage):
+    accounting = (coverage.diagnostics or {}).get("accounting", {})
+    if accounting.get("structural_invalid_rows", 0):
+        return False
+    classified = accounting.get("classified_source_rows")
+    return classified is None or classified == coverage.source_rows
+
+
 def historical_market_is_current(competition, season=None):
     required_seasons = historical_market_required_seasons(competition)
     if not historical_coverage_is_current(competition):
@@ -104,10 +112,15 @@ def historical_market_is_current(competition, season=None):
         unresolved_rows=0,
         conflict_rows=0,
     )
+    coverages = [
+        coverage
+        for coverage in queryset.only("season_id", "source_rows", "diagnostics")
+        if _coverage_has_no_structural_loss(coverage)
+    ]
     if season is not None:
-        return queryset.filter(season=season).exists()
+        return any(coverage.season_id == season.pk for coverage in coverages)
     required = required_ids
-    covered = set(queryset.values_list("season_id", flat=True))
+    covered = {coverage.season_id for coverage in coverages}
     return required <= covered
 
 
@@ -115,19 +128,23 @@ def historical_market_is_terminal(competition):
     if not historical_coverage_is_current(competition):
         return False
     required = {season.pk for season in historical_market_required_seasons(competition)}
-    terminal = set(
-        HistoricalMarketCoverage.objects.filter(
-            competition=competition,
-            source__code=SOURCE_CODE,
-            status__in=(
-                HistoricalMarketCoverage.Status.COMPLETE,
-                HistoricalMarketCoverage.Status.UNSUPPORTED_SOURCE,
-            ),
-            strategy_version=STRATEGY_VERSION,
-            unresolved_rows=0,
-            conflict_rows=0,
-        ).values_list("season_id", flat=True)
-    )
+    queryset = HistoricalMarketCoverage.objects.filter(
+        competition=competition,
+        source__code=SOURCE_CODE,
+        status__in=(
+            HistoricalMarketCoverage.Status.COMPLETE,
+            HistoricalMarketCoverage.Status.UNSUPPORTED_SOURCE,
+        ),
+        strategy_version=STRATEGY_VERSION,
+        unresolved_rows=0,
+        conflict_rows=0,
+    ).only("season_id", "status", "source_rows", "diagnostics")
+    terminal = {
+        coverage.season_id
+        for coverage in queryset
+        if coverage.status == HistoricalMarketCoverage.Status.UNSUPPORTED_SOURCE
+        or _coverage_has_no_structural_loss(coverage)
+    }
     return required <= terminal
 
 
@@ -231,6 +248,49 @@ def _resolved_match(source, competition, season, row):
         },
     )
     return match, ""
+
+
+def _invalid_row_disposition(source, competition, season, row):
+    """Return whether a malformed row is structural and its audit reason."""
+    if row.empty_match_fields:
+        return False, "SOURCE_ARTIFACT_EMPTY_MATCH_FIELDS"
+    if row.match_date is None or not row.home_name or not row.away_name:
+        return True, "MALFORMED_ROW_IDENTITY_UNRESOLVED"
+
+    ref = (
+        MatchSourceRef.objects.filter(source=source, external_id=row.external_id)
+        .select_related("match", "match__season")
+        .first()
+    )
+    if ref is not None:
+        if (
+            ref.reconciliation_status != ReconciliationStatus.RESOLVED
+            or ref.match_id is None
+        ):
+            return True, "MALFORMED_ROW_MATCH_SOURCE_REF_UNRESOLVED"
+        if ref.match.season_id != season.pk:
+            return True, "MALFORMED_ROW_MATCH_SOURCE_REF_SEASON_CONFLICT"
+        return True, "MALFORMED_ROW_CANONICAL_MATCH"
+
+    home, home_reason = _matching_team(source, competition, row.home_name)
+    away, away_reason = _matching_team(source, competition, row.away_name)
+    if home is None or away is None:
+        reason = home_reason or away_reason
+        return True, f"MALFORMED_ROW_{reason}"
+    candidates = list(
+        Match.objects.filter(
+            season=season,
+            home_team=home,
+            away_team=away,
+            kickoff__date__gte=row.match_date - timedelta(days=2),
+            kickoff__date__lte=row.match_date + timedelta(days=2),
+        ).values_list("pk", flat=True)[:2]
+    )
+    if not candidates:
+        return False, "MALFORMED_ROW_OUTSIDE_CANONICAL_POOL"
+    if len(candidates) > 1:
+        return True, "MALFORMED_ROW_AMBIGUOUS_CANONICAL_MATCH"
+    return True, "MALFORMED_ROW_CANONICAL_MATCH"
 
 
 def _result_agrees(match, row):
@@ -414,6 +474,8 @@ def ingest_completed_season(
         raise SourceSchemaError("SOURCE_HAS_NO_ROWS_FOR_REQUESTED_SEASON")
     outcomes = Counter()
     issues = []
+    invalid_outcomes = Counter()
+    invalid_issues = []
     time_semantics = set()
     for row in parsed.rows:
         match, reason = _resolved_match(source, competition, season, row)
@@ -438,9 +500,31 @@ def ingest_completed_season(
         if row.price is not None:
             time_semantics.add(row.price.time_semantics)
 
+    structural_invalid = 0
+    source_artifacts = 0
+    for row in parsed.invalid:
+        structural, reason = _invalid_row_disposition(source, competition, season, row)
+        invalid_outcomes[reason] += 1
+        if structural:
+            structural_invalid += 1
+        else:
+            source_artifacts += 1
+        if len(invalid_issues) < 100:
+            invalid_issues.append(
+                {
+                    "csv_line": row.csv_line,
+                    "row_identity": row.row_identity,
+                    "home": row.home_name,
+                    "away": row.away_name,
+                    "reason": row.reason,
+                    "disposition": reason,
+                    "structural": structural,
+                }
+            )
+
     imported = outcomes["EVIDENCE_CREATED"] + outcomes["EVIDENCE_UNCHANGED"]
     unavailable = outcomes["UNAVAILABLE_CREATED"] + outcomes["UNAVAILABLE_UNCHANGED"]
-    unresolved = sum(
+    reconciliation_unresolved = sum(
         count
         for name, count in outcomes.items()
         if name.startswith(("UNRESOLVED", "AMBIGUOUS"))
@@ -449,9 +533,15 @@ def ingest_completed_season(
         count for name, count in outcomes.items() if name.endswith("_CONFLICT")
     )
     outside = outcomes["OUTSIDE_CANONICAL_POOL"]
+    classified_valid = (
+        imported + unavailable + outside + reconciliation_unresolved + conflicts
+    )
+    classified_source = classified_valid + source_artifacts + structural_invalid
+    accounting_complete = classified_source == parsed.source_rows
+    unresolved = reconciliation_unresolved + structural_invalid
     coverage.status = (
         HistoricalMarketCoverage.Status.COMPLETE
-        if unresolved == 0 and conflicts == 0
+        if unresolved == 0 and conflicts == 0 and accounting_complete
         else HistoricalMarketCoverage.Status.PARTIAL
     )
     coverage.available = True
@@ -481,15 +571,17 @@ def ingest_completed_season(
         "schema_family": parsed.schema_family,
         "header_signature": parsed.header_signature,
         "invalid_reasons": parsed.invalid_reasons,
+        "invalid_outcomes": dict(sorted(invalid_outcomes.items())),
+        "invalid_issues": invalid_issues,
         "outcomes": dict(sorted(outcomes.items())),
         "issues": issues,
         "accounting": {
             "valid_rows": len(parsed.rows),
-            "classified_rows": imported
-            + unavailable
-            + outside
-            + unresolved
-            + conflicts,
+            "classified_rows": classified_valid,
+            "classified_valid_rows": classified_valid,
+            "source_artifact_rows": source_artifacts,
+            "structural_invalid_rows": structural_invalid,
+            "classified_source_rows": classified_source,
         },
     }
     coverage.completed_at = timezone.now()

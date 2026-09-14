@@ -354,6 +354,145 @@ def test_completed_import_is_idempotent_and_unavailable_is_market_specific(tmp_p
     assert neither_match.outcome == Match.OUTCOME_AWAY
 
 
+def test_malformed_relevant_row_keeps_completed_season_partial(tmp_path):
+    competition, season = _competition()
+    _sporting_current(competition, [season])
+    arsenal, chelsea = _teams(competition)
+    everton, liverpool = _teams(competition, "Everton", "Liverpool")
+    complete_match = _match(season, arsenal, chelsea)
+    malformed_match = Match.objects.create(
+        season=season,
+        home_team=everton,
+        away_team=liverpool,
+        kickoff=datetime(2024, 8, 11, 14, tzinfo=datetime_timezone.utc),
+        kickoff_timezone="UTC",
+        status_short="FT",
+        status_long="Match Finished",
+        outcome=Match.OUTCOME_HOME,
+        home_score=1,
+        away_score=0,
+    )
+    payload = _europe_csv().rstrip() + (
+        b"\n11/08/2024,Everton,Liverpool,,0,2.2,3.1,3.5\n"
+    )
+    _write_cache(competition, season, tmp_path, payload)
+
+    result = ingest_completed_season(
+        competition, season, cache_only=True, cache_root=tmp_path
+    )
+
+    coverage = HistoricalMarketCoverage.objects.get(season=season)
+    accounting = coverage.diagnostics["accounting"]
+    assert result["status"] == HistoricalMarketCoverage.Status.PARTIAL
+    assert result["unresolved_rows"] == 1
+    assert accounting["structural_invalid_rows"] == 1
+    assert accounting["classified_source_rows"] == 2
+    assert historical_market_is_current(competition, season) is False
+    assert HistoricalMarketEvidence.objects.filter(match=complete_match).exists()
+    assert not HistoricalMarketEvidence.objects.filter(match=malformed_match).exists()
+    assert not HistoricalMarketUnavailable.objects.filter(
+        match=malformed_match
+    ).exists()
+
+
+def test_all_relevant_rows_malformed_are_retried_after_source_correction(tmp_path):
+    competition, season = _competition()
+    _sporting_current(competition, [season])
+    home, away = _teams(competition)
+    match = _match(season, home, away)
+    malformed = _europe_csv().replace(b",2,1,", b",,1,")
+    _write_cache(competition, season, tmp_path, malformed)
+
+    first = ingest_completed_season(
+        competition, season, cache_only=True, cache_root=tmp_path
+    )
+
+    coverage = HistoricalMarketCoverage.objects.get(season=season)
+    assert first["status"] == HistoricalMarketCoverage.Status.PARTIAL
+    assert first["valid_rows"] == 0
+    assert first["invalid_rows"] == 1
+    assert first["unresolved_rows"] == 1
+    assert historical_market_is_current(competition, season) is False
+    assert MatchSourceRef.objects.filter(match=match).count() == 0
+    assert HistoricalMarketEvidence.objects.count() == 0
+
+    _write_cache(competition, season, tmp_path, _europe_csv())
+    retried = ingest_completed_season(
+        competition, season, cache_only=True, cache_root=tmp_path
+    )
+
+    coverage.refresh_from_db()
+    assert retried["status"] == HistoricalMarketCoverage.Status.COMPLETE
+    assert retried["outcome"] != "NO_WORK"
+    assert coverage.attempt_count == 2
+    assert historical_market_is_current(competition, season)
+    assert HistoricalMarketEvidence.objects.filter(match=match).exists()
+
+
+def test_structural_accounting_cannot_be_current_or_terminal():
+    competition, season = _competition()
+    _sporting_current(competition, [season])
+    HistoricalMarketCoverage.objects.create(
+        competition=competition,
+        season=season,
+        source=_football_data_source(),
+        status=HistoricalMarketCoverage.Status.COMPLETE,
+        strategy_version="fs015-football-data-v1",
+        source_rows=1,
+        valid_rows=0,
+        invalid_rows=1,
+        unresolved_rows=0,
+        diagnostics={
+            "accounting": {
+                "source_artifact_rows": 0,
+                "structural_invalid_rows": 1,
+                "classified_source_rows": 1,
+            }
+        },
+    )
+
+    assert historical_market_is_current(competition, season) is False
+    assert historical_market_is_terminal(competition) is False
+
+
+def test_safely_classified_malformed_artifacts_are_audited_not_persisted(tmp_path):
+    competition, season = _competition()
+    _sporting_current(competition, [season])
+    home, away = _teams(competition)
+    match = _match(season, home, away)
+    _teams(competition, "Never Played Home", "Never Played Away")
+    payload = _europe_csv().rstrip() + (
+        b"\n11/08/2024,Never Played Home,Never Played Away,,,2.2,3.1,3.5" b"\n,,,,,,,\n"
+    )
+    _write_cache(competition, season, tmp_path, payload)
+
+    result = ingest_completed_season(
+        competition, season, cache_only=True, cache_root=tmp_path
+    )
+
+    coverage = HistoricalMarketCoverage.objects.get(season=season)
+    accounting = coverage.diagnostics["accounting"]
+    assert result["status"] == HistoricalMarketCoverage.Status.COMPLETE
+    assert result["invalid_rows"] == 2
+    assert accounting == {
+        "valid_rows": 1,
+        "classified_rows": 1,
+        "classified_valid_rows": 1,
+        "source_artifact_rows": 2,
+        "structural_invalid_rows": 0,
+        "classified_source_rows": 3,
+    }
+    assert coverage.diagnostics["invalid_outcomes"] == {
+        "MALFORMED_ROW_OUTSIDE_CANONICAL_POOL": 1,
+        "SOURCE_ARTIFACT_EMPTY_MATCH_FIELDS": 1,
+    }
+    assert len(coverage.diagnostics["invalid_issues"]) == 2
+    assert historical_market_is_current(competition, season)
+    assert list(Match.objects.values_list("pk", flat=True)) == [match.pk]
+    assert HistoricalMarketEvidence.objects.filter(match=match).exists()
+    assert MatchSourceRef.objects.count() == 1
+
+
 def test_completed_source_row_outside_pool_is_counted_not_persisted(tmp_path):
     competition, season = _competition()
     _sporting_current(competition, [season])
