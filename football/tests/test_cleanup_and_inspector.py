@@ -23,6 +23,10 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "run_football_pipeline",
         "observe_pipeline",
         "bootstrap_football_history",
+        "backfill_football_historical_market",
+        "backfill_football_current_season_gaps",
+        "export_historical_market_data",
+        "import_historical_market_data",
     }
     for name in (
         "get_leagues",

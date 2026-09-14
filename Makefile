@@ -5,7 +5,7 @@ DEV_COMPOSE = $(COMPOSE) -p finsport-dev -f compose.dev.yml
 PYTEST_CACHE_DIR = /tmp/finsport-pytest-cache
 COVERAGE_FILE = /tmp/finsport-coverage
 
-.PHONY: build up dev-create dev-up dev-destroy ci-check ci-clean deploy-local backup backup-verify operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks
+.PHONY: build up dev-create dev-up dev-destroy ci-check ci-clean deploy-local backup backup-verify operational-up down safe-down status logs observability-up observability-stop observability-logs shell migrate makemigrations migration-check createsuperuser test coverage lint format format-check django-check pip-check security-audit dependency-check check hooks historical-market-export historical-market-import
 
 ifeq ($(IN_CONTAINER),1)
 APP =
@@ -124,3 +124,11 @@ security-audit:
 dependency-check: pip-check security-audit
 
 check: format-check lint django-check migration-check dependency-check coverage
+
+historical-market-export:
+	$(APP) python manage.py export_historical_market_data
+
+historical-market-import:
+	@test -n "$(PACKAGE)" || (echo "Set PACKAGE to the FS-015 package path." && exit 1)
+	@test -n "$(MANIFEST)" || (echo "Set MANIFEST to the FS-015 manifest path." && exit 1)
+	$(APP) python manage.py import_historical_market_data --package "$(PACKAGE)" --manifest "$(MANIFEST)" --apply

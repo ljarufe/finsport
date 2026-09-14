@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -33,12 +33,18 @@ from .prediction_helpers import create_synthetic_league
 
 
 def future_target(competition, teams, *, hours=12):
-    kickoff = timezone.now() + timedelta(hours=hours)
+    local_tz = timezone.get_current_timezone()
+    target_day = timezone.localdate() + timedelta(days=1)
+    kickoff = timezone.make_aware(
+        datetime.combine(target_day, time.min),
+        local_tz,
+    ) + timedelta(hours=hours)
+    year = kickoff.year
     season = Season.objects.create(
         competition=competition,
-        year=2026,
-        start_date=date(2026, 1, 1),
-        end_date=date(2026, 12, 31),
+        year=year,
+        start_date=date(year, 1, 1),
+        end_date=date(year, 12, 31),
         is_current=True,
     )
     return Match.objects.create(
