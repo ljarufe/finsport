@@ -5,6 +5,7 @@ from unittest import mock
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.test import override_settings
 
 from football.models import Decision, Prediction, PredictionExperiment
 from football.prediction import evaluation, service
@@ -15,6 +16,7 @@ from .prediction_helpers import create_synthetic_league, create_synthetic_odds
 pytestmark = pytest.mark.django_db
 
 
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=False)
 def test_bounded_backtest_persists_predictions_decisions_and_unavailable_arms(
     monkeypatch,
 ):
@@ -52,6 +54,21 @@ def test_bounded_backtest_persists_predictions_decisions_and_unavailable_arms(
 
     monkeypatch.setattr(evaluation, "eligible_finished_matches", bounded_eligible)
     monkeypatch.setattr(evaluation, "select_hyperparameters", fake_select)
+    monkeypatch.setattr(
+        evaluation,
+        "select_modernized_config",
+        lambda *_: pytest.fail("R45 selection ran while disabled"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "fit_modernized",
+        lambda *_: pytest.fail("R45 fit ran while disabled"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "predict_modernized",
+        lambda *_: pytest.fail("R45 prediction ran while disabled"),
+    )
     outer = bounded_eligible(competition, season_year=2024)
     create_synthetic_odds([outer[0]])
 
@@ -84,9 +101,10 @@ def test_bounded_backtest_persists_predictions_decisions_and_unavailable_arms(
         "book_count_distribution"
     ] == {"4": 1}
     assert tuning_inputs["years"] == {2022, 2023}
-    assert experiment.summary["unavailable_arms"]["MODERNIZED_R45"] == (
-        "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
-    )
+    assert experiment.summary["unavailable_arms"]["MODERNIZED_R45"] == "DISABLED"
+    assert not experiment.predictions.filter(
+        model_code=Prediction.MODERNIZED_R45
+    ).exists()
     training_counts = {
         row.diagnostics["training_matches"]
         for row in experiment.predictions.filter(model_code=Prediction.DIXON_COLES)
@@ -197,6 +215,7 @@ def test_predict_day_history_respects_explicit_cutoff(monkeypatch):
     ).exists()
 
 
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_modernized_r45_backtest_and_prospective_paths_persist(monkeypatch):
     competition, seasons, _ = create_synthetic_league()
     training = list(seasons[0].matches.order_by("kickoff", "id"))

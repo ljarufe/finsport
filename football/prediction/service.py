@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -128,6 +129,13 @@ class ProspectivePredictionResult:
     reason: str = ""
 
 
+def _runtime_model_gate(requested_models):
+    requested_models = set(requested_models)
+    if not settings.FOOTBALL_MODERNIZED_R45_ENABLED:
+        requested_models.discard(Prediction.MODERNIZED_R45)
+    return requested_models
+
+
 def _classified_reason(value):
     if isinstance(value, dict):
         return value.get("reason", "")
@@ -234,6 +242,9 @@ def predict_competition_day(
     )
     if model_codes is None and not market_evidence_identity:
         requested_models.discard(Prediction.MARKET_CONSENSUS)
+    requested_models = _runtime_model_gate(requested_models)
+    if not requested_models:
+        return ProspectivePredictionResult(None, False, "MODERNIZED_R45_DISABLED")
     if Prediction.MARKET_CONSENSUS in requested_models:
         if not market_evidence_identity:
             raise ValueError(

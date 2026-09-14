@@ -70,6 +70,9 @@ services:
       - .env
     environment:
       OBSERVABILITY_SERVICE_NAME: django-web
+      INKABET_AUTOMATIC_ENABLED: "False"
+      FOOTBALL_MODERNIZED_R45_ENABLED: "False"
+      FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED: "False"
     logging: *default-logging
     healthcheck:
       test:
@@ -95,6 +98,9 @@ services:
       - .env
     environment:
       OBSERVABILITY_SERVICE_NAME: celery-worker
+      INKABET_AUTOMATIC_ENABLED: "False"
+      FOOTBALL_MODERNIZED_R45_ENABLED: "False"
+      FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED: "False"
     logging: *default-logging
 
   celery-beat:

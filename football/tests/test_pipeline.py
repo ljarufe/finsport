@@ -402,6 +402,7 @@ def test_pipeline_command_prints_json_and_rejects_naive_cutoff(monkeypatch):
         call_command("run_football_pipeline", at="2026-08-28T18:00:00")
 
 
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_one_cycle_is_multi_competition_and_repeated_cycle_reuses_identity(monkeypatch):
     at = datetime(2026, 8, 28, 18, tzinfo=dt_timezone.utc)
     first = create_target("First League", "PE", at + timedelta(hours=2))
@@ -455,6 +456,7 @@ def test_one_cycle_is_multi_competition_and_repeated_cycle_reuses_identity(monke
     assert repeated.status == PipelineRun.Status.NO_WORK
 
 
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
     monkeypatch,
 ):
