@@ -2,6 +2,7 @@ import math
 from collections import defaultdict
 from importlib.metadata import version
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from sklearn.metrics import log_loss
@@ -316,11 +317,18 @@ def persist_standard_policies(
             )
 
 
-def _unavailable_summary(*, market_available, modernized_available):
+def _unavailable_summary(
+    *,
+    market_available,
+    modernized_available,
+    modernized_enabled=True,
+):
     unavailable = {}
     if not market_available:
         unavailable["MARKET_CONSENSUS"] = "INSUFFICIENT_HISTORICAL_MARKET_OBSERVATIONS"
-    if not modernized_available:
+    if not modernized_enabled:
+        unavailable["MODERNIZED_R45"] = "DISABLED"
+    elif not modernized_available:
         unavailable["MODERNIZED_R45"] = "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
     return unavailable
 
@@ -428,11 +436,13 @@ def run_backtest(competition, season):
             "Backtest requires non-empty train, validation, and outer seasons."
         )
     selected = select_hyperparameters(inner_training, inner_validation)
-    modernized_selection = select_modernized_config(
-        inner_training,
-        inner_validation,
-        modernized_config_grid(),
-    )
+    modernized_selection = None
+    if settings.FOOTBALL_MODERNIZED_R45_ENABLED:
+        modernized_selection = select_modernized_config(
+            inner_training,
+            inner_validation,
+            modernized_config_grid(),
+        )
     if modernized_selection is not None:
         validation_loss, modernized_config = modernized_selection
         selected["modernized_r45"] = {
@@ -493,7 +503,7 @@ def run_backtest(competition, season):
             else:
                 fitted_adapters.append(adapter)
         modernized = None
-        if "modernized_r45" in selected:
+        if settings.FOOTBALL_MODERNIZED_R45_ENABLED and "modernized_r45" in selected:
             modernized, fit_unavailable = fit_modernized(
                 history,
                 batch_cutoff,
@@ -561,6 +571,7 @@ def run_backtest(competition, season):
             modernized_available=experiment.predictions.filter(
                 model_code=Prediction.MODERNIZED_R45
             ).exists(),
+            modernized_enabled=settings.FOOTBALL_MODERNIZED_R45_ENABLED,
         ),
         "unavailable_counts": dict(unavailable_counts),
         "failed_counts": dict(failed_counts),
