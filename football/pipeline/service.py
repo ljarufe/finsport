@@ -53,6 +53,8 @@ def _parse_instant(value):
 
 def _r45_capture_prediction_candidates(capture_result, at):
     """Evaluate R45 from current due acquisition work without another capture."""
+    if not settings.FOOTBALL_MODERNIZED_R45_ENABLED:
+        return []
     work_items = capture_result.plan.get("items", [])
     match_ids = {item.get("match_id") for item in work_items if item.get("match_id")}
     local_timezone = ZoneInfo(settings.TIME_ZONE)
@@ -315,6 +317,14 @@ def _capture_state(capture_result, *, dry_run):
     if capture_result.status == CaptureRun.Status.PARTIAL:
         return PhaseState.DEGRADED
     return PhaseState.FAILED
+
+
+def _capital_experiment_allowed(experiment):
+    """Exclude R45-only experiments while the R45 Capital path is suspended."""
+    if settings.FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED:
+        return True
+    model_codes = set((experiment.config or {}).get("model_codes") or [])
+    return model_codes != {"MODERNIZED_R45"}
 
 
 def _experiment_report(experiment, *, created):
@@ -747,6 +757,10 @@ def run_pipeline(
     longitudinal_capital_result = {}
     capital_errors = []
     capital_primary_event_emitted = False
+    capital_experiments = PredictionExperiment.objects.filter(
+        mode=PredictionExperiment.MODE_PROSPECTIVE,
+        competition_id__in=competition_ids,
+    )
     if dry_run:
         phases["CAPITAL"] = PhaseResult(
             PhaseState.SKIPPED,
@@ -754,17 +768,16 @@ def run_pipeline(
             details={
                 "baseline": BASELINE_CONFIG,
                 "longitudinal": LONGITUDINAL_CONFIG,
-                "prospective_experiments_considered": PredictionExperiment.objects.filter(
-                    mode=PredictionExperiment.MODE_PROSPECTIVE,
-                    competition_id__in=competition_ids,
-                ).count(),
+                "prospective_experiments_considered": sum(
+                    _capital_experiment_allowed(experiment)
+                    for experiment in capital_experiments.only("config")
+                ),
             },
         )
     else:
-        for experiment in PredictionExperiment.objects.filter(
-            mode=PredictionExperiment.MODE_PROSPECTIVE,
-            competition_id__in=competition_ids,
-        ).order_by("id"):
+        for experiment in capital_experiments.order_by("id"):
+            if not _capital_experiment_allowed(experiment):
+                continue
             try:
                 capital_results.append(run_research_baseline(experiment).as_dict())
             except Exception as error:

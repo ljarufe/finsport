@@ -209,6 +209,7 @@ def create_match(*, league_id, name, kickoff, status="NS"):
         }
     )
 )
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
     t6 = timezone.now().replace(microsecond=0)
     kickoff = t6 + timedelta(hours=6)
@@ -281,6 +282,7 @@ def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
         }
     )
 )
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
     t6 = datetime(2026, 9, 9, 12, tzinfo=UTC)
     kickoff = t6 + timedelta(hours=6)

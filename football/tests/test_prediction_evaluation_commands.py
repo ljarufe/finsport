@@ -5,6 +5,7 @@ from unittest import mock
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.test import override_settings
 
 from football.models import Decision, Prediction, PredictionExperiment
 from football.prediction import evaluation, service
@@ -197,6 +198,7 @@ def test_predict_day_history_respects_explicit_cutoff(monkeypatch):
     ).exists()
 
 
+@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_modernized_r45_backtest_and_prospective_paths_persist(monkeypatch):
     competition, seasons, _ = create_synthetic_league()
     training = list(seasons[0].matches.order_by("kickoff", "id"))
