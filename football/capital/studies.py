@@ -164,6 +164,8 @@ def _run_path(candidates, policy_code, policy_config, max_lanes, mode, seed, str
     policy = make_policy(policy_code, policy_config)
     rng = random.Random(seed)
     equity = Decimal("100")
+    peak_equity = Decimal("100")
+    maximum_drawdown = ZERO
     reserved = ZERO
     state = policy.initial_state()
     open_rows = []
@@ -175,7 +177,8 @@ def _run_path(candidates, policy_code, policy_config, max_lanes, mode, seed, str
     action_index = 0
 
     def settle_due(until=None):
-        nonlocal equity, reserved, state, wins, losses, voids
+        nonlocal equity, peak_equity, maximum_drawdown, reserved, state
+        nonlocal wins, losses, voids
         nonlocal active, practical_ruin, termination_reason
         due = sorted(open_rows, key=lambda row: (row[0], row[1].decision.pk))
         for row in tuple(due):
@@ -201,6 +204,10 @@ def _run_path(candidates, policy_code, policy_config, max_lanes, mode, seed, str
                 wins += int(won)
                 losses += int(not won)
             equity += pnl
+            peak_equity = max(peak_equity, equity)
+            if peak_equity > ZERO:
+                drawdown = (peak_equity - equity) / peak_equity
+                maximum_drawdown = max(maximum_drawdown, drawdown)
             if equity <= ZERO and not practical_ruin:
                 active = False
                 practical_ruin = True
@@ -322,6 +329,8 @@ def _run_path(candidates, policy_code, policy_config, max_lanes, mode, seed, str
     settle_due()
     return {
         "terminal_equity": equity,
+        "peak_equity": peak_equity,
+        "maximum_drawdown": maximum_drawdown,
         "realized_pnl": equity - Decimal("100"),
         "wins": wins,
         "losses": losses,
@@ -442,7 +451,8 @@ def run_persisted_v2_study(
         ),
         practical_ruin=first["practical_ruin"],
         termination_reason=first["termination_reason"],
-        peak_equity=max(Decimal("100"), first["terminal_equity"]),
+        peak_equity=first["peak_equity"],
+        maximum_drawdown=first["maximum_drawdown"],
         completed_at=timezone.now(),
         metrics={
             "chronology": "FS016_EVENT_TIME_V2",

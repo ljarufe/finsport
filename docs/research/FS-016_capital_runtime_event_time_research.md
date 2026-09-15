@@ -1,10 +1,10 @@
 # Finsport — Research previo a FS-016: Capital Runtime / Event-Time v2
 
-**Nombre canónico:** `Finsport_FS016_capital_concurrency_settlement_research_handoff_FINAL.md`
-**Fecha:** 2026-09-14
-**Estado:** `FINAL — REFERENCE ONLY / PRE-TICKET RESEARCH HANDOFF`
-**Baseline aceptado:** `Finsport_FS016_capital_concurrency_settlement_research_handoff.md`
-**Objetivo posterior:** permitir definir `FS-016 → Capital Runtime / Event-Time v2` sin decisiones funcionales o metodológicas abiertas.
+**Nombre canónico:** `Finsport_FS016_capital_concurrency_settlement_research_handoff_FINAL.md`  
+**Fecha:** 2026-09-14  
+**Estado:** `FINAL — REFERENCE ONLY / PRE-TICKET RESEARCH HANDOFF`  
+**Baseline aceptado:** `Finsport_FS016_capital_concurrency_settlement_research_handoff.md`  
+**Objetivo posterior:** permitir definir `FS-016 → Capital Runtime / Event-Time v2` sin decisiones funcionales o metodológicas abiertas.  
 **No es:** ticket, implementation plan, selección de ganador, autorización de dinero real, activación de R45 ni activación de Inkabet.
 
 ---

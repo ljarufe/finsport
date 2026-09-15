@@ -39,6 +39,7 @@ from football.market_identity import (
 )
 from football.models import (
     Bookmaker,
+    CapitalExecutionBasis,
     CapitalExecutionState,
     CapitalPosition,
     CapitalResultObservation,
@@ -204,7 +205,7 @@ def add_api_football_ref(graph, match, *, external_id=None):
     )
 
 
-def make_manual_config(*, policy_code, policy_config, policy_state=None):
+def make_manual_config(*, policy_code, policy_config, policy_state=None, max_lanes=1):
     return CapitalRuntimeConfig.objects.create(
         identity=f"manual:{policy_code}:{CapitalRuntimeConfig.objects.count()}",
         runtime_version=RUNTIME_VERSION,
@@ -215,7 +216,7 @@ def make_manual_config(*, policy_code, policy_config, policy_state=None):
         policy_code=policy_code,
         policy_version="manual-test-v1",
         policy_config=policy_config,
-        max_lanes=1,
+        max_lanes=max_lanes,
         initial_bankroll=Decimal("100"),
         bankroll_equity=Decimal("100"),
         policy_state=policy_state or {},
@@ -703,7 +704,9 @@ def test_recovery_continues_only_after_real_settlement(runtime_graph):
     assert second_position.policy_state_before["step"] == 1
 
 
-def test_stale_completed_t30_is_not_placed_after_window(runtime_graph):
+def test_successful_t30_remains_valid_when_capital_reconciliation_is_delayed(
+    runtime_graph,
+):
     match, _, _ = make_match(runtime_graph, 0)
     run, work = make_capture(runtime_graph, [match])
 
@@ -711,11 +714,110 @@ def test_stale_completed_t30_is_not_placed_after_window(runtime_graph):
         run.pk, at=work[0].not_after + timedelta(seconds=1)
     )
 
-    assert result.placed == 0
-    assert result.not_placed == 7
+    assert result.placed == 7
+    assert result.not_placed == 0
+    assert not CapitalExecutionState.objects.filter(
+        non_placement_reason="MISSED_EXECUTION_WINDOW"
+    ).exists()
+
+
+def test_partial_t30_processing_recovers_original_fulfilled_evidence(
+    runtime_graph, monkeypatch
+):
+    match, original_decision, _ = make_match(runtime_graph, 0)
+    original_run, original_work = make_capture(runtime_graph, [match])
+    real_place_candidate = place_candidate
+    calls = 0
+
+    def interrupted_place(config_id, candidate):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise RuntimeError("simulated Capital interruption")
+        return real_place_candidate(config_id, candidate)
+
+    monkeypatch.setattr("football.capital.runtime.place_candidate", interrupted_place)
+    with pytest.raises(RuntimeError, match="simulated Capital interruption"):
+        reconcile_execution_events(original_run.pk)
+
+    completed_before = {
+        state.config_id: (
+            state.pk,
+            state.position_id,
+            state.execution_basis_id,
+        )
+        for state in CapitalExecutionState.objects.all()
+    }
+    assert len(completed_before) == 3
+
+    later_experiment = PredictionExperiment.objects.create(
+        competition=runtime_graph["competition"],
+        mode=PredictionExperiment.MODE_PROSPECTIVE,
+        period_start=date(2026, 9, 15),
+        period_end=date(2026, 9, 15),
+    )
+    later_prediction = Prediction.objects.create(
+        experiment=later_experiment,
+        match=match,
+        model_code=Prediction.DIXON_COLES,
+        model_version="later-v1",
+        model_config={},
+        cutoff=match.kickoff - timedelta(microseconds=1),
+        p_home=0.1,
+        p_draw=0.1,
+        p_away=0.8,
+        predicted_outcome=Match.OUTCOME_AWAY,
+        bet_eligible=True,
+    )
+    Decision.objects.create(
+        experiment=later_experiment,
+        match=match,
+        prediction=later_prediction,
+        policy_code="MODAL_ALL",
+        policy_version="later-modal-v1",
+        policy_config={},
+        decision_time=later_prediction.cutoff,
+        action=Match.OUTCOME_AWAY,
+        reason="MODAL_OUTCOME",
+        model_probability=0.8,
+    )
+    retry_at = original_work[0].not_after + timedelta(hours=1)
+    retry_run, retry_work = make_capture(
+        runtime_graph,
+        [match],
+        at=retry_at,
+        statuses=[CaptureWorkItem.Status.ALREADY_FULFILLED],
+    )
+    retry_work[0].logical_identity = original_work[0].logical_identity
+    retry_work[0].save(update_fields=["logical_identity"])
+    monkeypatch.setattr(
+        "football.capital.runtime.place_candidate", real_place_candidate
+    )
+
+    recovered = reconcile_execution_events(retry_run.pk, at=retry_at)
+
+    assert recovered.placed == 4
+    assert recovered.not_placed == 0
+    assert CapitalExecutionState.objects.count() == 7
+    assert {
+        state.config_id: (state.pk, state.position_id, state.execution_basis_id)
+        for state in CapitalExecutionState.objects.filter(
+            config_id__in=completed_before
+        )
+    } == completed_before
     assert set(
-        CapitalExecutionState.objects.values_list("non_placement_reason", flat=True)
-    ) == {"MISSED_EXECUTION_WINDOW"}
+        CapitalExecutionBasis.objects.values_list("capture_work_item_id", flat=True)
+    ) == {original_work[0].pk}
+    assert set(
+        CapitalExecutionBasis.objects.values_list("originating_decision_id", flat=True)
+    ) == {original_decision.pk}
+    assert set(CapitalExecutionBasis.objects.values_list("action", flat=True)) == {
+        Match.OUTCOME_HOME
+    }
+    assert not CapitalExecutionState.objects.filter(
+        non_placement_reason="MISSED_EXECUTION_WINDOW"
+    ).exists()
+    assert reconcile_execution_events(retry_run.pk, at=retry_at).status == "NO_WORK"
 
 
 def test_capacity_ranks_ev_before_probability(runtime_graph):
@@ -857,6 +959,91 @@ def test_unique_open_matches_use_one_batched_provider_request(
     assert result.open_debt == 0
     assert FakeClient.instance.requests == [("fixtures", {"ids": "1000-1001"})]
     assert CapitalResultObservation.objects.count() == 2
+
+
+def test_result_debt_rotates_unattempted_then_least_recently_attempted_matches(
+    runtime_graph, settings, monkeypatch
+):
+    base_at = datetime(2026, 9, 14, 15, tzinfo=timezone.utc)
+    due_at = base_at + timedelta(hours=4)
+    config = make_manual_config(
+        policy_code=FLAT_UNIT,
+        policy_config={"unit": "1"},
+        max_lanes=100,
+    )
+    matches = []
+    external_by_match = {}
+    for index in range(21):
+        match, _, _ = make_match(
+            runtime_graph,
+            index % 4,
+            at=base_at + timedelta(seconds=index),
+        )
+        run, work = make_capture(runtime_graph, [match], at=base_at)
+        assert (
+            place_candidate(config.pk, build_execution_candidate(work[0])) == "PLACED"
+        )
+        external_id = str(9000 - index)
+        add_api_football_ref(runtime_graph, match, external_id=external_id)
+        external_by_match[match.pk] = external_id
+        matches.append(match)
+    CompetitionSourceRef.objects.create(
+        source=runtime_graph["source"],
+        competition=runtime_graph["competition"],
+        external_id="499",
+        reconciliation_status=ReconciliationStatus.RESOLVED,
+    )
+    settings.FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES = 0
+    settings.FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS = 1
+    requests = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.calls = 0
+
+        def get_all(self, endpoint, params):
+            assert endpoint == "fixtures"
+            self.calls += 1
+            requests.append(params["ids"].split("-"))
+            return []
+
+    monkeypatch.setattr(
+        "football.capital.runtime.sync_fixture_payloads",
+        lambda payloads, competitions: None,
+    )
+    ordered = sorted(matches, key=lambda match: (match.kickoff, match.pk))
+    expected_first = [external_by_match[match.pk] for match in ordered[:20]]
+
+    first = refresh_open_result_debt(at=due_at, client_factory=FakeClient)
+
+    assert first.provider_calls == 1
+    assert requests[0] == expected_first
+    never_attempted = CapitalPosition.objects.get(config=config, match=ordered[20])
+    assert never_attempted.result_refresh_attempted_at is None
+
+    second_at = due_at + timedelta(minutes=1)
+    second = refresh_open_result_debt(at=second_at, client_factory=FakeClient)
+
+    assert second.provider_calls == 1
+    assert requests[1][0] == external_by_match[ordered[20].pk]
+    assert requests[1][1:] == [external_by_match[match.pk] for match in ordered[:19]]
+    least_recent = CapitalPosition.objects.get(config=config, match=ordered[19])
+    assert least_recent.result_refresh_attempted_at == due_at
+
+    third = refresh_open_result_debt(
+        at=due_at + timedelta(minutes=2), client_factory=FakeClient
+    )
+
+    assert third.provider_calls == 1
+    assert requests[2][0] == external_by_match[ordered[19].pk]
+    assert all(len(batch) <= 20 for batch in requests)
+    assert (
+        CapitalPosition.objects.filter(
+            config=config, status=CapitalPosition.Status.OPEN
+        ).count()
+        == 21
+    )
 
 
 def test_generic_result_planner_defers_open_capital_debt_to_batch_owner(
@@ -1051,6 +1238,105 @@ def test_study_insufficient_available_cash_is_not_practical_ruin(runtime_graph):
     assert set(
         config.execution_states.values_list("non_placement_reason", flat=True)
     ) == {"INSUFFICIENT_AVAILABLE_CASH"}
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        CapitalRuntimeConfig.Mode.REPLAY,
+        CapitalRuntimeConfig.Mode.MONTE_CARLO,
+        CapitalRuntimeConfig.Mode.STRESS,
+        CapitalRuntimeConfig.Mode.HISTORICAL,
+    ),
+)
+def test_study_persists_peak_and_drawdown_from_full_settlement_trajectory(
+    runtime_graph, mode
+):
+    first, first_decision, first_observation = make_match(
+        runtime_graph, 0, price="2.0000"
+    )
+    second, second_decision, second_observation = make_match(
+        runtime_graph, 1, price="1.6667"
+    )
+    first_settlement = first.kickoff + timedelta(hours=2)
+    second_observation.observed_at = first_settlement + timedelta(minutes=30)
+    second_observation.save()
+    second.kickoff = second_observation.observed_at + timedelta(minutes=30)
+    second.save()
+    prepare_study_decision(
+        first,
+        first_decision,
+        first_observation,
+        status="FT",
+        outcome=Match.OUTCOME_HOME,
+    )
+    prepare_study_decision(
+        second,
+        second_decision,
+        second_observation,
+        status="FT",
+        outcome=Match.OUTCOME_AWAY,
+    )
+    first_decision.model_probability = 1
+    first_decision.save(update_fields=["model_probability", "modified"])
+    second_decision.model_probability = 0
+    second_decision.save(update_fields=["model_probability", "modified"])
+    if mode == CapitalRuntimeConfig.Mode.HISTORICAL:
+        for match, home_price, row_identity in (
+            (first, Decimal("2.0000"), "drawdown-first"),
+            (second, Decimal("1.6667"), "drawdown-second"),
+        ):
+            HistoricalMarketEvidence.objects.create(
+                match=match,
+                source=runtime_graph["source"],
+                home_price=home_price,
+                draw_price=Decimal("3.0000"),
+                away_price=Decimal("4.0000"),
+                selected_group=(HistoricalMarketEvidence.PriceGroup.PINNACLE_CLOSING),
+                time_semantics=HistoricalMarketEvidence.TimeSemantics.ASSUMED_T30M,
+                source_competition="FS016 League",
+                source_season="2026",
+                source_file="drawdown.csv",
+                source_file_checksum="c" * 64,
+                source_row_identity=row_identity,
+                provenance_version="fs015-football-data-v1",
+            )
+
+    config = run_persisted_v2_study(
+        [first_decision, second_decision],
+        policy_code=FIXED_TARGET_PROFIT_NO_RECOVERY,
+        policy_config={"target_profit": "20"},
+        mode=mode,
+        seed=4,
+    )
+    config.refresh_from_db()
+
+    assert config.peak_equity == Decimal("120")
+    assert float(config.bankroll_equity) == pytest.approx(90.0015)
+    assert float(config.maximum_drawdown) == pytest.approx(0.2499875, abs=1e-8)
+
+
+def test_study_simple_loss_persists_ten_percent_drawdown(runtime_graph):
+    match, decision, observation = make_match(runtime_graph, 0, price="2.0000")
+    prepare_study_decision(
+        match,
+        decision,
+        observation,
+        status="FT",
+        outcome=Match.OUTCOME_AWAY,
+    )
+
+    config = run_persisted_v2_study(
+        [decision],
+        policy_code=FLAT_UNIT,
+        policy_config={"unit": "10"},
+        mode=CapitalRuntimeConfig.Mode.REPLAY,
+    )
+    config.refresh_from_db()
+
+    assert config.bankroll_equity == Decimal("90")
+    assert config.peak_equity == Decimal("100")
+    assert config.maximum_drawdown == Decimal("0.1")
 
 
 def test_stress_forced_loss_interval_preserves_normal_outcomes_outside_it(

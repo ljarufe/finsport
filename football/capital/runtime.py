@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from football.capture.contracts import CaptureConfig
@@ -31,6 +32,7 @@ from football.prediction.policies import (
     POLICY_VERSIONS as DECISION_POLICY_VERSIONS,
 )
 from football.prediction.policies import (
+    PolicyResult,
     modal_all,
     readiness_no_bet,
     selective_confidence,
@@ -325,6 +327,100 @@ def _state_exists(config, match):
     return CapitalExecutionState.objects.filter(config=config, match=match).exists()
 
 
+def _candidate_from_basis(basis):
+    work = basis.capture_work_item
+    if (
+        work is None
+        or work.status not in ACCEPTED_CAPTURE_STATUSES
+        or work.purpose != CaptureWorkItem.Purpose.ODDS_CAPTURE
+        or work.intended_window != "market-t30m"
+        or work.match_id != basis.match_id
+        or work.run_id != basis.capture_run_id
+    ):
+        raise CapitalRuntimeInvariantError("PARTIAL_EXECUTION_BASIS_WITHOUT_VALID_T30")
+    result = PolicyResult(
+        action=basis.action,
+        reason=basis.reason,
+        model_probability=basis.model_probability,
+        selected_observation=basis.selected_odds_observation,
+        selected_price=basis.selected_price,
+        expected_value=basis.expected_value,
+        config=basis.decision_policy_config,
+    )
+    return ExecutionCandidate(
+        work,
+        basis.originating_decision,
+        result,
+        basis.selected_price,
+        basis.selected_odds_observation_id,
+        basis.model_probability,
+        basis.expected_value,
+    )
+
+
+def _partially_processed_execution_candidates(configs):
+    """Recover only fulfilled T-30 events already anchored by partial Capital state."""
+
+    config_ids = [config.pk for config in configs]
+    partial_match_ids = list(
+        CapitalExecutionState.objects.filter(config_id__in=config_ids)
+        .values("match_id")
+        .annotate(config_count=Count("config_id", distinct=True))
+        .filter(config_count__lt=len(config_ids))
+        .values_list("match_id", flat=True)
+    )
+    if not partial_match_ids:
+        return ()
+    states_by_match = {}
+    for state in (
+        CapitalExecutionState.objects.filter(
+            config_id__in=config_ids,
+            match_id__in=partial_match_ids,
+        )
+        .select_related(
+            "execution_basis__capture_work_item__run",
+            "execution_basis__capture_work_item__match",
+            "execution_basis__originating_decision",
+            "execution_basis__selected_odds_observation",
+        )
+        .order_by("match_id", "config_id")
+    ):
+        states_by_match.setdefault(state.match_id, []).append(state)
+    fulfilled_by_match = {}
+    for work in (
+        CaptureWorkItem.objects.filter(
+            match_id__in=partial_match_ids,
+            purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
+            intended_window="market-t30m",
+            status__in=ACCEPTED_CAPTURE_STATUSES,
+        )
+        .select_related("run", "match")
+        .order_by("match_id", "run__completed_at", "id")
+    ):
+        fulfilled_by_match.setdefault(work.match_id, work)
+    candidates = []
+    for match_id in sorted(states_by_match):
+        states = states_by_match[match_id]
+        anchored = next(
+            (state.execution_basis for state in states if state.execution_basis_id),
+            None,
+        )
+        if anchored is not None:
+            candidates.append(_candidate_from_basis(anchored))
+            continue
+        reasons = {state.non_placement_reason for state in states}
+        work = fulfilled_by_match.get(match_id)
+        if reasons == {"UNAVAILABLE_NO_DECISION_AT_EXECUTION"} and work is not None:
+            candidates.append(
+                ExecutionCandidate(work, None, None, None, None, None, None)
+            )
+            continue
+        raise CapitalRuntimeInvariantError(
+            f"AMBIGUOUS_PARTIAL_EXECUTION_EVIDENCE:{match_id}"
+        )
+    return tuple(candidates)
+
+
 def _terminal_state(config, match, reason, at, *, basis=None, diagnostics=None):
     state, created = CapitalExecutionState.objects.get_or_create(
         config=config,
@@ -475,38 +571,38 @@ def place_candidate(config_id, candidate):
 
 
 def reconcile_execution_events(capture_run_id, *, at=None):
-    """Consume only final T-30 evidence completed by the current capture cycle."""
+    """Consume current or partially processed durable final T-30 evidence."""
 
-    if not capture_run_id:
-        current_ids = tuple(
-            CapitalRuntimeConfig.objects.filter(automatic=True, current=True)
-            .order_by("id")
-            .values_list("id", flat=True)
-        )
-        return RuntimeResult(
-            "NO_WORK", configs=len(current_ids), config_ids=current_ids
-        )
     configs = provision_automatic_configs()
-    work_items = list(
-        CaptureWorkItem.objects.filter(
-            run_id=capture_run_id,
-            purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
-            intended_window="market-t30m",
-            match__isnull=False,
+    work_items = []
+    if capture_run_id:
+        work_items = list(
+            CaptureWorkItem.objects.filter(
+                run_id=capture_run_id,
+                purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
+                intended_window="market-t30m",
+                match__isnull=False,
+            )
+            .select_related("run", "match")
+            .order_by("match__kickoff", "match_id", "id")
         )
-        .select_related("run", "match")
-        .order_by("match__kickoff", "match_id", "id")
-    )
+    candidates_by_match = {
+        candidate.match.pk: candidate
+        for candidate in _partially_processed_execution_candidates(configs)
+    }
     missed = {
         row.match_id: row
         for row in work_items
         if row.status == CaptureWorkItem.Status.MISSED_WINDOW
-        or (at is not None and row.not_after is not None and at > row.not_after)
+        and row.match_id not in candidates_by_match
     }
-    accepted = {}
     for row in work_items:
-        if row.status in ACCEPTED_CAPTURE_STATUSES and row.match_id not in missed:
-            accepted.setdefault(row.match_id, row)
+        if (
+            row.status in ACCEPTED_CAPTURE_STATUSES
+            and row.match_id not in candidates_by_match
+        ):
+            candidates_by_match[row.match_id] = build_execution_candidate(row)
+            missed.pop(row.match_id, None)
     placed = not_placed = 0
     for match_id, work in missed.items():
         for config in configs:
@@ -518,7 +614,7 @@ def reconcile_execution_events(capture_run_id, *, at=None):
                 diagnostics={"capture_work_item_id": work.pk},
             )
             not_placed += int(created)
-    candidates = [build_execution_candidate(work) for work in accepted.values()]
+    candidates = list(candidates_by_match.values())
     candidates.sort(
         key=lambda row: (
             -(
@@ -745,7 +841,26 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
     CapitalPosition.objects.filter(pk__in=position_ids).update(
         debt_status=CapitalPosition.DebtStatus.OVERDUE
     )
-    match_by_id = {row.match_id: row.match for row in due}
+    positions_by_match = {}
+    for position in due:
+        positions_by_match.setdefault(position.match_id, []).append(position)
+    match_by_id = {
+        match_id: positions[0].match
+        for match_id, positions in positions_by_match.items()
+    }
+
+    def debt_priority(match_id):
+        attempted = [
+            position.result_refresh_attempted_at
+            for position in positions_by_match[match_id]
+            if position.result_refresh_attempted_at is not None
+        ]
+        match = match_by_id[match_id]
+        if not attempted:
+            return (0, match.kickoff, match.pk)
+        return (1, max(attempted), match.kickoff, match.pk)
+
+    ordered_match_ids = sorted(match_by_id, key=debt_priority)
     source = Source.objects.get(code=API_FOOTBALL_CODE)
     refs = {
         ref.match_id: ref
@@ -762,9 +877,12 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             at,
             CapitalRuntimeInvariantError("MISSING_API_FOOTBALL_MATCH_REF"),
         )
-    external_to_match = {
-        ref.external_id: match_by_id[match_id] for match_id, ref in refs.items()
-    }
+    external_debt = [
+        (refs[match_id].external_id, match_by_id[match_id])
+        for match_id in ordered_match_ids
+        if match_id in refs
+    ]
+    external_to_match = dict(external_debt)
     if not external_to_match:
         return RuntimeResult(
             "DEGRADED", open_debt=len(due), errors=("MISSING_API_FOOTBALL_MATCH_REF",)
@@ -772,6 +890,16 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
     calls = settled = 0
     errors = []
     client = None
+    admitted_ids = [
+        external_id
+        for external_id, _ in external_debt[: 20 * capture_config.max_provider_attempts]
+    ]
+    admitted_position_ids = [
+        position.pk
+        for external_id in admitted_ids
+        for position in positions_by_match[external_to_match[external_id].pk]
+    ]
+    attempted_position_ids = []
     try:
         client = client_factory(
             max_pages=capture_config.max_operation_pages,
@@ -786,12 +914,17 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                 )
 
         client.attempt_guard = guard
-        external_ids = sorted(external_to_match, key=lambda value: int(value))
-        admitted_ids = external_ids[: 20 * capture_config.max_provider_attempts]
         for offset in range(0, len(admitted_ids), 20):
             batch = admitted_ids[offset : offset + 20]
+            batch_match_ids = [external_to_match[item].pk for item in batch]
+            batch_position_ids = [
+                position.pk
+                for match_id in batch_match_ids
+                for position in positions_by_match[match_id]
+            ]
+            attempted_position_ids.extend(batch_position_ids)
             CapitalPosition.objects.filter(
-                match_id__in=[external_to_match[item].pk for item in batch],
+                pk__in=batch_position_ids,
                 status=CapitalPosition.Status.OPEN,
             ).update(
                 result_refresh_attempted_at=at,
@@ -827,7 +960,11 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                     settled += settle_observation(observation, settled_at=knowledge_at)
     except APIFootballError as error:
         errors.append(f"{type(error).__name__}:{error}"[:500])
-        _mark_provider_degraded(position_ids, at, error)
+        _mark_provider_degraded(
+            attempted_position_ids or admitted_position_ids,
+            at,
+            error,
+        )
     open_debt = CapitalPosition.objects.filter(
         pk__in=position_ids, status=CapitalPosition.Status.OPEN
     ).count()
