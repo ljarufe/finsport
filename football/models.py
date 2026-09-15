@@ -1487,6 +1487,358 @@ class CapitalLedgerEntry(models.Model):
         ]
 
 
+class CapitalRuntimeConfig(TimeStampedModel):
+    """One independent simulated bankroll under the FS-016 event-time runtime."""
+
+    class Mode(models.TextChoices):
+        CURRENT = "CURRENT", "Current prospective"
+        REPLAY = "REPLAY", "Replay study"
+        MONTE_CARLO = "MONTE_CARLO", "Monte Carlo study"
+        STRESS = "STRESS", "Stress study"
+        HISTORICAL = "HISTORICAL", "Historical study"
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        TERMINATED = "TERMINATED", "Terminated"
+        COMPLETE = "COMPLETE", "Complete"
+        DEGRADED = "DEGRADED", "Degraded"
+
+    identity = models.CharField(max_length=180, unique=True)
+    runtime_version = models.CharField(max_length=50)
+    execution_version = models.CharField(max_length=50)
+    mode = models.CharField(max_length=20, choices=Mode.choices)
+    automatic = models.BooleanField(default=False)
+    current = models.BooleanField(default=False)
+    source_model_code = models.CharField(max_length=30)
+    decision_policy_code = models.CharField(max_length=30)
+    decision_policy_variant = models.CharField(max_length=30, blank=True)
+    policy_code = models.CharField(max_length=40)
+    policy_version = models.CharField(max_length=100)
+    policy_config = models.JSONField(default=dict)
+    max_lanes = models.PositiveSmallIntegerField()
+    initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
+    bankroll_equity = models.DecimalField(max_digits=24, decimal_places=8)
+    reserved_exposure = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    policy_state = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    practical_ruin = models.BooleanField(default=False)
+    termination_reason = models.CharField(max_length=120, blank=True)
+    peak_equity = models.DecimalField(max_digits=24, decimal_places=8)
+    peak_reserved_exposure = models.DecimalField(
+        max_digits=24, decimal_places=8, default=0
+    )
+    maximum_drawdown = models.DecimalField(max_digits=18, decimal_places=12, default=0)
+    metrics = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+
+    @property
+    def available_cash(self):
+        return self.bankroll_equity - self.reserved_exposure
+
+    @property
+    def realized_pnl(self):
+        return self.bankroll_equity - self.initial_bankroll
+
+    def __str__(self):
+        return f"{self.policy_code} {self.mode} ({self.pk})"
+
+    class Meta:
+        ordering = ("automatic", "policy_code", "id")
+        indexes = [
+            models.Index(
+                fields=["automatic", "current", "status"],
+                name="football_cap_v2_current_idx",
+            )
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(initial_bankroll__gt=0),
+                name="football_capital_v2_initial_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(max_lanes__gt=0),
+                name="football_capital_v2_lanes_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(reserved_exposure__gte=0),
+                name="football_capital_v2_reserved_nonnegative",
+            ),
+        ]
+
+
+class CapitalExecutionBasis(models.Model):
+    """Frozen Decision and price evidence for one config/Match execution event."""
+
+    config = models.ForeignKey(
+        CapitalRuntimeConfig,
+        on_delete=models.CASCADE,
+        related_name="execution_bases",
+    )
+    match = models.ForeignKey(
+        Match, on_delete=models.PROTECT, related_name="capital_execution_bases"
+    )
+    prediction = models.ForeignKey(
+        Prediction,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    originating_decision = models.ForeignKey(
+        Decision,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    decision_policy_code = models.CharField(max_length=30)
+    decision_policy_variant = models.CharField(max_length=30, blank=True)
+    decision_policy_version = models.CharField(max_length=100)
+    decision_policy_config = models.JSONField(default=dict, blank=True)
+    action = models.CharField(max_length=6, choices=Decision.ACTIONS)
+    reason = models.CharField(max_length=120)
+    model_probability = models.DecimalField(
+        max_digits=18, decimal_places=12, null=True, blank=True
+    )
+    selected_odds_observation = models.ForeignKey(
+        OddsObservation,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    historical_market_evidence = models.ForeignKey(
+        HistoricalMarketEvidence,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    selected_price = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True
+    )
+    expected_value = models.DecimalField(
+        max_digits=18, decimal_places=12, null=True, blank=True
+    )
+    capture_work_item = models.ForeignKey(
+        CaptureWorkItem,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    capture_run = models.ForeignKey(
+        CaptureRun,
+        on_delete=models.PROTECT,
+        related_name="capital_execution_bases",
+        null=True,
+        blank=True,
+    )
+    execution_at = models.DateTimeField()
+    evidence_not_before = models.DateTimeField()
+    evidence_cutoff = models.DateTimeField()
+    evidence_class = models.CharField(max_length=50, default="PROSPECTIVE_ACTUAL")
+    provenance = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("execution_at", "match_id", "config_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["config", "match"],
+                name="football_capital_v2_basis_config_match_unique",
+            )
+        ]
+
+
+class CapitalExecutionState(TimeStampedModel):
+    """Durable placement or final zero-exposure outcome for config + Match."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending execution event"
+        PLACED = "PLACED", "Placed"
+        NOT_PLACED = "NOT_PLACED", "Terminal without position"
+
+    NON_PLACEMENT_REASONS = (
+        ("NO_BET", "No bet"),
+        ("UNAVAILABLE_NO_DECISION_AT_EXECUTION", "No execution Decision"),
+        ("NO_EXECUTION_PRICE", "No execution price"),
+        ("MISSED_EXECUTION_WINDOW", "Missed execution window"),
+        ("EXPIRED_CAPACITY", "Capacity expired"),
+        ("INSUFFICIENT_AVAILABLE_CASH", "Insufficient available cash"),
+        ("INELIGIBLE", "Ineligible"),
+    )
+
+    config = models.ForeignKey(
+        CapitalRuntimeConfig,
+        on_delete=models.CASCADE,
+        related_name="execution_states",
+    )
+    match = models.ForeignKey(
+        Match, on_delete=models.PROTECT, related_name="capital_execution_states"
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+    non_placement_reason = models.CharField(
+        max_length=50, choices=NON_PLACEMENT_REASONS, blank=True
+    )
+    execution_basis = models.OneToOneField(
+        CapitalExecutionBasis,
+        on_delete=models.PROTECT,
+        related_name="execution_state",
+        null=True,
+        blank=True,
+    )
+    position = models.OneToOneField(
+        "CapitalPosition",
+        on_delete=models.SET_NULL,
+        related_name="execution_state",
+        null=True,
+        blank=True,
+    )
+    terminal_at = models.DateTimeField(null=True, blank=True)
+    diagnostics = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ("match__kickoff", "match_id", "config_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["config", "match"],
+                name="football_capital_v2_state_config_match_unique",
+            )
+        ]
+
+
+class CapitalResultObservation(models.Model):
+    """The first time Finsport recognizes a canonical terminal Match result."""
+
+    match = models.OneToOneField(
+        Match, on_delete=models.PROTECT, related_name="capital_result_observation"
+    )
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.PROTECT,
+        related_name="capital_result_observations",
+        null=True,
+        blank=True,
+    )
+    match_source_ref = models.ForeignKey(
+        MatchSourceRef,
+        on_delete=models.PROTECT,
+        related_name="capital_result_observations",
+        null=True,
+        blank=True,
+    )
+    status_short = models.CharField(max_length=10)
+    outcome = models.CharField(max_length=4, choices=Match.OUTCOMES, blank=True)
+    result_known_at = models.DateTimeField()
+    provider_observed_at = models.DateTimeField(null=True, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ("result_known_at", "match_id")
+
+
+class CapitalPosition(models.Model):
+    """Actual simulated economic exposure; never a bookmaker instruction."""
+
+    class Status(models.TextChoices):
+        OPEN = "OPEN", "Open"
+        SETTLED_WIN = "SETTLED_WIN", "Settled win"
+        SETTLED_LOSS = "SETTLED_LOSS", "Settled loss"
+        VOID = "VOID", "Void"
+
+    class DebtStatus(models.TextChoices):
+        CURRENT = "CURRENT", "Current"
+        OVERDUE = "OVERDUE", "Overdue"
+        DEGRADED = "DEGRADED", "Degraded"
+        RESOLVED = "RESOLVED", "Resolved"
+
+    config = models.ForeignKey(
+        CapitalRuntimeConfig, on_delete=models.CASCADE, related_name="positions"
+    )
+    match = models.ForeignKey(
+        Match, on_delete=models.PROTECT, related_name="capital_positions"
+    )
+    execution_basis = models.OneToOneField(
+        CapitalExecutionBasis,
+        on_delete=models.PROTECT,
+        related_name="position",
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.OPEN
+    )
+    placed_at = models.DateTimeField()
+    result_observation = models.ForeignKey(
+        CapitalResultObservation,
+        on_delete=models.PROTECT,
+        related_name="positions",
+        null=True,
+        blank=True,
+    )
+    result_known_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    requested_stake = models.DecimalField(max_digits=24, decimal_places=8)
+    applied_stake = models.DecimalField(max_digits=24, decimal_places=8)
+    policy_step = models.PositiveIntegerField(null=True, blank=True)
+    request_metadata = models.JSONField(default=dict, blank=True)
+    placement_equity_before = models.DecimalField(max_digits=24, decimal_places=8)
+    placement_reserved_before = models.DecimalField(max_digits=24, decimal_places=8)
+    placement_available_before = models.DecimalField(max_digits=24, decimal_places=8)
+    placement_equity_after = models.DecimalField(max_digits=24, decimal_places=8)
+    placement_reserved_after = models.DecimalField(max_digits=24, decimal_places=8)
+    placement_available_after = models.DecimalField(max_digits=24, decimal_places=8)
+    settlement_equity_after = models.DecimalField(
+        max_digits=24, decimal_places=8, null=True, blank=True
+    )
+    settlement_reserved_after = models.DecimalField(
+        max_digits=24, decimal_places=8, null=True, blank=True
+    )
+    settlement_available_after = models.DecimalField(
+        max_digits=24, decimal_places=8, null=True, blank=True
+    )
+    realized_pnl = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    policy_state_before = models.JSONField(default=dict, blank=True)
+    policy_state_after = models.JSONField(default=dict, blank=True)
+    cap_hit = models.BooleanField(default=False)
+    shortfall = models.DecimalField(max_digits=24, decimal_places=8, default=0)
+    practical_ruin = models.BooleanField(default=False)
+    termination_reason = models.CharField(max_length=120, blank=True)
+    debt_status = models.CharField(
+        max_length=20, choices=DebtStatus.choices, default=DebtStatus.CURRENT
+    )
+    result_refresh_attempted_at = models.DateTimeField(null=True, blank=True)
+    result_refresh_error = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ("placed_at", "match_id", "config_id")
+        indexes = [
+            models.Index(
+                fields=["status", "debt_status", "placed_at"],
+                name="football_cap_v2_debt_idx",
+            )
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["config", "match"],
+                name="football_capital_v2_position_config_match_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(requested_stake__gte=0),
+                name="football_capital_v2_requested_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=Q(applied_stake__gt=0),
+                name="football_capital_v2_applied_positive",
+            ),
+        ]
+
+
 class MaintenanceRun(TimeStampedModel):
     """Persistent due/idempotency audit for pipeline-owned maintenance."""
 

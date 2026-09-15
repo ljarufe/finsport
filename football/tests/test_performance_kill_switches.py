@@ -53,3 +53,16 @@ def test_operational_compose_forces_performance_kill_switches_off():
     assert compose.count('INKABET_AUTOMATIC_ENABLED: "False"') >= 2
     assert compose.count('FOOTBALL_MODERNIZED_R45_ENABLED: "False"') >= 2
     assert compose.count('FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED: "False"') >= 2
+
+
+def test_source_defaults_keep_r45_and_inkabet_automatic_fail_closed():
+    root = Path(__file__).resolve().parents[2]
+    settings = (root / "finsport/settings.py").read_text()
+
+    for name in (
+        "FOOTBALL_MODERNIZED_R45_ENABLED",
+        "FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED",
+        "INKABET_AUTOMATIC_ENABLED",
+    ):
+        declaration = settings[settings.index(name) : settings.index(name) + 140]
+        assert "default=False" in declaration

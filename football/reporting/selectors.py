@@ -1,6 +1,7 @@
 import json
 from collections import defaultdict
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 from itertools import combinations
 
 from django.db.models import F, Prefetch
@@ -10,6 +11,8 @@ from football.models import (
     CapitalExperiment,
     CapitalLongitudinalSeries,
     CapitalPolicyRun,
+    CapitalPosition,
+    CapitalRuntimeConfig,
     Competition,
     Decision,
     DixonColesReadinessProfile,
@@ -142,6 +145,70 @@ def _decision_metrics(rows):
         "flat_unit_pnl": pnl if economic else None,
         "roi": pnl / len(economic) if economic else None,
     }
+
+
+def _capital_v2_rows():
+    rows = []
+    configs = CapitalRuntimeConfig.objects.filter(
+        automatic=True,
+        current=True,
+        runtime_version="fs016-capital-runtime-v2",
+    ).prefetch_related("positions", "execution_states")
+    for config in configs.order_by("policy_code"):
+        positions = list(config.positions.all())
+        states = list(config.execution_states.all())
+        counts = defaultdict(int)
+        for position in positions:
+            counts[position.status] += 1
+            counts[position.debt_status] += 1
+        reasons = defaultdict(int)
+        for state in states:
+            if state.non_placement_reason:
+                reasons[state.non_placement_reason] += 1
+        realized_pnl = config.realized_pnl
+        settled_stake = sum(
+            (
+                position.applied_stake
+                for position in positions
+                if position.status
+                in {
+                    CapitalPosition.Status.SETTLED_WIN,
+                    CapitalPosition.Status.SETTLED_LOSS,
+                    CapitalPosition.Status.VOID,
+                }
+            ),
+            Decimal("0"),
+        )
+        rows.append(
+            {
+                "config": config,
+                "policy_config_display": compact_config(config.policy_config),
+                "available_cash": config.available_cash,
+                "realized_pnl": realized_pnl,
+                "settled_stake": settled_stake,
+                "realized_roi": (
+                    realized_pnl / settled_stake if settled_stake else None
+                ),
+                "direction": (
+                    "GANANDO"
+                    if realized_pnl > 0
+                    else "PERDIENDO" if realized_pnl < 0 else "SIN_CAMBIO"
+                ),
+                "wins": counts[CapitalPosition.Status.SETTLED_WIN],
+                "losses": counts[CapitalPosition.Status.SETTLED_LOSS],
+                "voids": counts[CapitalPosition.Status.VOID],
+                "open_positions": counts[CapitalPosition.Status.OPEN],
+                "degraded_debt": counts[CapitalPosition.DebtStatus.DEGRADED],
+                "sample_count": len(states),
+                "elapsed_days": max((timezone.now() - config.started_at).days, 0),
+                "no_bet_count": reasons["NO_BET"],
+                "expired_capacity_count": reasons["EXPIRED_CAPACITY"],
+                "missing_execution_count": (
+                    reasons["NO_EXECUTION_PRICE"] + reasons["MISSED_EXECUTION_WINDOW"]
+                ),
+            }
+        )
+    return rows
 
 
 def _dc_reason(value):
@@ -554,6 +621,7 @@ def historical(params):
             in (CapitalExperiment.MODE_MONTE_CARLO, CapitalExperiment.MODE_STRESS)
         ],
         "longitudinal_capital_groups": longitudinal_groups,
+        "capital_v2_rows": _capital_v2_rows(),
         "historical_readiness": historical_readiness,
         "evidence": {"predictions": len(predictions), "decisions": len(decisions)},
     }
