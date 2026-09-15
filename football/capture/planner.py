@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db.models import Count, Max, Q
 
 from football.models import (
+    CapitalPosition,
     CaptureRun,
     CaptureWorkItem,
     MaintenanceRun,
@@ -154,11 +155,15 @@ class CapturePlanner:
         if not self.config.result_refresh_enabled:
             return []
         due_before = at - self.config.result_delay
-        queryset = Match.objects.filter(
-            season__competition__enabled=True,
-            kickoff__lte=due_before,
-            outcome="",
-        ).select_related("season__competition")
+        queryset = (
+            Match.objects.filter(
+                season__competition__enabled=True,
+                kickoff__lte=due_before,
+                outcome="",
+            )
+            .exclude(capital_positions__status=CapitalPosition.Status.OPEN)
+            .select_related("season__competition")
+        )
         if match_id is not None:
             queryset = queryset.filter(pk=match_id)
         refs = self._refs(source, queryset)

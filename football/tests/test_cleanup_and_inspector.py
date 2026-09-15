@@ -27,6 +27,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "backfill_football_current_season_gaps",
         "export_historical_market_data",
         "import_historical_market_data",
+        "retire_capital_v1",
     }
     for name in (
         "get_leagues",

@@ -8,15 +8,15 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 from django.utils import timezone
 
-from football.capital.baseline import (
-    BASELINE_CONFIG,
-    BASELINE_LABEL,
-    run_research_baseline,
+from football.capital.runtime import (
+    AUTOMATIC_CONFIGS,
+    run_automatic_runtime,
 )
-from football.capital.contracts import ENGINE_VERSION as CAPITAL_ENGINE_VERSION
-from football.capital.longitudinal import (
-    LONGITUDINAL_CONFIG,
-    recompute_longitudinal_capital,
+from football.capital.runtime import (
+    EXECUTION_VERSION as CAPITAL_EXECUTION_VERSION,
+)
+from football.capital.runtime import (
+    RUNTIME_VERSION as CAPITAL_RUNTIME_VERSION,
 )
 from football.capture import run_capture
 from football.capture.contracts import MARKET_CONSENSUS_WINDOW_NAMES
@@ -404,8 +404,7 @@ def _report(
     competitions,
     experiments,
     cycle_experiments,
-    capital_results,
-    longitudinal_capital_result,
+    capital_runtime_result,
     capture_data,
     cancellation_data,
     warnings,
@@ -441,9 +440,8 @@ def _report(
         "versions": {
             "pipeline": PIPELINE_VERSION,
             "prediction_engine": PREDICTION_ENGINE_VERSION,
-            "capital_engine": CAPITAL_ENGINE_VERSION,
-            "capital_baseline": BASELINE_CONFIG,
-            "capital_baseline_label": BASELINE_LABEL,
+            "capital_runtime": CAPITAL_RUNTIME_VERSION,
+            "capital_execution": CAPITAL_EXECUTION_VERSION,
         },
         "phases": {name: result.as_dict() for name, result in phases.items()},
         "competitions_considered": competition_rows,
@@ -470,21 +468,7 @@ def _report(
         },
         "capital": {
             "state": phases["CAPITAL"].state,
-            "baseline": {
-                "mode": "REPLAY",
-                "initial_bankroll": "100",
-                "policy": "FLAT_UNIT",
-                "config": {"unit": "1"},
-                "label": BASELINE_LABEL,
-            },
-            "results": capital_results,
-            "longitudinal": longitudinal_capital_result,
-            "produced_count": sum(
-                item["status"] == "PRODUCED" for item in capital_results
-            ),
-            "unavailable_count": sum(
-                item["status"] == "UNAVAILABLE" for item in capital_results
-            ),
+            "runtime": capital_runtime_result,
         },
         "cancelled_match_hygiene": cancellation_data,
         "sample_sizes": {
@@ -535,7 +519,8 @@ def run_pipeline(
                 "pipeline_version": PIPELINE_VERSION,
                 "report_schema": REPORT_SCHEMA,
                 "max_provider_attempts": max_provider_attempts,
-                "capital_baseline": BASELINE_CONFIG,
+                "capital_runtime": CAPITAL_RUNTIME_VERSION,
+                "capital_execution": CAPITAL_EXECUTION_VERSION,
             },
         )
         cycle_identity = str(run.cycle_identity)
@@ -753,106 +738,50 @@ def run_pipeline(
     )
     errors.extend({"phase": "RESULT_SETTLEMENT", **item} for item in result_errors)
 
-    capital_results = []
-    longitudinal_capital_result = {}
+    capital_runtime_result = {}
     capital_errors = []
-    capital_primary_event_emitted = False
-    capital_experiments = PredictionExperiment.objects.filter(
-        mode=PredictionExperiment.MODE_PROSPECTIVE,
-        competition_id__in=competition_ids,
-    )
     if dry_run:
         phases["CAPITAL"] = PhaseResult(
             PhaseState.SKIPPED,
             reason="DRY_RUN",
             details={
-                "baseline": BASELINE_CONFIG,
-                "longitudinal": LONGITUDINAL_CONFIG,
-                "prospective_experiments_considered": sum(
-                    _capital_experiment_allowed(experiment)
-                    for experiment in capital_experiments.only("config")
-                ),
+                "runtime_version": CAPITAL_RUNTIME_VERSION,
+                "execution_version": CAPITAL_EXECUTION_VERSION,
+                "automatic_configs": len(AUTOMATIC_CONFIGS),
             },
         )
     else:
-        for experiment in capital_experiments.order_by("id"):
-            if not _capital_experiment_allowed(experiment):
-                continue
-            try:
-                capital_results.append(run_research_baseline(experiment).as_dict())
-            except Exception as error:
-                operational_causes.append(
-                    {
-                        **exception_diagnostic(error),
-                        "component": "capital",
-                        "operation": "run_research_baseline",
-                    }
-                )
-                capital_errors.append(
-                    {
-                        "prediction_experiment_id": experiment.pk,
-                        "error": f"{type(error).__name__}:{error}"[:500],
-                    }
-                )
         try:
-            longitudinal_capital_result = recompute_longitudinal_capital(
-                pipeline_run_id=run.pk if run else None
+            capital_runtime_result = run_automatic_runtime(
+                capture_run_id=capture_data.get("run_id"),
+                at=at,
             ).as_dict()
-            capital_primary_event_emitted = longitudinal_capital_result.get(
-                "primary_failure_emitted", False
-            )
         except Exception as error:
-            capital_primary_event_emitted = getattr(
-                error, "longitudinal_event_emitted", False
+            operational_causes.append(
+                {
+                    **exception_diagnostic(error),
+                    "component": "capital",
+                    "operation": "run_automatic_runtime",
+                }
             )
-            if not capital_primary_event_emitted:
-                operational_causes.append(
-                    {
-                        **exception_diagnostic(error),
-                        "component": "capital",
-                        "operation": "recompute_longitudinal_capital",
-                    }
-                )
             capital_errors.append(
                 {
-                    "operation": "LONGITUDINAL_RECOMPUTE",
+                    "operation": "CAPITAL_V2_RUNTIME",
                     "error": f"{type(error).__name__}:{error}"[:500],
                 }
             )
-        produced = [item for item in capital_results if item["status"] == "PRODUCED"]
-        created = [item for item in produced if item["created"]]
-        unavailable = [
-            item for item in capital_results if item["status"] == "UNAVAILABLE"
-        ]
-        longitudinal_created = longitudinal_capital_result.get(
-            "status"
-        ) == "PRODUCED" and longitudinal_capital_result.get("created")
-        longitudinal_failed = any(
-            state.get("status") == "FAILED"
-            for state in longitudinal_capital_result.get("policy_states", {}).values()
-        )
-        longitudinal_unavailable = (
-            longitudinal_capital_result.get("status") == "UNAVAILABLE"
-        )
-        if capital_errors or longitudinal_failed:
-            capital_state = (
-                PhaseState.DEGRADED
-                if capital_results or longitudinal_capital_result
-                else PhaseState.FAILED
-            )
-        elif created or longitudinal_created:
-            capital_state = PhaseState.DEGRADED if unavailable else PhaseState.SUCCESS
-        elif produced:
-            capital_state = PhaseState.NO_WORK
-        elif unavailable or longitudinal_unavailable:
-            capital_state = PhaseState.UNAVAILABLE
+        if capital_errors:
+            capital_state = PhaseState.FAILED
+        elif capital_runtime_result.get("status") == "DEGRADED":
+            capital_state = PhaseState.DEGRADED
+        elif capital_runtime_result.get("status") == "PRODUCED":
+            capital_state = PhaseState.SUCCESS
         else:
             capital_state = PhaseState.NO_WORK
         phases["CAPITAL"] = PhaseResult(
             capital_state,
             details={
-                "results": capital_results,
-                "longitudinal": longitudinal_capital_result,
+                "runtime": capital_runtime_result,
                 "errors": capital_errors,
             },
         )
@@ -867,9 +796,7 @@ def run_pipeline(
         for item in prediction_unavailable
     )
     warnings.extend(
-        f"CAPITAL_UNAVAILABLE:{item['prediction_experiment_id']}:{item['reason']}"
-        for item in capital_results
-        if item["status"] == "UNAVAILABLE"
+        f"CAPITAL_DEGRADED:{item}" for item in capital_runtime_result.get("errors", [])
     )
     generated_at = timezone.now()
     phases["REPORT"] = PhaseResult(PhaseState.SUCCESS)
@@ -896,8 +823,7 @@ def run_pipeline(
         competitions=competitions,
         experiments=rolling_experiment_rows,
         cycle_experiments=experiment_rows,
-        capital_results=capital_results,
-        longitudinal_capital_result=longitudinal_capital_result,
+        capital_runtime_result=capital_runtime_result,
         capture_data=capture_data,
         cancellation_data=cancellation_data,
         warnings=warnings,
@@ -906,16 +832,7 @@ def run_pipeline(
     if run:
         capture_run_ids = [capture_data["run_id"]] if capture_data.get("run_id") else []
         prediction_ids = sorted({row["id"] for row in experiment_rows})
-        capital_ids = sorted(
-            {
-                item["capital_experiment_id"]
-                for item in capital_results
-                if item.get("capital_experiment_id")
-            }
-        )
-        if longitudinal_capital_result.get("capital_experiment_id"):
-            capital_ids.append(longitudinal_capital_result["capital_experiment_id"])
-            capital_ids = sorted(set(capital_ids))
+        capital_ids = []
         run.status = status
         run.completed_at = generated_at
         run.phase_states = {name: result.as_dict() for name, result in phases.items()}

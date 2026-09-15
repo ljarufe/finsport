@@ -14,11 +14,11 @@ from django.test.utils import CaptureQueriesContext
 from football.capital.longitudinal import (
     PRIMARY_EPOCH,
     REFERENCE_POLICY_ARMS,
-    LongitudinalResult,
     build_longitudinal_basis,
     initialize_primary_series,
     recompute_longitudinal_capital,
 )
+from football.capital.runtime import RuntimeResult
 from football.capital.service import run_capital_experiment
 from football.capture.contracts import CaptureResult
 from football.models import (
@@ -680,7 +680,7 @@ def test_gap_and_no_work_are_not_incidents_and_command_is_db_only(monkeypatch):
     assert not emitter.called
 
 
-def test_pipeline_invokes_one_db_only_longitudinal_attempt(monkeypatch):
+def test_pipeline_invokes_one_automatic_v2_runtime_attempt(monkeypatch):
     at = AFTER_EPOCH
     monkeypatch.setattr(
         "football.pipeline.service.run_capture",
@@ -692,25 +692,23 @@ def test_pipeline_invokes_one_db_only_longitudinal_attempt(monkeypatch):
             quota_after={},
         ),
     )
-    service = mock.Mock(
-        return_value=LongitudinalResult(status="NO_WORK", reason="UNCHANGED")
-    )
-    monkeypatch.setattr(
-        "football.pipeline.service.recompute_longitudinal_capital", service
-    )
+    service = mock.Mock(return_value=RuntimeResult(status="NO_WORK", configs=7))
+    monkeypatch.setattr("football.pipeline.service.run_automatic_runtime", service)
     with mock.patch(
         "requests.sessions.Session.request",
         side_effect=AssertionError("provider call"),
     ):
         result = run_pipeline(at=at)
 
-    service.assert_called_once_with(pipeline_run_id=result.run_id)
-    assert result.report["capital"]["longitudinal"]["status"] == "NO_WORK"
-    assert result.report["capital"]["baseline"]["policy"] == "FLAT_UNIT"
+    service.assert_called_once()
+    assert service.call_args.kwargs["capture_run_id"] is None
+    assert service.call_args.kwargs["at"] == at
+    assert result.report["capital"]["runtime"]["status"] == "NO_WORK"
+    assert result.report["capital"]["runtime"]["configs"] == 7
     assert PipelineRun.objects.get(pk=result.run_id).capital_experiment_ids == []
 
 
-def test_pipeline_does_not_duplicate_capital_primary_failure_event(monkeypatch):
+def test_pipeline_owns_one_automatic_v2_runtime_failure(monkeypatch):
     at = AFTER_EPOCH
     monkeypatch.setattr(
         "football.pipeline.service.run_capture",
@@ -722,11 +720,9 @@ def test_pipeline_does_not_duplicate_capital_primary_failure_event(monkeypatch):
             quota_after={},
         ),
     )
-    failure = RuntimeError("capital already emitted this cause")
-    failure.longitudinal_event_emitted = True
     monkeypatch.setattr(
-        "football.pipeline.service.recompute_longitudinal_capital",
-        mock.Mock(side_effect=failure),
+        "football.pipeline.service.run_automatic_runtime",
+        mock.Mock(side_effect=RuntimeError("capital v2 failed")),
     )
     terminal = mock.Mock()
     monkeypatch.setattr("football.pipeline.service.emit_pipeline_terminal", terminal)
@@ -737,12 +733,15 @@ def test_pipeline_does_not_duplicate_capital_primary_failure_event(monkeypatch):
     assert result.phases["CAPITAL"]["state"] == "FAILED"
     terminal.assert_called_once()
     assert terminal.call_args.args[0].pk == result.run_id
-    assert terminal.call_args.kwargs["causes"] == []
+    causes = terminal.call_args.kwargs["causes"]
+    assert len(causes) == 1
+    assert causes[0]["component"] == "capital"
+    assert causes[0]["operation"] == "run_automatic_runtime"
     assert PipelineRun.objects.get(pk=result.run_id).errors == [
         {
             "phase": "CAPITAL",
-            "operation": "LONGITUDINAL_RECOMPUTE",
-            "error": "RuntimeError:capital already emitted this cause",
+            "operation": "CAPITAL_V2_RUNTIME",
+            "error": "RuntimeError:capital v2 failed",
         }
     ]
 

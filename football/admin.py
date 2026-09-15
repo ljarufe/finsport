@@ -5,10 +5,15 @@ from .models import (
     BookmakerCanonicalRef,
     CanonicalBookmaker,
     CanonicalOddsMarket,
+    CapitalExecutionBasis,
+    CapitalExecutionState,
     CapitalExperiment,
     CapitalLedgerEntry,
     CapitalLongitudinalSeries,
     CapitalPolicyRun,
+    CapitalPosition,
+    CapitalResultObservation,
+    CapitalRuntimeConfig,
     CaptureRun,
     CaptureWorkItem,
     Competition,
@@ -56,6 +61,13 @@ class ReadOnlyCapitalAuditMixin:
 
 class CapitalPolicyRunInline(ReadOnlyCapitalAuditMixin, admin.TabularInline):
     model = CapitalPolicyRun
+    extra = 0
+    can_delete = False
+    show_change_link = True
+
+
+class CapitalPositionInline(ReadOnlyCapitalAuditMixin, admin.TabularInline):
+    model = CapitalPosition
     extra = 0
     can_delete = False
     show_change_link = True
@@ -244,6 +256,97 @@ class CapitalLedgerEntryAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
     )
     raw_id_fields = ("policy_run", "source_decision")
     date_hierarchy = "batch_time"
+
+
+@admin.register(CapitalRuntimeConfig)
+class CapitalRuntimeConfigAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "policy_code",
+        "mode",
+        "automatic",
+        "current",
+        "status",
+        "bankroll_equity",
+        "reserved_exposure",
+        "max_lanes",
+        "started_at",
+    )
+    list_filter = ("automatic", "current", "mode", "status", "policy_code")
+    search_fields = ("identity", "runtime_version", "execution_version")
+    inlines = (CapitalPositionInline,)
+
+
+@admin.register(CapitalExecutionBasis)
+class CapitalExecutionBasisAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "config",
+        "match",
+        "action",
+        "selected_price",
+        "execution_at",
+        "capture_work_item",
+    )
+    list_filter = ("action", "evidence_class", "decision_policy_code")
+    raw_id_fields = (
+        "config",
+        "match",
+        "prediction",
+        "originating_decision",
+        "selected_odds_observation",
+        "historical_market_evidence",
+        "capture_work_item",
+        "capture_run",
+    )
+
+
+@admin.register(CapitalExecutionState)
+class CapitalExecutionStateAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "config",
+        "match",
+        "status",
+        "non_placement_reason",
+        "terminal_at",
+    )
+    list_filter = ("status", "non_placement_reason", "config__policy_code")
+    raw_id_fields = ("config", "match", "execution_basis", "position")
+
+
+@admin.register(CapitalPosition)
+class CapitalPositionAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "config",
+        "match",
+        "status",
+        "placed_at",
+        "applied_stake",
+        "realized_pnl",
+        "debt_status",
+        "result_known_at",
+        "settled_at",
+    )
+    list_filter = ("status", "debt_status", "config__policy_code")
+    raw_id_fields = ("config", "match", "execution_basis", "result_observation")
+    date_hierarchy = "placed_at"
+
+
+@admin.register(CapitalResultObservation)
+class CapitalResultObservationAdmin(ReadOnlyCapitalAuditMixin, admin.ModelAdmin):
+    list_display = (
+        "id",
+        "match",
+        "status_short",
+        "outcome",
+        "result_known_at",
+        "source",
+    )
+    list_filter = ("status_short", "outcome", "source")
+    raw_id_fields = ("match", "source", "match_source_ref")
+    date_hierarchy = "result_known_at"
 
 
 @admin.register(Source)
