@@ -448,7 +448,7 @@ def test_one_cycle_is_multi_competition_and_repeated_cycle_reuses_identity(monke
     assert PipelineRun.objects.count() == 2
     assert first_result.report["prediction"]["created_count"] == 2
     assert repeated.report["prediction"]["created_count"] == 0
-    assert repeated.report["prediction"]["reused_count"] == 2
+    assert repeated.report["prediction"]["reused_count"] == 0
     assert {row["id"] for row in first_result.report["competitions_considered"]} == {
         first[0].pk,
         second[0].pk,
@@ -711,6 +711,7 @@ def test_beat_enabled_pipeline_is_the_only_automatic_capture_owner(monkeypatch):
     configured = runpy.run_path("finsport/settings.py")
 
     assert configured["FOOTBALL_PIPELINE_ENABLED"] is True
+    assert configured["FOOTBALL_CAPTURE_WAKE_SECONDS"] == 300
     assert configured["CELERY_BEAT_SCHEDULE"] == {
         "football-pipeline-wake": {
             "task": "football.pipeline.wake",
@@ -732,3 +733,86 @@ def test_failed_phase_requires_real_success_for_degraded_status():
     phases["RESULT_SETTLEMENT"] = PhaseResult(PhaseState.SUCCESS)
 
     assert _phase_status(phases) == PipelineRun.Status.DEGRADED
+
+
+@pytest.mark.parametrize("prior_failed", [False, True])
+def test_post_capital_catch_up_failure_degrades_or_preserves_failed_phase(
+    monkeypatch, prior_failed
+):
+    at = datetime(2026, 9, 16, 18, tzinfo=dt_timezone.utc)
+    monkeypatch.setattr(
+        "football.pipeline.service.run_capture",
+        lambda **kwargs: fake_capture(at, []),
+    )
+    if prior_failed:
+        monkeypatch.setattr(
+            "football.pipeline.service.cleanup_cancelled_matches",
+            mock.Mock(side_effect=RuntimeError("prior hygiene failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            "football.pipeline.service.cleanup_cancelled_matches",
+            lambda **kwargs: SimpleNamespace(as_dict=lambda: {"status": "NO_WORK"}),
+        )
+    calls = []
+
+    def settle_stub(**kwargs):
+        calls.append(kwargs)
+        if prior_failed or len(calls) == 2:
+            raise RuntimeError("catch-up failed")
+        return SimpleNamespace(as_dict=lambda: {"status": "SUCCESS"})
+
+    monkeypatch.setattr(
+        "football.pipeline.service.settle_prospective_predictions", settle_stub
+    )
+    monkeypatch.setattr(
+        "football.pipeline.service.run_automatic_runtime",
+        lambda **kwargs: SimpleNamespace(
+            as_dict=lambda: {"status": "PRODUCED", "settled": 1, "errors": []}
+        ),
+    )
+
+    result = run_pipeline(at=at)
+    run = PipelineRun.objects.get(pk=result.run_id)
+    expected = PhaseState.FAILED if prior_failed else PhaseState.DEGRADED
+    assert result.phases["RESULT_SETTLEMENT"]["state"] == expected
+    assert run.phase_states["RESULT_SETTLEMENT"]["state"] == expected
+    assert result.report["phases"]["RESULT_SETTLEMENT"]["state"] == expected
+    assert result.status != PipelineRun.Status.SUCCESS
+    assert run.status == result.status
+    assert any(
+        item["operation"] == "POST_CAPITAL_CATCH_UP"
+        for item in result.phases["RESULT_SETTLEMENT"]["details"]["errors"]
+    )
+    assert any(item.get("operation") == "POST_CAPITAL_CATCH_UP" for item in run.errors)
+    assert len(calls) == 2
+
+
+def test_successful_post_capital_catch_up_marks_result_phase_success(monkeypatch):
+    at = datetime(2026, 9, 16, 18, tzinfo=dt_timezone.utc)
+    monkeypatch.setattr(
+        "football.pipeline.service.run_capture",
+        lambda **kwargs: fake_capture(at, []),
+    )
+    monkeypatch.setattr(
+        "football.pipeline.service.cleanup_cancelled_matches",
+        lambda **kwargs: SimpleNamespace(as_dict=lambda: {"status": "NO_WORK"}),
+    )
+    statuses = iter(("NO_WORK", "SUCCESS"))
+    monkeypatch.setattr(
+        "football.pipeline.service.settle_prospective_predictions",
+        lambda **kwargs: SimpleNamespace(as_dict=lambda: {"status": next(statuses)}),
+    )
+    monkeypatch.setattr(
+        "football.pipeline.service.run_automatic_runtime",
+        lambda **kwargs: SimpleNamespace(
+            as_dict=lambda: {"status": "PRODUCED", "settled": 1, "errors": []}
+        ),
+    )
+
+    result = run_pipeline(at=at)
+
+    assert result.phases["RESULT_SETTLEMENT"]["state"] == PhaseState.SUCCESS
+    assert result.phases["RESULT_SETTLEMENT"]["details"]["post_capital_catch_up"] == {
+        "status": "SUCCESS"
+    }

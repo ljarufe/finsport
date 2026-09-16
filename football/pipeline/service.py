@@ -571,6 +571,17 @@ def run_pipeline(
     candidates.extend(_dixon_coles_candidates(at))
     for model_code in ("INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT"):
         candidates.extend(_sporting_candidates(at, model_code=model_code))
+    if not dry_run and candidates:
+        existing_identities = set(
+            PredictionExperiment.objects.filter(
+                logical_identity__in=[row["logical_identity"] for row in candidates]
+            ).values_list("logical_identity", flat=True)
+        )
+        candidates = [
+            row
+            for row in candidates
+            if row["logical_identity"] not in existing_identities
+        ]
     experiment_rows = []
     prediction_unavailable = []
     prediction_errors = []
@@ -786,6 +797,43 @@ def run_pipeline(
             },
         )
         errors.extend({"phase": "CAPITAL", **item} for item in capital_errors)
+
+        if capital_runtime_result.get("settled", 0):
+            try:
+                catch_up = settle_prospective_predictions(
+                    competition_ids=competition_ids,
+                    dry_run=False,
+                ).as_dict()
+                result_phase = phases["RESULT_SETTLEMENT"]
+                result_phase.details["post_capital_catch_up"] = catch_up
+                if catch_up.get("status") == "SUCCESS" and result_phase.state in (
+                    PhaseState.NO_WORK,
+                    PhaseState.SUCCESS,
+                ):
+                    phases["RESULT_SETTLEMENT"] = PhaseResult(
+                        PhaseState.SUCCESS,
+                        details=result_phase.details,
+                        reason=result_phase.reason,
+                    )
+            except Exception as error:
+                message = f"{type(error).__name__}:{error}"[:500]
+                result_phase = phases["RESULT_SETTLEMENT"]
+                result_phase.details.setdefault("errors", []).append(
+                    {"operation": "POST_CAPITAL_CATCH_UP", "error": message}
+                )
+                if result_phase.state != PhaseState.FAILED:
+                    phases["RESULT_SETTLEMENT"] = PhaseResult(
+                        PhaseState.DEGRADED,
+                        details=result_phase.details,
+                        reason=result_phase.reason,
+                    )
+                errors.append(
+                    {
+                        "phase": "RESULT_SETTLEMENT",
+                        "operation": "POST_CAPITAL_CATCH_UP",
+                        "error": message,
+                    }
+                )
 
     if len(competitions) < 2:
         warnings.append(

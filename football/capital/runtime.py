@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from football.capture.contracts import CaptureConfig
@@ -42,6 +44,15 @@ from football.providers.api_football import (
     APIFootballClient,
     APIFootballError,
     APIFootballOperationBudgetError,
+    fixture_by_id,
+    fixtures_by_date,
+    relevant_fixture_payloads,
+)
+from football.quota import (
+    DIRECTED_RESULT_FALLBACK,
+    OPEN_RESULT_TIMEZONE,
+    dynamic_reserve,
+    quota_state,
 )
 from football.sync import (
     API_FOOTBALL_CODE,
@@ -104,6 +115,7 @@ class RuntimeResult:
     config_ids: tuple[int, ...] = ()
     placed: int = 0
     not_placed: int = 0
+    pending_capacity: int = 0
     settled: int = 0
     provider_calls: int = 0
     open_debt: int = 0
@@ -118,6 +130,7 @@ class RuntimeResult:
             "config_ids": list(self.config_ids),
             "placed": self.placed,
             "not_placed": self.not_placed,
+            "pending_capacity": self.pending_capacity,
             "settled": self.settled,
             "provider_calls": self.provider_calls,
             "open_debt": self.open_debt,
@@ -436,16 +449,52 @@ def _terminal_state(config, match, reason, at, *, basis=None, diagnostics=None):
     return state, created
 
 
+def _terminalize_pending(state, reason, at, *, diagnostics=None):
+    """Finish the existing zero-exposure opportunity without replacing its basis."""
+
+    state.status = CapitalExecutionState.Status.NOT_PLACED
+    state.non_placement_reason = reason
+    state.terminal_at = at
+    if diagnostics:
+        state.diagnostics = {**state.diagnostics, **diagnostics}
+    state.save(
+        update_fields=[
+            "status",
+            "non_placement_reason",
+            "terminal_at",
+            "diagnostics",
+            "modified",
+        ]
+    )
+    return "NOT_PLACED"
+
+
 @transaction.atomic
-def place_candidate(config_id, candidate):
-    """Apply one config-scoped placement mutation under a row lock."""
+def place_candidate(config_id, candidate, *, at=None):
+    """Place from frozen T-30 evidence, or retain it while capacity is unavailable."""
 
     config = CapitalRuntimeConfig.objects.select_for_update().get(pk=config_id)
     match = candidate.match
-    if _state_exists(config, match):
+    state = (
+        CapitalExecutionState.objects.select_for_update()
+        .filter(config=config, match=match)
+        .first()
+    )
+    if (
+        state is not None
+        and state.status != CapitalExecutionState.Status.PENDING_CAPACITY
+    ):
         return "NO_WORK"
+    if state is not None:
+        candidate = _candidate_from_basis(state.execution_basis)
     event_at = candidate.work_item.completed_at or candidate.work_item.run.completed_at
+    placement_at = at or event_at
+    expired_new = state is None and placement_at >= match.kickoff
+    if placement_at >= match.kickoff and state is not None:
+        return _terminalize_pending(state, "EXPIRED_CAPACITY", placement_at)
     if config.status != CapitalRuntimeConfig.Status.ACTIVE:
+        if state is not None:
+            return _terminalize_pending(state, "INELIGIBLE", placement_at)
         _, created = _terminal_state(config, match, "INELIGIBLE", event_at)
         return "NOT_PLACED" if created else "NO_WORK"
     if candidate.decision is None:
@@ -456,19 +505,40 @@ def place_candidate(config_id, candidate):
             event_at,
         )
         return "NOT_PLACED" if created else "NO_WORK"
-    basis = CapitalExecutionBasis.objects.create(**_basis_values(config, candidate))
+    basis = (
+        state.execution_basis
+        if state is not None
+        else CapitalExecutionBasis.objects.create(**_basis_values(config, candidate))
+    )
     if candidate.result.action == Decision.ACTION_NO_BET:
         _terminal_state(config, match, "NO_BET", event_at, basis=basis)
         return "NOT_PLACED"
     if candidate.selected_price is None or candidate.selected_observation_id is None:
         _terminal_state(config, match, "NO_EXECUTION_PRICE", event_at, basis=basis)
         return "NOT_PLACED"
+    if expired_new:
+        _terminal_state(
+            config,
+            match,
+            "EXPIRED_CAPACITY",
+            placement_at,
+            basis=basis,
+        )
+        return "NOT_PLACED"
     open_count = CapitalPosition.objects.filter(
         config=config, status=CapitalPosition.Status.OPEN
     ).count()
     if open_count >= config.max_lanes:
-        _terminal_state(config, match, "EXPIRED_CAPACITY", event_at, basis=basis)
-        return "NOT_PLACED"
+        if state is None:
+            CapitalExecutionState.objects.create(
+                config=config,
+                match=match,
+                status=CapitalExecutionState.Status.PENDING_CAPACITY,
+                execution_basis=basis,
+                diagnostics={"reason": "NO_AVAILABLE_LANE"},
+            )
+            return "PENDING_CAPACITY"
+        return "NO_WORK"
     policy = make_policy(config.policy_code, config.policy_config)
     policy_state = _decimal_state(config.policy_state)
     decision = CapitalDecision(
@@ -496,39 +566,51 @@ def place_candidate(config_id, candidate):
                 "modified",
             ]
         )
+        diagnostics = {"policy_reason": request.termination_reason}
+        if state is not None:
+            return _terminalize_pending(
+                state, "INELIGIBLE", placement_at, diagnostics=diagnostics
+            )
         _terminal_state(
-            config,
-            match,
-            "INELIGIBLE",
-            event_at,
-            basis=basis,
-            diagnostics={"policy_reason": request.termination_reason},
+            config, match, "INELIGIBLE", event_at, basis=basis, diagnostics=diagnostics
         )
         return "NOT_PLACED"
     if request.requested <= ZERO or request.applied <= ZERO:
+        diagnostics = {"policy_reason": request.reason}
+        if state is not None:
+            return _terminalize_pending(
+                state, "INELIGIBLE", placement_at, diagnostics=diagnostics
+            )
         _terminal_state(
             config,
             match,
             "INELIGIBLE",
             event_at,
             basis=basis,
-            diagnostics={"policy_reason": request.reason},
+            diagnostics=diagnostics,
         )
         return "NOT_PLACED"
     available_before = config.available_cash
     if request.requested > available_before:
-        _terminal_state(
-            config,
-            match,
-            "INSUFFICIENT_AVAILABLE_CASH",
-            event_at,
-            basis=basis,
-            diagnostics={
-                "requested_stake": str(request.requested),
-                "available_cash": str(available_before),
-            },
-        )
-        return "NOT_PLACED"
+        diagnostics = {
+            "reason": "INSUFFICIENT_AVAILABLE_CASH",
+            "requested_stake": str(request.requested),
+            "available_cash": str(available_before),
+        }
+        if state is None:
+            CapitalExecutionState.objects.create(
+                config=config,
+                match=match,
+                status=CapitalExecutionState.Status.PENDING_CAPACITY,
+                execution_basis=basis,
+                diagnostics=diagnostics,
+            )
+        else:
+            if state.diagnostics != diagnostics:
+                state.diagnostics = diagnostics
+                state.save(update_fields=["diagnostics", "modified"])
+            return "NO_WORK"
+        return "PENDING_CAPACITY"
     equity_before = config.bankroll_equity
     reserved_before = config.reserved_exposure
     config.reserved_exposure += request.applied
@@ -544,7 +626,8 @@ def place_candidate(config_id, candidate):
         config=config,
         match=match,
         execution_basis=basis,
-        placed_at=event_at,
+        placed_at=placement_at,
+        next_result_check_at=match.kickoff + timedelta(minutes=130),
         requested_stake=request.requested,
         applied_stake=request.applied,
         policy_step=request.step,
@@ -560,13 +643,19 @@ def place_candidate(config_id, candidate):
         cap_hit=request.cap_hit,
         shortfall=request.shortfall,
     )
-    CapitalExecutionState.objects.create(
-        config=config,
-        match=match,
-        status=CapitalExecutionState.Status.PLACED,
-        execution_basis=basis,
-        position=position,
-    )
+    if state is None:
+        CapitalExecutionState.objects.create(
+            config=config,
+            match=match,
+            status=CapitalExecutionState.Status.PLACED,
+            execution_basis=basis,
+            position=position,
+        )
+    else:
+        state.status = CapitalExecutionState.Status.PLACED
+        state.position = position
+        state.diagnostics = {**state.diagnostics, "placed_after_capacity_wait": True}
+        state.save(update_fields=["status", "position", "diagnostics", "modified"])
     return "PLACED"
 
 
@@ -590,6 +679,23 @@ def reconcile_execution_events(capture_run_id, *, at=None):
         candidate.match.pk: candidate
         for candidate in _partially_processed_execution_candidates(configs)
     }
+    for state in (
+        CapitalExecutionState.objects.filter(
+            config__in=configs,
+            status=CapitalExecutionState.Status.PENDING_CAPACITY,
+            execution_basis__isnull=False,
+        )
+        .select_related(
+            "execution_basis__capture_work_item__run",
+            "execution_basis__capture_work_item__match",
+            "execution_basis__originating_decision",
+            "execution_basis__selected_odds_observation",
+        )
+        .order_by("match__kickoff", "match_id", "config_id")
+    ):
+        candidates_by_match.setdefault(
+            state.match_id, _candidate_from_basis(state.execution_basis)
+        )
     missed = {
         row.match_id: row
         for row in work_items
@@ -603,7 +709,7 @@ def reconcile_execution_events(capture_run_id, *, at=None):
         ):
             candidates_by_match[row.match_id] = build_execution_candidate(row)
             missed.pop(row.match_id, None)
-    placed = not_placed = 0
+    placed = not_placed = pending_capacity = 0
     for match_id, work in missed.items():
         for config in configs:
             _, created = _terminal_state(
@@ -629,16 +735,22 @@ def reconcile_execution_events(capture_run_id, *, at=None):
     )
     for config in configs:
         for candidate in candidates:
-            outcome = place_candidate(config.pk, candidate)
+            outcome = (
+                place_candidate(config.pk, candidate, at=at)
+                if at is not None
+                else place_candidate(config.pk, candidate)
+            )
             placed += int(outcome == "PLACED")
             not_placed += int(outcome == "NOT_PLACED")
-    status = "PRODUCED" if placed or not_placed else "NO_WORK"
+            pending_capacity += int(outcome == "PENDING_CAPACITY")
+    status = "PRODUCED" if placed or not_placed or pending_capacity else "NO_WORK"
     return RuntimeResult(
         status,
         configs=len(configs),
         config_ids=tuple(config.pk for config in configs),
         placed=placed,
         not_placed=not_placed,
+        pending_capacity=pending_capacity,
     )
 
 
@@ -755,6 +867,7 @@ def settle_position(position_id, observation_id, *, settled_at=None):
     position.practical_ruin = config.practical_ruin
     position.termination_reason = config.termination_reason
     position.debt_status = CapitalPosition.DebtStatus.RESOLVED
+    position.next_result_check_at = None
     position.result_refresh_error = ""
     position.save()
     return status
@@ -822,15 +935,22 @@ def _mark_provider_degraded(position_ids, at, error):
 
 
 def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
-    """Refresh unique overdue API-Football fixtures in bounded batches of twenty."""
+    """Coalesce due OPEN debt into Lima-date sweeps and narrow directed recovery."""
 
     at = at or timezone.now()
     capture_config = CaptureConfig.from_settings()
-    delay = capture_config.result_delay
+    lima = ZoneInfo(OPEN_RESULT_TIMEZONE)
     due = list(
         CapitalPosition.objects.filter(
             status=CapitalPosition.Status.OPEN,
-            match__kickoff__lte=at - delay,
+        )
+        .exclude(match__status_short="PST")
+        .filter(
+            Q(next_result_check_at__lte=at)
+            | Q(
+                next_result_check_at__isnull=True,
+                match__kickoff__lte=at - timedelta(minutes=130),
+            )
         )
         .select_related("match__season__competition")
         .order_by("match__kickoff", "match_id", "id")
@@ -841,18 +961,24 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
     CapitalPosition.objects.filter(pk__in=position_ids).update(
         debt_status=CapitalPosition.DebtStatus.OVERDUE
     )
-    positions_by_match = {}
+    due_by_match = {}
     for position in due:
-        positions_by_match.setdefault(position.match_id, []).append(position)
-    match_by_id = {
-        match_id: positions[0].match
-        for match_id, positions in positions_by_match.items()
+        due_by_match.setdefault(position.match_id, []).append(position)
+    all_open = list(
+        CapitalPosition.objects.filter(status=CapitalPosition.Status.OPEN)
+        .exclude(match__status_short="PST")
+        .select_related("match__season__competition")
+    )
+    match_by_id = {position.match_id: position.match for position in all_open}
+    date_by_match = {
+        match_id: match.kickoff.astimezone(lima).date()
+        for match_id, match in match_by_id.items()
     }
 
     def debt_priority(match_id):
         attempted = [
             position.result_refresh_attempted_at
-            for position in positions_by_match[match_id]
+            for position in due_by_match[match_id]
             if position.result_refresh_attempted_at is not None
         ]
         match = match_by_id[match_id]
@@ -860,51 +986,157 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             return (0, match.kickoff, match.pk)
         return (1, max(attempted), match.kickoff, match.pk)
 
-    ordered_match_ids = sorted(match_by_id, key=debt_priority)
+    due_dates = {date_by_match[match_id] for match_id in due_by_match}
+    relevant_match_ids = {
+        match_id
+        for match_id, kickoff_date in date_by_match.items()
+        if kickoff_date in due_dates
+    }
     source = Source.objects.get(code=API_FOOTBALL_CODE)
     refs = {
         ref.match_id: ref
         for ref in MatchSourceRef.objects.filter(
             source=source,
-            match_id__in=match_by_id,
+            match_id__in=relevant_match_ids,
             reconciliation_status=ReconciliationStatus.RESOLVED,
         )
     }
-    missing = set(match_by_id) - set(refs)
+    missing = set(due_by_match) - set(refs)
     if missing:
         _mark_provider_degraded(
             [row.pk for row in due if row.match_id in missing],
             at,
             CapitalRuntimeInvariantError("MISSING_API_FOOTBALL_MATCH_REF"),
         )
-    external_debt = [
-        (refs[match_id].external_id, match_by_id[match_id])
-        for match_id in ordered_match_ids
-        if match_id in refs
-    ]
-    external_to_match = dict(external_debt)
-    if not external_to_match:
+    due_with_ref = set(due_by_match) & set(refs)
+    if not due_with_ref:
         return RuntimeResult(
             "DEGRADED", open_debt=len(due), errors=("MISSING_API_FOOTBALL_MATCH_REF",)
         )
-    calls = settled = 0
+    dates = sorted(
+        {date_by_match[match_id] for match_id in due_with_ref},
+        key=lambda day: (
+            min(
+                debt_priority(match_id)
+                for match_id in due_with_ref
+                if date_by_match[match_id] == day
+            ),
+            day,
+        ),
+    )
+    relevant_by_date = {
+        day: {
+            refs[match_id].external_id: match_by_id[match_id]
+            for match_id in relevant_match_ids & set(refs)
+            if date_by_match[match_id] == day
+        }
+        for day in dates
+    }
+    competition_ids = {
+        match_by_id[match_id].season.competition_id
+        for match_id in relevant_match_ids & set(refs)
+    }
+    competitions = {
+        ref.external_id: ref.competition
+        for ref in CompetitionSourceRef.objects.filter(
+            source=source,
+            competition_id__in=competition_ids,
+            reconciliation_status=ReconciliationStatus.RESOLVED,
+        ).select_related("competition")
+    }
+    settled = 0
     errors = []
     client = None
-    admitted_ids = [
-        external_id
-        for external_id, _ in external_debt[: 20 * capture_config.max_provider_attempts]
-    ]
-    admitted_position_ids = [
-        position.pk
-        for external_id in admitted_ids
-        for position in positions_by_match[external_to_match[external_id].pk]
-    ]
-    attempted_position_ids = []
+    active_mode = "date_sweep"
+    active_match_ids = {
+        match_id for match_id in due_with_ref if date_by_match[match_id] == dates[0]
+    }
+    calls_before_attempt = 0
+    current_quota = quota_state(at, capture_config)
+    reserve = dynamic_reserve(at, capture_config)
+    higher_priority_reserve = (
+        reserve["fixture"] + reserve["t30"] + reserve["execution_quote"]
+    )
+    available_work = max(0, current_quota["remaining"] - higher_priority_reserve)
+    if current_quota["basis"] == "BOUNDED_BOOTSTRAP":
+        available_work = min(1, current_quota["remaining"])
+    elif current_quota["basis"] == "HEADER_STALE_EPOCH":
+        available_work = int(
+            current_quota["stale_establishing_attempt_available"]
+            and higher_priority_reserve == 0
+        )
+    admitted_dates = dates[: min(capture_config.max_provider_attempts, available_work)]
+    if not admitted_dates:
+        return RuntimeResult("NO_WORK", open_debt=len(due))
+
+    def due_position_ids(match_ids):
+        return [
+            position.pk for match_id in match_ids for position in due_by_match[match_id]
+        ]
+
+    def schedule_due(match_id, next_check, *, error=""):
+        CapitalPosition.objects.filter(
+            pk__in=due_position_ids((match_id,)),
+            status=CapitalPosition.Status.OPEN,
+        ).update(
+            next_result_check_at=next_check,
+            debt_status=(
+                CapitalPosition.DebtStatus.DEGRADED
+                if error
+                else CapitalPosition.DebtStatus.OVERDUE
+            ),
+            result_refresh_attempted_at=at,
+            result_refresh_error=error,
+        )
+
+    def consume_payloads(payloads, expected, due_match_ids, *, mode, day):
+        nonlocal settled
+        selected = relevant_fixture_payloads(payloads, expected)
+        accepted = {}
+        if selected:
+            _, accepted = sync_fixture_payloads(selected, competitions)
+        usable = set()
+        terminal_without_outcome = set()
+        knowledge_at = timezone.now()
+        for external_id, accepted_match in accepted.items():
+            expected_match = expected.get(str(external_id))
+            if expected_match is None or accepted_match.pk != expected_match.pk:
+                continue
+            match = Match.objects.get(pk=expected_match.pk)
+            usable.add(match.pk)
+            observation, _ = observe_terminal_result(
+                match,
+                known_at=knowledge_at,
+                provenance={
+                    "authority": "API_FOOTBALL_CANONICAL",
+                    "acquisition": mode,
+                    "kickoff_date_lima": day.isoformat(),
+                    "fixture_id": str(external_id),
+                },
+            )
+            if observation:
+                settled += settle_observation(observation, settled_at=knowledge_at)
+            elif match.status_short == "PST":
+                CapitalPosition.objects.filter(
+                    match=match, status=CapitalPosition.Status.OPEN
+                ).update(
+                    next_result_check_at=None,
+                    debt_status=CapitalPosition.DebtStatus.DEGRADED,
+                    result_refresh_error="WAITING_FOR_FIXTURE_RECONCILIATION",
+                )
+            elif match.pk in due_match_ids:
+                if match.status_short in FINISHED_STATUSES:
+                    terminal_without_outcome.add(match.pk)
+                else:
+                    retry_minutes = 60 if match.status_short == "SUSP" else 30
+                    schedule_due(match.pk, at + timedelta(minutes=retry_minutes))
+        return usable, terminal_without_outcome
+
     try:
         client = client_factory(
             max_pages=capture_config.max_operation_pages,
             max_retries=capture_config.max_retries,
-            daily_reserve=capture_config.mandatory_reserve,
+            daily_reserve=0,
         )
 
         def guard(active_client):
@@ -912,59 +1144,160 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                 raise APIFootballOperationBudgetError(
                     "Capital result refresh reached its provider-attempt bound."
                 )
+            observed_remaining = getattr(active_client, "daily_remaining", None)
+            if observed_remaining is None:
+                if current_quota["basis"] == "HEADER_STALE_EPOCH":
+                    live_reserve = dynamic_reserve(timezone.now(), capture_config)
+                    higher_priority = (
+                        live_reserve["fixture"]
+                        + live_reserve["t30"]
+                        + live_reserve["execution_quote"]
+                    )
+                    if active_client.calls == 0 and higher_priority == 0:
+                        return
+                    raise APIFootballOperationBudgetError(
+                        "A stale quota epoch permits only one critical establishing attempt."
+                    )
+                live_remaining = current_quota["remaining"] - active_client.calls
+            else:
+                attempts_after_header = max(
+                    0,
+                    active_client.calls
+                    - getattr(
+                        active_client, "quota_observed_calls", active_client.calls
+                    ),
+                )
+                live_remaining = observed_remaining - attempts_after_header
+            live_reserve = dynamic_reserve(timezone.now(), capture_config)
+            higher_priority = (
+                live_reserve["fixture"]
+                + live_reserve["t30"]
+                + live_reserve["execution_quote"]
+            )
+            if live_remaining - 1 < higher_priority:
+                raise APIFootballOperationBudgetError(
+                    "Capital result attempt would cross the dynamic reserve."
+                )
 
         client.attempt_guard = guard
-        for offset in range(0, len(admitted_ids), 20):
-            batch = admitted_ids[offset : offset + 20]
-            batch_match_ids = [external_to_match[item].pk for item in batch]
-            batch_position_ids = [
-                position.pk
-                for match_id in batch_match_ids
-                for position in positions_by_match[match_id]
-            ]
-            attempted_position_ids.extend(batch_position_ids)
-            CapitalPosition.objects.filter(
-                pk__in=batch_position_ids,
-                status=CapitalPosition.Status.OPEN,
-            ).update(
-                result_refresh_attempted_at=at,
-                result_refresh_error="",
-            )
-            payloads = client.get_all("fixtures", {"ids": "-".join(batch)})
-            calls += 1
-            competition_ids = {
-                external_to_match[item].season.competition_id for item in batch
+        for day in admitted_dates:
+            expected = relevant_by_date[day]
+            due_match_ids = {
+                match_id for match_id in due_with_ref if date_by_match[match_id] == day
             }
-            competitions = {
-                ref.external_id: ref.competition
-                for ref in CompetitionSourceRef.objects.filter(
-                    source=source,
-                    competition_id__in=competition_ids,
-                    reconciliation_status=ReconciliationStatus.RESOLVED,
-                ).select_related("competition")
-            }
-            sync_fixture_payloads(payloads, competitions)
-            knowledge_at = timezone.now()
-            for match in Match.objects.filter(
-                pk__in=[external_to_match[item].pk for item in batch]
-            ):
-                observation, _ = observe_terminal_result(
-                    match,
-                    known_at=knowledge_at,
-                    provenance={
-                        "authority": "API_FOOTBALL_CANONICAL",
-                        "batched_fixture_ids": batch,
-                    },
+            sweep_due = {
+                match_id
+                for match_id in due_match_ids
+                if any(
+                    not position.result_refresh_error.startswith(
+                        DIRECTED_RESULT_FALLBACK
+                    )
+                    for position in due_by_match[match_id]
                 )
-                if observation:
-                    settled += settle_observation(observation, settled_at=knowledge_at)
+            }
+            if sweep_due:
+                active_mode = "date_sweep"
+                active_match_ids = sweep_due
+                calls_before_attempt = client.calls
+                if hasattr(client, "set_audit_context"):
+                    client.set_audit_context(
+                        "OPEN_RESULT_BATCH",
+                        f"open-results:date:{day.isoformat()}:{at.isoformat()}",
+                        request_metadata={
+                            "acquisition": "date_sweep",
+                            "kickoff_date_lima": day.isoformat(),
+                            "trigger_match_ids": sorted(sweep_due),
+                            "relevant_fixture_ids": sorted(expected),
+                        },
+                        represented_fixture_count=len(expected),
+                    )
+                payloads = fixtures_by_date(client, day, OPEN_RESULT_TIMEZONE)
+                CapitalPosition.objects.filter(
+                    pk__in=due_position_ids(sweep_due),
+                    status=CapitalPosition.Status.OPEN,
+                ).update(result_refresh_attempted_at=at)
+                usable, blank_terminal = consume_payloads(
+                    payloads,
+                    expected,
+                    due_match_ids,
+                    mode="date_sweep",
+                    day=day,
+                )
+                for match_id in (sweep_due - usable) | blank_terminal:
+                    schedule_due(match_id, at, error=DIRECTED_RESULT_FALLBACK)
+            # A successful sweep can settle a known fallback incidentally. Only
+            # one still-due directed recovery is attempted per date and wake.
+            fallback_due = sorted(
+                (
+                    match_id
+                    for match_id in due_match_ids
+                    if CapitalPosition.objects.filter(
+                        pk__in=due_position_ids((match_id,)),
+                        status=CapitalPosition.Status.OPEN,
+                        next_result_check_at__lte=at,
+                        result_refresh_error__startswith=DIRECTED_RESULT_FALLBACK,
+                    ).exists()
+                ),
+                key=debt_priority,
+            )
+            if not fallback_due:
+                continue
+            match_id = fallback_due[0]
+            external_id = refs[match_id].external_id
+            active_mode = "directed_id_fallback"
+            active_match_ids = {match_id}
+            calls_before_attempt = client.calls
+            if hasattr(client, "set_audit_context"):
+                client.set_audit_context(
+                    "OPEN_RESULT_BATCH",
+                    f"open-results:id:{external_id}:{at.isoformat()}",
+                    request_metadata={
+                        "acquisition": "directed_id_fallback",
+                        "reason": DIRECTED_RESULT_FALLBACK,
+                        "match_id": match_id,
+                        "kickoff_date_lima": day.isoformat(),
+                    },
+                    represented_fixture_count=1,
+                )
+            payloads = fixture_by_id(client, external_id)
+            CapitalPosition.objects.filter(
+                pk__in=due_position_ids((match_id,)),
+                status=CapitalPosition.Status.OPEN,
+            ).update(result_refresh_attempted_at=at)
+            usable, blank_terminal = consume_payloads(
+                payloads,
+                {external_id: match_by_id[match_id]},
+                {match_id},
+                mode="directed_id_fallback",
+                day=day,
+            )
+            if match_id not in usable or match_id in blank_terminal:
+                schedule_due(
+                    match_id,
+                    at + timedelta(minutes=30),
+                    error=DIRECTED_RESULT_FALLBACK,
+                )
     except APIFootballError as error:
         errors.append(f"{type(error).__name__}:{error}"[:500])
-        _mark_provider_degraded(
-            attempted_position_ids or admitted_position_ids,
-            at,
-            error,
-        )
+        # The current due work remains unresolved; never infer terminal truth
+        # from a blocked attempt or a provider error.
+        if active_mode == "directed_id_fallback":
+            if (
+                not isinstance(error, APIFootballOperationBudgetError)
+                or client is None
+                or client.calls > calls_before_attempt
+            ):
+                schedule_due(
+                    next(iter(active_match_ids)),
+                    at + timedelta(minutes=30),
+                    error=f"{DIRECTED_RESULT_FALLBACK}:{type(error).__name__}",
+                )
+        else:
+            affected = due_position_ids(active_match_ids)
+            _mark_provider_degraded(affected, at, error)
+            CapitalPosition.objects.filter(
+                pk__in=affected, status=CapitalPosition.Status.OPEN
+            ).update(next_result_check_at=at + timedelta(minutes=30))
     open_debt = CapitalPosition.objects.filter(
         pk__in=position_ids, status=CapitalPosition.Status.OPEN
     ).count()
@@ -972,7 +1305,7 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
     return RuntimeResult(
         status,
         settled=settled,
-        provider_calls=(client.calls if client is not None else calls),
+        provider_calls=(client.calls if client is not None else 0),
         open_debt=open_debt,
         errors=tuple(errors),
     )
@@ -985,9 +1318,9 @@ def run_automatic_runtime(
 
     at = at or timezone.now()
     configs = provision_automatic_configs()
-    execution = reconcile_execution_events(capture_run_id, at=at)
     local_settled = settle_locally_known_open_positions()
     refresh = refresh_open_result_debt(at=at, client_factory=client_factory)
+    execution = reconcile_execution_events(capture_run_id, at=at)
     status = (
         "DEGRADED"
         if refresh.status == "DEGRADED"
@@ -1003,6 +1336,7 @@ def run_automatic_runtime(
         config_ids=tuple(config.pk for config in configs),
         placed=execution.placed,
         not_placed=execution.not_placed,
+        pending_capacity=execution.pending_capacity,
         settled=local_settled + refresh.settled,
         provider_calls=refresh.provider_calls,
         open_debt=refresh.open_debt,

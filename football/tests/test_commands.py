@@ -9,6 +9,7 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 from django.utils import timezone
 
+from football.capture.contracts import CaptureConfig
 from football.management.commands.sync_football_catalog import (
     Command as CatalogCommand,
 )
@@ -19,11 +20,16 @@ from football.models import (
     Match,
     OddsObservation,
     OddsSnapshot,
+    ProviderCallAudit,
     Season,
     Team,
 )
-from football.providers.api_football import APIFootballQuotaReserveError
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballQuotaReserveError,
+)
 from football.providers.api_inkabet import InkabetResponseError
+from football.quota import quota_state
 from football.sync import sync_catalog_payloads
 
 from .helpers import (
@@ -36,6 +42,7 @@ from .helpers import (
     league_payload,
     odds_payload,
 )
+from .test_client import QueueOpener, Response, http_error, payload
 
 pytestmark = pytest.mark.django_db
 
@@ -117,6 +124,84 @@ def test_catalog_command_creates_idempotent_canonical_catalog_and_api_refs():
     )
     assert "calls=2" in output.getvalue()
     assert "daily_remaining=77" in output.getvalue()
+
+
+def test_manual_sync_persists_physical_audits_and_header_quota_authority():
+    headers = {
+        "x-ratelimit-requests-limit": "100",
+        "x-ratelimit-requests-remaining": "8",
+    }
+    opener = QueueOpener(
+        Response(payload([]), {**headers, "x-ratelimit-requests-remaining": "9"}),
+        Response(payload([{"id": 1, "name": "Match Winner"}]), headers),
+    )
+
+    def client_factory():
+        return APIFootballClient(
+            api_key="fictional", opener=opener, minimum_interval=0, max_retries=0
+        )
+
+    with mock.patch.object(
+        CatalogCommand, "client_class", staticmethod(client_factory)
+    ):
+        call_command("sync_football_catalog", stdout=StringIO())
+
+    audits = list(ProviderCallAudit.objects.order_by("id"))
+    assert len(audits) == 2
+    assert [row.endpoint_family for row in audits] == ["leagues", "odds/bets"]
+    assert [row.attempt_number for row in audits] == [1, 2]
+    assert all(
+        row.logical_identity == "manual-sync:sync_football_catalog" for row in audits
+    )
+    assert all(row.capability == "OTHER_EXPLICIT_MAINTENANCE" for row in audits)
+    assert all(
+        row.capture_run_id is None and row.maintenance_run_id is None for row in audits
+    )
+    assert [row.quota_remaining for row in audits] == [9, 8]
+    assert [row.quota_limit for row in audits] == [100, 100]
+    assert quota_state(timezone.now(), CaptureConfig.from_settings())["remaining"] == 8
+
+
+def test_manual_sync_retry_and_pagination_are_counted_once_per_physical_attempt():
+    opener = QueueOpener(
+        http_error(500),
+        Response(
+            payload([], current=1, total=2),
+            {
+                "x-ratelimit-requests-limit": "100",
+                "x-ratelimit-requests-remaining": "9",
+            },
+        ),
+        Response(payload([], current=2, total=2)),
+        Response(payload([{"id": 1, "name": "Match Winner"}])),
+    )
+
+    def client_factory():
+        return APIFootballClient(
+            api_key="fictional",
+            opener=opener,
+            minimum_interval=0,
+            max_retries=1,
+            max_pages=2,
+        )
+
+    with mock.patch.object(
+        CatalogCommand, "client_class", staticmethod(client_factory)
+    ):
+        call_command("sync_football_catalog", stdout=StringIO())
+
+    audits = list(ProviderCallAudit.objects.order_by("id"))
+    assert len(audits) == 4
+    assert [row.outcome for row in audits] == [
+        "TRANSIENT_RETRY",
+        "SUCCESS",
+        "SUCCESS",
+        "SUCCESS",
+    ]
+    assert [row.page_number for row in audits] == [1, 1, 2, 1]
+    assert [row.retry_number for row in audits] == [0, 1, 0, 0]
+    assert [row.quota_remaining for row in audits] == [None, 9, None, None]
+    assert quota_state(timezone.now(), CaptureConfig.from_settings())["remaining"] == 7
 
 
 def test_season_command_uses_api_ref_and_fixture_team_identity():

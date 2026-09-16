@@ -410,7 +410,7 @@ def test_three_capture_windows_are_independent_and_non_polling():
         "market-t30m",
     }
     assert not {item.intended_window for item in t6.items} & {"early", "middle"}
-    assert settings.FOOTBALL_CAPTURE_WAKE_SECONDS == 900
+    assert settings.FOOTBALL_CAPTURE_WAKE_SECONDS == 300
 
 
 def completed_capture(match, *, target_at, cutoff, observations_created):

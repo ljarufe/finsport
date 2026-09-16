@@ -469,15 +469,16 @@ def test_runtime_failure_persists_failed_classification(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_existing_weekly_owner_checks_readiness_before_interval(monkeypatch):
+def test_existing_weekly_owner_skips_readiness_before_interval(monkeypatch):
     from football import maintenance
 
     call = Mock(return_value={"full_calibrations": 0, "results": []})
     monkeypatch.setattr(lifecycle, "run_readiness_maintenance", call)
     monkeypatch.setattr(maintenance, "_weekly_due", lambda *a, **k: (False, None))
     result = maintenance.run_weekly_evaluation()
-    call.assert_called_once()
-    assert result["readiness"]["full_calibrations"] == 0
+    call.assert_not_called()
+    assert result["status"] == "NOT_DUE"
+    assert "readiness" not in result
 
 
 @pytest.mark.parametrize(

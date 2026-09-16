@@ -7,6 +7,8 @@ from football.models import (
     CaptureRun,
     CaptureWorkItem,
     CompetitionSourceRef,
+    Match,
+    MatchSourceRef,
     OddsObservation,
     OddsSnapshot,
     ReconciliationStatus,
@@ -20,9 +22,13 @@ from football.providers.api_football import (
     APIFootballPaginationError,
     APIFootballQuotaReserveError,
     APIFootballRateLimitError,
+    fixture_by_id,
+    fixtures_by_date,
+    relevant_fixture_payloads,
 )
 from football.providers.api_inkabet import InkabetClient
 from football.providers.inkabet_capture import capture_inkabet_matches
+from football.quota import dynamic_reserve
 from football.sync import FINISHED_STATUSES, sync_fixture_payloads, sync_odds_payloads
 
 from .contracts import CaptureResult
@@ -82,6 +88,7 @@ class CaptureExecutor:
     def _revalidate_under_lock(plan):
         runtime_now = timezone.now()
         plan.quota = quota_state(runtime_now, plan.config)
+        plan.reserve = dynamic_reserve(runtime_now, plan.config)
         planner = CapturePlanner(config=plan.config)
         for item in plan.items:
             if item.status != CaptureWorkItem.Status.PLANNED:
@@ -141,8 +148,13 @@ class CaptureExecutor:
                 item.estimated_max_cost = 0
                 continue
             item.estimated_min_cost = 1
-            item.estimated_max_cost = plan.config.worst_operation_cost
-        planner._admit(plan.items, plan.quota, allow_bootstrap=plan.allow_bootstrap)
+            item.estimated_max_cost = 1
+        planner._admit(
+            plan.items,
+            plan.quota,
+            plan.reserve,
+            allow_bootstrap=plan.allow_bootstrap,
+        )
 
     @staticmethod
     def _new_run(plan, trigger):
@@ -156,7 +168,7 @@ class CaptureExecutor:
             quota_limit=plan.quota.limit,
             quota_remaining_before=plan.quota.remaining,
             quota_observed_at=plan.quota.observed_at,
-            mandatory_reserve=plan.config.mandatory_reserve,
+            mandatory_reserve=plan.reserve.get("total", 0),
         )
 
     def _concurrent_result(self, plan, trigger):
@@ -194,46 +206,99 @@ class CaptureExecutor:
             plan=plan.as_dict(),
         )
 
-    def _execute_locked(self, plan, trigger):
-        run = self._new_run(plan, trigger)
-        work_rows = []
-        for rank, item in enumerate(plan.items, start=1):
-            work_rows.append(
-                CaptureWorkItem.objects.create(
-                    run=run,
-                    purpose=item.purpose,
-                    status=item.status,
-                    source=item.source,
-                    match=item.match,
-                    market=item.market,
-                    logical_identity=item.logical_identity,
-                    intended_window=item.intended_window,
-                    target_at=item.target_at,
-                    not_before=item.not_before,
-                    not_after=item.not_after,
-                    priority=rank,
-                    reason=item.reason or item.priority_reason,
-                    estimated_min_cost=item.estimated_min_cost,
-                    estimated_max_cost=item.estimated_max_cost,
-                    quota_before=plan.quota.as_dict(),
-                    completed_at=(
-                        None
-                        if item.status == CaptureWorkItem.Status.PLANNED
-                        else timezone.now()
-                    ),
+    @staticmethod
+    def _auditable_items(items):
+        """Keep new lifecycle evidence, not five-minute repeats of known state."""
+
+        auditable = []
+        seen_skips = set()
+        for rank, item in enumerate(items, start=1):
+            if item.status == CaptureWorkItem.Status.ALREADY_FULFILLED:
+                # The successful logical identity is already durable evidence.
+                continue
+            if item.status == CaptureWorkItem.Status.NOT_DUE and item.reason in {
+                "window has not opened",
+                "work is not due at actual executor time",
+            }:
+                # A future window does not become an audit event on every wake.
+                continue
+            if item.status != CaptureWorkItem.Status.PLANNED:
+                reason = item.reason or item.priority_reason
+                key = (item.logical_identity, item.status, reason)
+                if key in seen_skips:
+                    continue
+                seen_skips.add(key)
+                previous = (
+                    CaptureWorkItem.objects.filter(
+                        logical_identity=item.logical_identity
+                    )
+                    .order_by("-run_id", "-id")
+                    .values_list("status", "reason")
+                    .first()
                 )
+                if previous == (item.status, reason) or (
+                    item.status == CaptureWorkItem.Status.MISSED_WINDOW
+                    and previous is not None
+                    and previous[0] == CaptureWorkItem.Status.MISSED_WINDOW
+                ):
+                    continue
+            auditable.append((rank, item))
+        return auditable
+
+    def _execute_locked(self, plan, trigger):
+        auditable = self._auditable_items(plan.items)
+        plan_snapshot = plan.as_dict()
+        skipped = [
+            item.as_dict()
+            for item in plan.items
+            if item.status != CaptureWorkItem.Status.PLANNED
+        ]
+        if not auditable:
+            return CaptureResult(
+                run_id=None,
+                status=CaptureRun.Status.NO_WORK,
+                planning_at=plan.planning_at,
+                quota_before=plan.quota.as_dict(),
+                quota_after=plan.quota.as_dict(),
+                skipped_work=skipped,
+                plan=plan_snapshot,
             )
+        run = self._new_run(plan, trigger)
+        work_pairs = []
+        for rank, item in auditable:
+            row = CaptureWorkItem.objects.create(
+                run=run,
+                purpose=item.purpose,
+                status=item.status,
+                source=item.source,
+                match=item.match,
+                market=item.market,
+                logical_identity=item.logical_identity,
+                intended_window=item.intended_window,
+                target_at=item.target_at,
+                not_before=item.not_before,
+                not_after=item.not_after,
+                priority=rank,
+                reason=item.reason or item.priority_reason,
+                estimated_min_cost=item.estimated_min_cost,
+                estimated_max_cost=item.estimated_max_cost,
+                quota_before=plan.quota.as_dict(),
+                completed_at=(
+                    None
+                    if item.status == CaptureWorkItem.Status.PLANNED
+                    else timezone.now()
+                ),
+            )
+            work_pairs.append((item, row))
         result = CaptureResult(
             run_id=run.pk,
             status=CaptureRun.Status.RUNNING,
             planning_at=plan.planning_at,
             quota_before=plan.quota.as_dict(),
             quota_after=plan.quota.as_dict(),
-            plan=plan.as_dict(),
+            skipped_work=skipped,
+            plan=plan_snapshot,
         )
-        for item, row in zip(plan.items, work_rows, strict=True):
-            if item.status != CaptureWorkItem.Status.PLANNED:
-                result.skipped_work.append(item.as_dict())
         if not plan.executable:
             return self._finish(run, result, None)
         try:
@@ -248,7 +313,7 @@ class CaptureExecutor:
                 "component": "capture",
                 "operation": "create_provider_client",
             }
-            for item, row in zip(plan.items, work_rows, strict=True):
+            for item, row in work_pairs:
                 if item.status != CaptureWorkItem.Status.PLANNED:
                     continue
                 self._fail_row(row, CaptureWorkItem.Status.FAILED_PROVIDER, error)
@@ -257,7 +322,7 @@ class CaptureExecutor:
                 result.failed_work.append(item.as_dict() | {"status": row.status})
             return self._finish(run, result, None)
         halted_status = None
-        for item, row in zip(plan.items, work_rows, strict=True):
+        for item, row in work_pairs:
             if item.status != CaptureWorkItem.Status.PLANNED:
                 continue
             if halted_status is not None:
@@ -285,7 +350,7 @@ class CaptureExecutor:
                 )
         due_inkabet_matches = [
             item.match
-            for item, row in zip(plan.items, work_rows, strict=True)
+            for item, row in work_pairs
             if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
             and row.status
             in {
@@ -324,6 +389,63 @@ class CaptureExecutor:
         row.executed_at = timezone.now()
         row.quota_before = _quota_dict(client, plan.quota)
 
+        capability = {
+            CaptureWorkItem.Purpose.FIXTURE_REFRESH: "DAILY_FIXTURE_DISCOVERY",
+            CaptureWorkItem.Purpose.RESULT_REFRESH: "NONBET_RESULT_BATCH",
+        }.get(item.purpose)
+        if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE:
+            capability = {
+                "market-t30m": "ODDS_T30",
+                "market-t60m": "ODDS_T60",
+                "market-t6h": "ODDS_T6H",
+            }.get(item.intended_window, "OTHER_EXPLICIT_MAINTENANCE")
+        directed = (
+            item.match is not None
+            and item.purpose != CaptureWorkItem.Purpose.ODDS_CAPTURE
+        )
+        result_date = (
+            item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH and not directed
+        )
+        acquisition = (
+            "directed_id"
+            if directed
+            else (
+                "date_sweep"
+                if result_date
+                else (
+                    "date_discovery"
+                    if item.purpose == CaptureWorkItem.Purpose.FIXTURE_REFRESH
+                    else "odds"
+                )
+            )
+        )
+        if hasattr(client, "set_audit_context"):
+            client.set_audit_context(
+                capability,
+                item.logical_identity,
+                audit_links={
+                    "capture_run_id": row.run_id,
+                    "capture_work_item_id": row.pk,
+                },
+                request_metadata={
+                    "intended_window": item.intended_window,
+                    "acquisition": acquisition,
+                    **(
+                        {
+                            "kickoff_date_lima": item.params["date"],
+                            "relevant_fixture_ids": list(item.target_external_ids),
+                        }
+                        if result_date
+                        else {}
+                    ),
+                },
+                represented_fixture_count=(
+                    len(item.target_external_ids)
+                    if result_date
+                    else (1 if directed else None)
+                ),
+            )
+
         def guard(active_client):
             if (
                 plan.quota.basis == "BOUNDED_BOOTSTRAP"
@@ -345,18 +467,36 @@ class CaptureExecutor:
             remaining = active_client.daily_remaining
             if remaining is None:
                 remaining = max(0, plan.quota.remaining - active_client.calls)
-            reserve = (
-                plan.config.mandatory_reserve
-                if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
-                else 0
+            else:
+                remaining -= max(
+                    0,
+                    active_client.calls
+                    - getattr(
+                        active_client, "quota_observed_calls", active_client.calls
+                    ),
+                )
+            reserve_state = dynamic_reserve(timezone.now(), plan.config)
+            reserve = reserve_state["total"]
+            is_critical = item.purpose == CaptureWorkItem.Purpose.FIXTURE_REFRESH or (
+                item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
+                and item.intended_window == "market-t30m"
             )
-            if plan.quota.basis == "BOUNDED_BOOTSTRAP" and (
-                item.estimated_max_cost <= plan.config.bootstrap_max_attempts
-            ):
-                reserve = 0
+            if plan.quota.basis == "HEADER_STALE_EPOCH":
+                if active_client.daily_remaining is None:
+                    if (
+                        is_critical
+                        and plan.quota.stale_establishing_attempt_available
+                        and active_client.calls == calls_before
+                    ):
+                        return
+                    raise APIFootballQuotaReserveError(
+                        "Stale epoch establishing attempt was already consumed."
+                    )
+            if is_critical:
+                reserve = 0 if active_client.calls == calls_before else reserve
             if remaining - 1 < reserve:
                 raise APIFootballQuotaReserveError(
-                    "Provider attempt would cross the mandatory quota reserve."
+                    "Provider attempt would cross the dynamic critical reserve."
                 )
 
         client.attempt_guard = guard
@@ -533,8 +673,13 @@ class CaptureExecutor:
                 },
                 not payloads or created == 0,
             )
-        payloads = client.get_all("fixtures", item.params)
-        if item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH:
+        if item.match is not None:
+            payloads = fixture_by_id(client, item.external_id)
+        else:
+            payloads = fixtures_by_date(
+                client, item.params["date"], item.params["timezone"]
+            )
+        if item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH and item.match:
             api_ref = CompetitionSourceRef.objects.get(
                 source=item.source,
                 competition=item.match.season.competition,
@@ -568,14 +713,53 @@ class CaptureExecutor:
             reconciliation_status=ReconciliationStatus.RESOLVED,
         ).select_related("competition")
         competitions = {ref.external_id: ref.competition for ref in refs}
+        before_states = {}
+        if item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH:
+            target_ids = set(item.target_external_ids)
+            payloads = relevant_fixture_payloads(payloads, target_ids)
+            before_states = {
+                ref.match_id: (
+                    ref.match.kickoff,
+                    ref.match.status_short,
+                    ref.match.outcome,
+                    ref.match.home_score,
+                    ref.match.away_score,
+                )
+                for ref in MatchSourceRef.objects.filter(
+                    source=item.source,
+                    external_id__in=target_ids,
+                    match__isnull=False,
+                ).select_related("match")
+            }
         stats, _ = sync_fixture_payloads(payloads, competitions)
-        changed = stats.created + stats.updated
+        if item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH:
+            after_states = {
+                match.pk: (
+                    match.kickoff,
+                    match.status_short,
+                    match.outcome,
+                    match.home_score,
+                    match.away_score,
+                )
+                for match in Match.objects.filter(pk__in=before_states)
+            }
+            changed = sum(
+                before_states[match_id] != state
+                for match_id, state in after_states.items()
+            )
+            resolved = sum(
+                not before_states[match_id][2] and bool(state[2])
+                for match_id, state in after_states.items()
+            )
+        else:
+            changed = stats.created + stats.updated
+            resolved = 0
         return (
             {
                 "observations_created": 0,
                 "snapshots_changed": 0,
                 "fixtures_changed": changed,
-                "matches_resolved": 0,
+                "matches_resolved": resolved,
             },
             not payloads or changed == 0,
         )

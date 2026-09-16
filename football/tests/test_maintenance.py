@@ -1,24 +1,35 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from django.test import override_settings
 
+from football.capture.contracts import CaptureConfig
 from football.maintenance import (
+    _bounded_client,
     maintenance_status,
     run_catalogue_maintenance,
     run_season_maintenance,
     run_weekly_evaluation,
 )
-from football.models import MaintenanceRun, Match
+from football.models import MaintenanceRun, Match, ProviderCallAudit
+from football.providers.api_football import (
+    APIFootballClient,
+    APIFootballOperationBudgetError,
+    APIFootballQuotaReserveError,
+)
+from football.quota import quota_state
 
 from .helpers import catalog_season, competition, fixture_payload, league_payload
 from .prediction_helpers import create_synthetic_league, create_synthetic_odds
+from .test_client import QueueOpener, Response, payload
 
 pytestmark = pytest.mark.django_db
 
 MAINTENANCE_SETTINGS = {
     "FOOTBALL_CAPTURE_MANDATORY_RESERVE": 0,
+    "FOOTBALL_CAPTURE_DISCOVERY_ENABLED": False,
     "FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS": 3,
     "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS": 2,
     "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES": 1,
@@ -118,11 +129,130 @@ def test_catalogue_bounded_bootstrap_waives_unknown_reserve():
 
     assert result["status"] == MaintenanceRun.Status.SUCCESS
     assert result["summary"]["provider_attempts"] == 2
-    assert FakeMaintenanceClient.instances[0].kwargs["daily_reserve"] == 10
+    assert FakeMaintenanceClient.instances[0].kwargs["daily_reserve"] == 0
     assert FakeMaintenanceClient.instances[0].requests == [
         ("leagues", {}),
         ("odds/bets", {}),
     ]
+
+
+def _maintenance_header(at, remaining):
+    return ProviderCallAudit.objects.create(
+        capability=ProviderCallAudit.Capability.OTHER_EXPLICIT_MAINTENANCE,
+        logical_identity="prior-header",
+        endpoint_family="fixtures",
+        started_at=at - timedelta(minutes=1),
+        completed_at=at - timedelta(minutes=1),
+        outcome="SUCCESS",
+        quota_limit=100,
+        quota_remaining=remaining,
+        quota_observed_at=at - timedelta(minutes=1),
+    )
+
+
+def _real_maintenance_client(opener):
+    def factory(**kwargs):
+        return APIFootballClient(
+            api_key="fictional", opener=opener, minimum_interval=0, **kwargs
+        )
+
+    return factory
+
+
+@pytest.mark.parametrize("component", ["fixture", "t30", "open_result"])
+@override_settings(**MAINTENANCE_SETTINGS)
+def test_maintenance_rechecks_each_critical_reserve_component_after_lower_header(
+    component, monkeypatch
+):
+    at = datetime(2026, 9, 16, 18, tzinfo=UTC)
+    _maintenance_header(at, 3)
+    opener = QueueOpener(
+        Response(
+            payload([]),
+            {
+                "x-ratelimit-requests-limit": "100",
+                "x-ratelimit-requests-remaining": "1",
+            },
+        ),
+        Response(payload([{"id": 1, "name": "Match Winner"}])),
+    )
+    reserve = {"fixture": 0, "t30": 0, "open_result": 0, "total": 1}
+    reserve[component] = 1
+    monkeypatch.setattr("football.maintenance.dynamic_reserve", lambda *_: reserve)
+
+    with mock.patch("football.maintenance.timezone.now", return_value=at):
+        result = run_catalogue_maintenance(
+            at=at, client_factory=_real_maintenance_client(opener)
+        )
+
+    assert result["status"] == MaintenanceRun.Status.SKIPPED_QUOTA
+    assert len(opener.requests) == 1
+    run = MaintenanceRun.objects.get(pk=result["run_id"])
+    assert run.provider_attempts == 1
+    audit = ProviderCallAudit.objects.get(maintenance_run=run)
+    assert audit.quota_remaining == 1
+    assert quota_state(at, CaptureConfig.from_settings())["remaining"] == 1
+
+
+@override_settings(**MAINTENANCE_SETTINGS)
+def test_maintenance_second_call_uses_post_header_surplus_and_audits_once(monkeypatch):
+    at = datetime(2026, 9, 16, 18, tzinfo=UTC)
+    _maintenance_header(at, 4)
+    opener = QueueOpener(
+        Response(
+            payload([]),
+            {
+                "x-ratelimit-requests-limit": "100",
+                "x-ratelimit-requests-remaining": "3",
+            },
+        ),
+        Response(payload([{"id": 1, "name": "Match Winner"}])),
+    )
+    monkeypatch.setattr("football.maintenance.dynamic_reserve", lambda *_: {"total": 1})
+
+    with mock.patch("football.maintenance.timezone.now", return_value=at):
+        result = run_catalogue_maintenance(
+            at=at, client_factory=_real_maintenance_client(opener)
+        )
+
+    assert result["status"] == MaintenanceRun.Status.SUCCESS
+    assert len(opener.requests) == 2
+    run = MaintenanceRun.objects.get(pk=result["run_id"])
+    assert run.provider_attempts == 2
+    audits = list(ProviderCallAudit.objects.filter(maintenance_run=run).order_by("id"))
+    assert [row.endpoint_family for row in audits] == ["leagues", "odds/bets"]
+    assert [row.quota_remaining for row in audits] == [3, None]
+    assert quota_state(at, CaptureConfig.from_settings())["remaining"] == 2
+
+
+@override_settings(**MAINTENANCE_SETTINGS)
+def test_maintenance_attempt_bound_and_stale_header_remain_fail_closed():
+    at = datetime(2026, 9, 16, 18, tzinfo=UTC)
+    _maintenance_header(at, 4)
+    opener = QueueOpener(
+        Response(payload([], current=1, total=2)),
+        Response(payload([], current=2, total=2)),
+    )
+    with mock.patch("football.maintenance.timezone.now", return_value=at):
+        client = _bounded_client(
+            _real_maintenance_client(opener),
+            at=at,
+            maximum_attempts=1,
+            maximum_pages=2,
+        )
+        with pytest.raises(APIFootballOperationBudgetError):
+            client.get_all("leagues")
+    assert len(opener.requests) == 1
+    assert ProviderCallAudit.objects.filter(logical_identity="maintenance").count() == 1
+
+    later = at + timedelta(days=1)
+    with pytest.raises(APIFootballQuotaReserveError):
+        _bounded_client(
+            _real_maintenance_client(QueueOpener()),
+            at=later,
+            maximum_attempts=1,
+            maximum_pages=1,
+        )
 
 
 @override_settings(**MAINTENANCE_SETTINGS)

@@ -9,6 +9,7 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
+from football.capital.policies import FLAT_UNIT
 from football.historical.service import STRATEGY_VERSION as SPORTING_STRATEGY
 from football.historical.service import request_historical_bootstrap
 from football.historical_market.contracts import (
@@ -53,6 +54,9 @@ from football.maintenance import (
 )
 from football.models import (
     Bookmaker,
+    CapitalExecutionBasis,
+    CapitalPosition,
+    CapitalResultObservation,
     Competition,
     HistoricalCoverage,
     HistoricalMarketCoverage,
@@ -70,6 +74,7 @@ from football.models import (
     TeamSourceRef,
 )
 from football.providers.football_data import _external_id
+from football.tests.test_capital_runtime_v2 import make_manual_config
 
 pytestmark = pytest.mark.django_db
 
@@ -614,6 +619,57 @@ def test_current_recovery_conflicts_preserve_canonical_result_and_market(tmp_pat
     evidence = HistoricalMarketEvidence.objects.get(match=match)
     assert (match.home_score, match.away_score) == (3, 0)
     assert evidence.home_price == Decimal("9.0000")
+
+
+def test_current_recovery_preserves_open_capital_result_but_adds_historical_market(
+    tmp_path,
+):
+    competition, season = _competition(year=2024, current=True)
+    home, away = _teams(competition)
+    match = _match(season, home, away, scores=(None, None), status="NS")
+    config = make_manual_config(policy_code=FLAT_UNIT, policy_config={"unit": "1"})
+    basis = CapitalExecutionBasis.objects.create(
+        config=config,
+        match=match,
+        decision_policy_code="MODAL_ALL",
+        decision_policy_version="test-v1",
+        action="HOME",
+        reason="TEST",
+        execution_at=match.kickoff - timedelta(minutes=30),
+        evidence_not_before=match.kickoff - timedelta(minutes=30),
+        evidence_cutoff=match.kickoff - timedelta(minutes=30),
+    )
+    position = CapitalPosition.objects.create(
+        config=config,
+        match=match,
+        execution_basis=basis,
+        placed_at=match.kickoff - timedelta(minutes=20),
+        requested_stake=1,
+        applied_stake=1,
+        placement_equity_before=100,
+        placement_reserved_before=0,
+        placement_available_before=100,
+        placement_equity_after=100,
+        placement_reserved_after=1,
+        placement_available_after=99,
+    )
+    _write_cache(competition, season, tmp_path, _europe_csv(), current=True)
+
+    result = recover_current_season(
+        competition, season, apply=True, cache_only=True, cache_root=tmp_path
+    )
+
+    match.refresh_from_db()
+    position.refresh_from_db()
+    assert result["counts"]["PRESERVE_OPEN_CAPITAL_RESULT_DEBT"] == 1
+    assert result["counts"]["CREATE_HISTORICAL_1X2"] == 1
+    assert match.status_short == "NS"
+    assert match.outcome == ""
+    assert (match.home_score, match.away_score) == (None, None)
+    assert position.status == CapitalPosition.Status.OPEN
+    assert not CapitalResultObservation.objects.filter(match=match).exists()
+    assert HistoricalMarketEvidence.objects.filter(match=match).exists()
+    assert not OddsObservation.objects.filter(match=match).exists()
 
 
 def test_current_exact_match_ref_wins_over_kickoff_drift(tmp_path):

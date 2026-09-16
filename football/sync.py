@@ -31,7 +31,7 @@ API_FOOTBALL_BASE_URL = "https://v3.football.api-sports.io/"
 INKABET_CODE = "inkabet"
 INKABET_NAME = "Inkabet"
 INKABET_BASE_URL = "https://d-cf.inkabetplayground.net/api/sb/v1/"
-FINISHED_STATUSES = {"FT", "AET", "PEN", "AWD", "WO"}
+FINISHED_STATUSES = {"FT", "ET", "P", "AET", "PEN", "AWD", "WO"}
 MATCH_WINNER_NAMES = {"match winner", "1x2"}
 
 
@@ -348,23 +348,21 @@ def _score_pair(score, period):
 def _fixture_outcome(item, status_short):
     if status_short not in FINISHED_STATUSES:
         return ""
-    teams = item.get("teams") or {}
-    home_winner = (teams.get("home") or {}).get("winner")
-    away_winner = (teams.get("away") or {}).get("winner")
-    if home_winner is True:
-        return Match.OUTCOME_HOME
-    if away_winner is True:
-        return Match.OUTCOME_AWAY
-    goals = item.get("goals") or {}
-    home_score = goals.get("home")
-    away_score = goals.get("away")
+    score = item.get("score") or {}
+    fulltime = score.get("fulltime") or {}
+    home_score = fulltime.get("home")
+    away_score = fulltime.get("away")
+    if home_score is None or away_score is None:
+        if status_short in {"ET", "P", "AET", "PEN"}:
+            return ""
+        goals = item.get("goals") or {}
+        home_score = goals.get("home")
+        away_score = goals.get("away")
     if home_score is not None and away_score is not None:
         if home_score > away_score:
             return Match.OUTCOME_HOME
         if away_score > home_score:
             return Match.OUTCOME_AWAY
-        return Match.OUTCOME_DRAW
-    if home_winner is False and away_winner is False:
         return Match.OUTCOME_DRAW
     return ""
 

@@ -1,7 +1,11 @@
+import ast
 import io
 import json
 import socket
+from datetime import date
+from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -14,6 +18,9 @@ from football.providers.api_football import (
     APIFootballRateLimitError,
     APIFootballResponseError,
     APIFootballTransientError,
+    fixture_by_id,
+    fixtures_by_date,
+    relevant_fixture_payloads,
 )
 
 
@@ -100,6 +107,48 @@ def test_success_empty_response_and_quota_headers():
     assert request.method == "GET"
     assert timeout == api.timeout
     assert "fictional-provider-secret" not in request.full_url
+
+
+def test_supported_fixture_helpers_use_exact_physical_query_shapes():
+    opener = QueueOpener(Response(payload()), Response(payload()))
+    api = client(opener)
+
+    assert fixtures_by_date(api, date(2026, 9, 16), "America/Lima") == []
+    assert fixture_by_id(api, "1570391") == []
+    assert [
+        parse_qs(urlsplit(request.full_url).query) for request, _ in opener.requests
+    ] == [
+        {"date": ["2026-09-16"], "timezone": ["America/Lima"]},
+        {"id": ["1570391"]},
+    ]
+    broad = [
+        {"fixture": {"id": 1570391}},
+        {"fixture": {"id": 999999}},
+    ]
+    assert relevant_fixture_payloads(broad, {"1570391"}) == broad[:1]
+
+
+def test_automatic_fixture_consumers_cannot_construct_unsupported_plural_id_query():
+    root = Path(__file__).resolve().parents[2]
+    consumers = (
+        "football/capture/planner.py",
+        "football/capture/executor.py",
+        "football/capital/runtime.py",
+        "football/maintenance.py",
+        "football/pipeline/service.py",
+        "football/tasks.py",
+        "football/management/commands/sync_football_day.py",
+    )
+    for relative_path in consumers:
+        tree = ast.parse((root / relative_path).read_text())
+        plural_query_keys = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for key in node.keys
+            if isinstance(key, ast.Constant) and key.value == "ids"
+        ]
+        assert not plural_query_keys, (relative_path, plural_query_keys)
 
 
 def test_missing_configuration_has_explicit_causal_class():

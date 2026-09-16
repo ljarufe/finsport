@@ -3,6 +3,7 @@
 import json
 import socket
 import time
+from datetime import date
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -61,6 +62,70 @@ class APIFootballOperationBudgetError(APIFootballError):
     failure_kind = "provider_budget"
 
 
+FIXTURE_TIMEZONE = "America/Lima"
+AUDIT_SECRET_KEYS = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "authorization",
+)
+
+
+def _safe_audit_metadata(value, *, depth=0):
+    if depth > 3:
+        return "<truncated>"
+    if isinstance(value, dict):
+        return {
+            sanitize_text(key, 80): (
+                "<redacted>"
+                if any(marker in str(key).casefold() for marker in AUDIT_SECRET_KEYS)
+                else _safe_audit_metadata(item, depth=depth + 1)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_audit_metadata(item, depth=depth + 1) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return sanitize_text(value, 200)
+
+
+def fixture_date_params(day, timezone_name):
+    """The supported plan's date-shaped fixture request."""
+
+    return {
+        "date": day.isoformat() if isinstance(day, date) else str(day),
+        "timezone": str(timezone_name),
+    }
+
+
+def fixture_id_params(fixture_id):
+    """The supported plan's singular directed fixture request."""
+
+    return {"id": str(fixture_id)}
+
+
+def fixtures_by_date(client, day, timezone_name=FIXTURE_TIMEZONE):
+    return client.get_all("fixtures", fixture_date_params(day, timezone_name))
+
+
+def fixture_by_id(client, fixture_id):
+    return client.get_all("fixtures", fixture_id_params(fixture_id))
+
+
+def relevant_fixture_payloads(payloads, external_ids):
+    """Keep only known Finsport fixtures before canonical domain sync."""
+
+    expected = {str(external_id) for external_id in external_ids}
+    return [
+        item
+        for item in payloads
+        if str((item.get("fixture") or {}).get("id")) in expected
+    ]
+
+
 class APIFootballClient:
     def __init__(
         self,
@@ -76,6 +141,10 @@ class APIFootballClient:
         sleep=None,
         monotonic=None,
         attempt_guard=None,
+        capability="OTHER_EXPLICIT_MAINTENANCE",
+        logical_identity="unclassified",
+        audit_links=None,
+        request_metadata=None,
     ):
         self.api_key = api_key if api_key is not None else settings.API_FOOTBALL_KEY
         if not self.api_key:
@@ -103,6 +172,12 @@ class APIFootballClient:
         self._sleep = sleep or time.sleep
         self._monotonic = monotonic or time.monotonic
         self.attempt_guard = attempt_guard
+        self.capability = capability
+        self.logical_identity = logical_identity
+        self.audit_links = dict(audit_links or {})
+        self.request_metadata = dict(request_metadata or {})
+        self.represented_fixture_count = None
+        self.audit_enabled = False
         self._last_request_at = None
 
         self.calls = 0
@@ -114,6 +189,74 @@ class APIFootballClient:
         self.minute_remaining = None
         self.quota_observed_at = None
         self.quota_observed_calls = 0
+        self.minute_observed_calls = 0
+
+    def set_audit_context(
+        self,
+        capability,
+        logical_identity,
+        *,
+        audit_links=None,
+        request_metadata=None,
+        represented_fixture_count=None,
+    ):
+        self.capability = capability
+        self.logical_identity = logical_identity
+        self.audit_links = dict(audit_links or {})
+        self.request_metadata = dict(request_metadata or {})
+        if represented_fixture_count is not None and (
+            isinstance(represented_fixture_count, bool)
+            or not isinstance(represented_fixture_count, int)
+            or represented_fixture_count < 0
+        ):
+            raise ValueError("represented_fixture_count must be a nonnegative integer")
+        self.represented_fixture_count = represented_fixture_count
+        self.audit_enabled = True
+
+    def _start_audit(self, endpoint, params, attempt):
+        if not self.audit_enabled:
+            return None
+        from football.models import ProviderCallAudit
+
+        safe_params = _safe_audit_metadata(params or {})
+        fixture_count = self.represented_fixture_count
+        if fixture_count is None:
+            fixture_count = int(
+                bool((params or {}).get("fixture") or (params or {}).get("id"))
+            )
+        return ProviderCallAudit.objects.create(
+            capability=self.capability,
+            logical_identity=self.logical_identity,
+            endpoint_family=endpoint,
+            request_metadata={
+                **safe_params,
+                **_safe_audit_metadata(self.request_metadata),
+            },
+            fixture_count=fixture_count,
+            attempt_number=self.calls,
+            page_number=self._positive_int((params or {}).get("page"), 1),
+            retry_number=attempt,
+            started_at=timezone.now(),
+            capture_run_id=self.audit_links.get("capture_run_id"),
+            capture_work_item_id=self.audit_links.get("capture_work_item_id"),
+            maintenance_run_id=self.audit_links.get("maintenance_run_id"),
+        )
+
+    def _finish_audit(self, audit, outcome, *, http_status=None, retry_reason=""):
+        if audit is None:
+            return
+        audit.completed_at = timezone.now()
+        audit.outcome = outcome
+        audit.http_status = http_status
+        audit.retry_reason = retry_reason[:120]
+        if self.quota_observed_calls == self.calls:
+            audit.quota_limit = self.daily_limit
+            audit.quota_remaining = self.daily_remaining
+            audit.quota_observed_at = self.quota_observed_at
+        if self.minute_observed_calls == self.calls:
+            audit.minute_limit = self.minute_limit
+            audit.minute_remaining = self.minute_remaining
+        audit.save()
 
     def get_all(self, endpoint, params=None):
         params = dict(params or {})
@@ -172,6 +315,7 @@ class APIFootballClient:
             self._guard_daily_reserve(endpoint)
             self._pace()
             self.calls += 1
+            audit = self._start_audit(endpoint, params, attempt)
             response_metadata = {"endpoint_family": endpoint}
             try:
                 with self._opener(request, timeout=self.timeout) as response:
@@ -192,23 +336,39 @@ class APIFootballClient:
                     http_status=error.code,
                 )
                 if error.code in (401, 403):
+                    self._finish_audit(
+                        audit, "AUTHENTICATION_ERROR", http_status=error.code
+                    )
                     raise APIFootballAuthenticationError(
                         f"API-Football rejected authentication (HTTP {error.code}).",
                         diagnostic_context=diagnostic_context,
                     ) from error
                 if error.code == 429:
+                    self._finish_audit(audit, "RATE_LIMITED", http_status=error.code)
                     raise APIFootballRateLimitError(
                         "API-Football rate limit reached (HTTP 429).",
                         diagnostic_context=diagnostic_context,
                     ) from error
                 if 500 <= error.code < 600:
                     if attempt < self.max_retries:
+                        self._finish_audit(
+                            audit,
+                            "TRANSIENT_RETRY",
+                            http_status=error.code,
+                            retry_reason="HTTP_5XX",
+                        )
                         continue
+                    self._finish_audit(
+                        audit, "TRANSIENT_FAILURE", http_status=error.code
+                    )
                     raise APIFootballTransientError(
                         f"API-Football failed after bounded retries (HTTP {error.code}).",
                         failure_kind="provider_http",
                         diagnostic_context=diagnostic_context,
                     ) from error
+                self._finish_audit(
+                    audit, "DETERMINISTIC_HTTP_ERROR", http_status=error.code
+                )
                 raise APIFootballResponseError(
                     f"API-Football request failed (HTTP {error.code}).",
                     failure_kind="provider_http",
@@ -216,11 +376,21 @@ class APIFootballClient:
                 ) from error
             except (TimeoutError, socket.timeout, URLError) as error:
                 if attempt < self.max_retries:
+                    self._finish_audit(
+                        audit,
+                        "TRANSIENT_RETRY",
+                        retry_reason=error.__class__.__name__,
+                    )
                     continue
                 transport_category = (
                     "timeout"
                     if isinstance(error, (TimeoutError, socket.timeout))
                     else "unreachable"
+                )
+                self._finish_audit(
+                    audit,
+                    "TRANSIENT_FAILURE",
+                    retry_reason=error.__class__.__name__,
                 )
                 raise APIFootballTransientError(
                     "API-Football timed out or was unreachable after bounded retries.",
@@ -231,6 +401,7 @@ class APIFootballClient:
                     },
                 ) from error
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                self._finish_audit(audit, "SCHEMA_ERROR")
                 raise APIFootballResponseError(
                     "API-Football returned an invalid JSON response.",
                     failure_kind="provider_schema_drift",
@@ -254,6 +425,11 @@ class APIFootballClient:
                     "free plans do not have access" in error_summary.casefold()
                     or "limited to" in error_summary.casefold()
                 ):
+                    self._finish_audit(
+                        audit,
+                        "PLAN_ACCESS_DENIED",
+                        http_status=response_metadata.get("http_status"),
+                    )
                     raise APIFootballResponseError(
                         "API-Football denied the requested season/date under "
                         "the current plan.",
@@ -266,6 +442,11 @@ class APIFootballClient:
                         f"API-Football reported: {error_summary}",
                         500,
                     )
+                self._finish_audit(
+                    audit,
+                    "PROVIDER_APPLICATION_ERROR",
+                    http_status=response_metadata.get("http_status"),
+                )
                 raise APIFootballResponseError(
                     message,
                     failure_kind="provider_application_error",
@@ -274,6 +455,11 @@ class APIFootballClient:
             if not isinstance(payload, dict) or not isinstance(
                 payload.get("response"), list
             ):
+                self._finish_audit(
+                    audit,
+                    "SCHEMA_ERROR",
+                    http_status=response_metadata.get("http_status"),
+                )
                 raise APIFootballResponseError(
                     "API-Football returned an unexpected response shape.",
                     failure_kind="provider_schema_drift",
@@ -290,6 +476,11 @@ class APIFootballClient:
                     },
                 )
             self.pages += 1
+            self._finish_audit(
+                audit,
+                "SUCCESS",
+                http_status=response_metadata.get("http_status", 200),
+            )
             return payload
 
         raise APIFootballTransientError("API-Football retry bound was exhausted.")
@@ -356,9 +547,17 @@ class APIFootballClient:
         self.minute_remaining = self._optional_int(
             normalized.get("x-ratelimit-remaining"), self.minute_remaining
         )
-        if "x-ratelimit-requests-remaining" in normalized:
+        if (
+            self._optional_int(normalized.get("x-ratelimit-requests-remaining"), None)
+            is not None
+        ):
             self.quota_observed_at = timezone.now()
             self.quota_observed_calls = self.calls
+        if (
+            self._optional_int(normalized.get("x-ratelimit-remaining"), None)
+            is not None
+        ):
+            self.minute_observed_calls = self.calls
 
     @staticmethod
     def _optional_int(value, default):
