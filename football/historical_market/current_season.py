@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from football.historical.reconciliation import _normalized_team_name
 from football.models import (
+    CapitalPosition,
     HistoricalMarketEvidence,
     HistoricalMarketUnavailable,
     Match,
@@ -419,8 +420,13 @@ def recover_current_season(
             if _result_conflicts(match, row):
                 counts["RESULT_CONFLICT"] += 1
                 continue
-            result_filled = apply and _fill_result(match, row)
-            if result_filled:
+            open_capital = CapitalPosition.objects.filter(
+                match=match, status=CapitalPosition.Status.OPEN
+            ).exists()
+            result_filled = apply and not open_capital and _fill_result(match, row)
+            if open_capital:
+                counts["PRESERVE_OPEN_CAPITAL_RESULT_DEBT"] += 1
+            elif result_filled:
                 counts["FILL_MISSING_RESULT"] += 1
             else:
                 counts["PRESERVE_EXISTING_RESULT"] += 1

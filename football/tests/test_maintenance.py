@@ -19,6 +19,7 @@ pytestmark = pytest.mark.django_db
 
 MAINTENANCE_SETTINGS = {
     "FOOTBALL_CAPTURE_MANDATORY_RESERVE": 0,
+    "FOOTBALL_CAPTURE_DISCOVERY_ENABLED": False,
     "FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS": 3,
     "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS": 2,
     "FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES": 1,
@@ -118,7 +119,7 @@ def test_catalogue_bounded_bootstrap_waives_unknown_reserve():
 
     assert result["status"] == MaintenanceRun.Status.SUCCESS
     assert result["summary"]["provider_attempts"] == 2
-    assert FakeMaintenanceClient.instances[0].kwargs["daily_reserve"] == 10
+    assert FakeMaintenanceClient.instances[0].kwargs["daily_reserve"] == 0
     assert FakeMaintenanceClient.instances[0].requests == [
         ("leagues", {}),
         ("odds/bets", {}),

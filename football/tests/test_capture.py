@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -18,11 +19,13 @@ from football.models import (
     CaptureRun,
     CaptureWorkItem,
     Match,
+    MatchSourceRef,
     OddsMarket,
     OddsObservation,
     OddsSnapshot,
     PipelineRun,
     PredictionExperiment,
+    ProviderCallAudit,
 )
 from football.pipeline.service import _prediction_candidates, run_pipeline
 from football.providers.api_football import (
@@ -43,6 +46,7 @@ from .helpers import (
     inkabet_mw3w_payload,
     odds_payload,
 )
+from .test_client import QueueOpener, Response, payload
 
 pytestmark = pytest.mark.django_db
 
@@ -211,7 +215,12 @@ def create_match(*, league_id, name, kickoff, status="NS"):
 )
 @override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
-    t6 = timezone.now().replace(microsecond=0)
+    # Keep all three optional acquisitions inside one UTC quota epoch.
+    t6 = (
+        (timezone.now() + timedelta(days=1))
+        .astimezone(UTC)
+        .replace(hour=12, minute=0, second=0, microsecond=0)
+    )
     kickoff = t6 + timedelta(hours=6)
     match, _ = create_match(league_id=39, name="Current League", kickoff=kickoff)
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
@@ -285,7 +294,7 @@ def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
 @override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
     t6 = datetime(2026, 9, 9, 12, tzinfo=UTC)
-    kickoff = t6 + timedelta(hours=6)
+    kickoff = t6 + timedelta(minutes=30)
     match, _ = create_match(league_id=39, name="Bootstrap League", kickoff=kickoff)
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
     capture_calls = []
@@ -321,22 +330,10 @@ def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
     model_sets = {
         tuple(config["model_codes"])
         for config in PredictionExperiment.objects.filter(
-            intended_window="market-t6h"
+            intended_window="market-t30m"
         ).values_list("config", flat=True)
     }
     assert model_sets == {("MARKET_CONSENSUS",), ("MODERNIZED_R45",)}
-
-    next_plan = run_capture(
-        at=kickoff - timedelta(hours=1),
-        dry_run=True,
-    )
-    t60_item = next(
-        item
-        for item in next_plan.plan["items"]
-        if item["intended_window"] == "market-t60m"
-    )
-    assert next_plan.quota_before["basis"] == "HEADER_CURRENT_UTC_EPOCH"
-    assert t60_item["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
 
 
 @override_settings(
@@ -352,7 +349,7 @@ def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
 )
 def test_headerless_failed_scheduler_bootstrap_is_not_repeated(monkeypatch):
     t6 = datetime(2026, 9, 9, 12, tzinfo=UTC)
-    kickoff = t6 + timedelta(hours=6)
+    kickoff = t6 + timedelta(minutes=30)
     create_match(league_id=39, name="Headerless League", kickoff=kickoff)
 
     class HeaderlessFailingClient(FakeCaptureClient):
@@ -706,7 +703,7 @@ def test_temporal_late_missed_and_kickoff_reschedule_identity():
         }
     )
 )
-def test_quota_reserve_blocks_without_provider_call():
+def test_fixed_reserve_no_longer_blocks_minimal_surplus_call():
     now = timezone.now().replace(microsecond=0)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
@@ -720,9 +717,11 @@ def test_quota_reserve_blocks_without_provider_call():
 
     result = run_capture(at=now, client_factory=FakeCaptureClient)
 
-    assert result.provider_attempts == 0
-    assert result.skipped_work[0]["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
-    assert FakeCaptureClient.instances == []
+    assert result.provider_attempts == 1
+    assert not any(
+        item["status"] == CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET
+        for item in result.skipped_work
+    )
 
 
 @override_settings(
@@ -736,24 +735,31 @@ def test_quota_reserve_blocks_without_provider_call():
     )
 )
 def test_explicit_bootstrap_is_bounded_to_one_attempt():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
 
-    blocked = run_capture(at=now, client_factory=FakeCaptureClient)
-    executed = run_capture(
-        at=now,
-        allow_bootstrap=True,
-        client_factory=FakeCaptureClient,
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        blocked = run_capture(at=now, client_factory=FakeCaptureClient)
+        blocked_again = run_capture(at=now, client_factory=FakeCaptureClient)
+        executed = run_capture(
+            at=now,
+            allow_bootstrap=True,
+            client_factory=FakeCaptureClient,
+        )
 
     assert blocked.provider_attempts == 0
-    assert blocked.skipped_work[0]["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
-    assert blocked.skipped_work[0]["reason"] == (
-        "optional odds bootstrap requires explicit opt-in"
+    assert blocked.run_id is not None
+    assert blocked_again.status == CaptureRun.Status.NO_WORK
+    assert blocked_again.run_id is None
+    assert (
+        CaptureWorkItem.objects.filter(
+            status=CaptureWorkItem.Status.QUOTA_RESERVE
+        ).count()
+        == 1
     )
-    assert executed.provider_attempts == 1
     assert executed.quota_before["basis"] == "BOUNDED_BOOTSTRAP"
+    assert executed.provider_attempts == 1
 
 
 @override_settings(
@@ -766,22 +772,25 @@ def test_explicit_bootstrap_is_bounded_to_one_attempt():
     )
 )
 def test_executor_revalidates_optional_bootstrap_opt_in_under_lock():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     config = CaptureConfig.from_settings()
     stale_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
     assert stale_plan.executable
     stale_plan.allow_bootstrap = False
 
-    result = CaptureExecutor(client_factory=FakeCaptureClient).execute(
-        stale_plan, trigger=CaptureRun.Trigger.MANUAL
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        result = CaptureExecutor(client_factory=FakeCaptureClient).execute(
+            stale_plan, trigger=CaptureRun.Trigger.MANUAL
+        )
 
     assert result.provider_attempts == 0
-    assert result.skipped_work[0]["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
-    assert result.skipped_work[0]["reason"] == (
-        "optional odds bootstrap requires explicit opt-in"
+    optional = next(
+        item
+        for item in result.skipped_work
+        if item["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
     )
+    assert optional["reason"] == ("optional odds bootstrap requires explicit opt-in")
     assert FakeCaptureClient.instances == []
 
 
@@ -811,7 +820,8 @@ def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
 
     assert current.quota_before["basis"] == "HEADER_CURRENT_UTC_EPOCH"
     assert current.quota_before["remaining"] == 18
-    assert after_reset.quota_before["basis"] == "BOUNDED_BOOTSTRAP"
+    assert after_reset.quota_before["basis"] == "HEADER_STALE_EPOCH"
+    assert after_reset.quota_before["remaining"] == 18
 
 
 @override_settings(
@@ -823,7 +833,7 @@ def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
         }
     )
 )
-def test_worst_case_admission_blocks_before_provider_call():
+def test_minimal_call_cost_replaces_generic_worst_case_block():
     now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
     CaptureRun.objects.create(
@@ -835,11 +845,13 @@ def test_worst_case_admission_blocks_before_provider_call():
         quota_observed_at=now - timedelta(minutes=1),
     )
 
-    result = run_capture(at=now, client_factory=FakeCaptureClient)
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        result = run_capture(at=now, client_factory=FakeCaptureClient)
 
-    assert result.provider_attempts == 0
-    assert result.skipped_work[0]["status"] == (
-        CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET
+    assert result.provider_attempts == 1
+    assert not any(
+        item["status"] == CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET
+        for item in result.skipped_work
     )
 
 
@@ -934,7 +946,7 @@ def test_provider_diagnostic_context_reaches_capture_operational_cause_and_audit
 )
 def test_headerless_failed_attempt_exhausts_bounded_bootstrap_for_utc_epoch():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now)
 
     class FailingClient(FakeCaptureClient):
         def get_all(self, endpoint, params=None):
@@ -942,10 +954,11 @@ def test_headerless_failed_attempt_exhausts_bounded_bootstrap_for_utc_epoch():
             self.calls += 1
             raise APIFootballResponseError("provider failed")
 
-    first = run_capture(at=now, allow_bootstrap=True, client_factory=FailingClient)
-    repeated = run_capture(
-        at=now, allow_bootstrap=True, client_factory=FakeCaptureClient
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        first = run_capture(at=now, allow_bootstrap=True, client_factory=FailingClient)
+        repeated = run_capture(
+            at=now, allow_bootstrap=True, client_factory=FakeCaptureClient
+        )
 
     assert first.provider_attempts == 1
     assert repeated.provider_attempts == 0
@@ -956,22 +969,25 @@ def test_headerless_failed_attempt_exhausts_bounded_bootstrap_for_utc_epoch():
 @override_settings(**CAPTURE_SETTINGS)
 def test_stale_concurrent_plan_is_revalidated_before_provider_call():
     now = timezone.now().replace(microsecond=0)
-    match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(hours=1)
-    )
+    match, _ = create_match(league_id=39, name="League", kickoff=now)
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
     config = CaptureConfig.from_settings()
     first_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
     stale_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
     executor = CaptureExecutor(client_factory=FakeCaptureClient)
 
-    executor.execute(first_plan, trigger=CaptureRun.Trigger.MANUAL)
-    repeated = executor.execute(stale_plan, trigger=CaptureRun.Trigger.SCHEDULER)
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        executor.execute(first_plan, trigger=CaptureRun.Trigger.MANUAL)
+        first_work_count = CaptureWorkItem.objects.count()
+        repeated = executor.execute(stale_plan, trigger=CaptureRun.Trigger.SCHEDULER)
 
     assert repeated.provider_attempts == 0
     assert repeated.skipped_work[0]["status"] == (
         CaptureWorkItem.Status.ALREADY_FULFILLED
     )
+    assert repeated.run_id is None
+    assert CaptureRun.objects.count() == 1
+    assert CaptureWorkItem.objects.count() == first_work_count
     assert len(FakeCaptureClient.instances) == 1
     assert OddsObservation.objects.filter(match=match).count() == 1
 
@@ -1020,6 +1036,67 @@ def test_window_expiring_after_plan_is_missed_before_provider_call():
 
     assert result.provider_attempts == 0
     assert result.skipped_work[0]["status"] == CaptureWorkItem.Status.MISSED_WINDOW
+    assert result.run_id is not None
+    assert CaptureWorkItem.objects.get(run_id=result.run_id).status == (
+        CaptureWorkItem.Status.MISSED_WINDOW
+    )
+    assert FakeCaptureClient.instances == []
+
+    run_count = CaptureRun.objects.count()
+    work_count = CaptureWorkItem.objects.count()
+    repeated = run_capture(
+        at=now + timedelta(minutes=16),
+        window="market-t6h",
+        client_factory=FakeCaptureClient,
+    )
+    assert repeated.status == CaptureRun.Status.NO_WORK
+    assert repeated.run_id is None
+    assert CaptureRun.objects.count() == run_count
+    assert CaptureWorkItem.objects.count() == work_count
+
+
+@override_settings(**CAPTURE_SETTINGS)
+def test_future_not_due_wake_creates_no_capture_audit():
+    now = timezone.now().replace(microsecond=0)
+    create_match(league_id=39, name="Future", kickoff=now + timedelta(hours=2))
+
+    first = run_capture(at=now, client_factory=FakeCaptureClient)
+    repeated = run_capture(
+        at=now + timedelta(minutes=5), client_factory=FakeCaptureClient
+    )
+
+    assert first.status == repeated.status == CaptureRun.Status.NO_WORK
+    assert first.run_id is None and repeated.run_id is None
+    assert all(
+        item["status"] == CaptureWorkItem.Status.NOT_DUE for item in first.skipped_work
+    )
+    assert CaptureRun.objects.count() == 0
+    assert CaptureWorkItem.objects.count() == 0
+    assert FakeCaptureClient.instances == []
+
+
+@override_settings(**CAPTURE_SETTINGS)
+def test_first_eligibility_problem_is_audited_without_repeated_skip_rows():
+    now = timezone.now().replace(microsecond=0)
+    match, _ = create_match(
+        league_id=39, name="Uncovered", kickoff=now + timedelta(hours=1)
+    )
+    match.season.coverage = {"odds": False}
+    match.season.save(update_fields=["coverage", "modified"])
+
+    first = run_capture(at=now, client_factory=FakeCaptureClient)
+    repeated = run_capture(
+        at=now + timedelta(minutes=5), client_factory=FakeCaptureClient
+    )
+
+    assert first.run_id is not None
+    assert CaptureWorkItem.objects.get(run_id=first.run_id).status == (
+        CaptureWorkItem.Status.ODDS_NOT_COVERED
+    )
+    assert repeated.status == CaptureRun.Status.NO_WORK
+    assert repeated.run_id is None
+    assert CaptureRun.objects.count() == 1
+    assert CaptureWorkItem.objects.count() == 1
     assert FakeCaptureClient.instances == []
 
 
@@ -1092,7 +1169,7 @@ def test_first_provider_failure_halts_remaining_work_without_retry_loop():
     )
 )
 def test_real_attempt_blocked_before_retry_backs_off_same_identity():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
     match, _ = create_match(
         league_id=39, name="League", kickoff=now + timedelta(hours=1)
     )
@@ -1113,19 +1190,21 @@ def test_real_attempt_blocked_before_retry_backs_off_same_identity():
         clients.append(client)
         return client
 
-    first = run_capture(
-        at=now,
-        window="market-t6h",
-        allow_bootstrap=True,
-        client_factory=client_factory,
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        first = run_capture(
+            at=now,
+            window="market-t6h",
+            allow_bootstrap=True,
+            client_factory=client_factory,
+        )
     first_work = CaptureWorkItem.objects.get(run_id=first.run_id)
-    repeated = run_capture(
-        at=now,
-        window="market-t6h",
-        allow_bootstrap=True,
-        client_factory=client_factory,
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        repeated = run_capture(
+            at=now,
+            window="market-t6h",
+            allow_bootstrap=True,
+            client_factory=client_factory,
+        )
 
     assert len(opener_attempts) == 1
     assert len(clients) == 1
@@ -1163,6 +1242,7 @@ def test_result_refresh_reuses_canonical_sync_and_resolves_outcome():
     result = run_capture(
         at=now,
         purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+        allow_bootstrap=True,
         client_factory=FakeCaptureClient,
     )
 
@@ -1170,8 +1250,102 @@ def test_result_refresh_reuses_canonical_sync_and_resolves_outcome():
     assert result.matches_resolved == 1
     assert match.outcome == Match.OUTCOME_HOME
     assert FakeCaptureClient.instances[0].requests == [
-        ("fixtures", {"id": str(39 * 1000 + 1)})
+        (
+            "fixtures",
+            {
+                "date": match.kickoff.astimezone(ZoneInfo("America/Lima"))
+                .date()
+                .isoformat(),
+                "timezone": "America/Lima",
+            },
+        )
     ]
+
+
+@override_settings(**CAPTURE_SETTINGS)
+def test_nonbet_recent_date_sweep_filters_sync_counts_targets_and_audits():
+    at = datetime(2026, 9, 16, 20, tzinfo=UTC)
+    first, _ = create_match(
+        league_id=39, name="First League", kickoff=at - timedelta(hours=3)
+    )
+    second, _ = create_match(
+        league_id=40, name="Second League", kickoff=at - timedelta(hours=2)
+    )
+    fixtures = [
+        fixture_payload(
+            fixture_id=39001,
+            league_id=39,
+            kickoff=first.kickoff.isoformat(),
+            status_short="FT",
+            status_long="Match Finished",
+            home_score=2,
+            away_score=1,
+        ),
+        fixture_payload(
+            fixture_id=40001,
+            league_id=40,
+            kickoff=second.kickoff.isoformat(),
+            status_short="FT",
+            status_long="Match Finished",
+            home_score=0,
+            away_score=1,
+        ),
+        fixture_payload(
+            fixture_id=39999,
+            league_id=39,
+            kickoff=first.kickoff.isoformat(),
+            status_short="FT",
+            status_long="Match Finished",
+            home_score=4,
+            away_score=0,
+        ),
+    ]
+    plan = run_capture(
+        at=at,
+        dry_run=True,
+        purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+        allow_bootstrap=True,
+    )
+    assert len(plan.plan["items"]) == 1
+    assert plan.plan["items"][0]["target_fixture_count"] == 2
+    opener = QueueOpener(
+        Response(payload(fixtures), {"x-ratelimit-requests-remaining": "7"})
+    )
+
+    def client_factory(**kwargs):
+        return APIFootballClient(
+            api_key="fictional", opener=opener, minimum_interval=0, **kwargs
+        )
+
+    with mock.patch("football.capture.executor.timezone.now", return_value=at):
+        result = run_capture(
+            at=at,
+            purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+            allow_bootstrap=True,
+            client_factory=client_factory,
+        )
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert result.provider_attempts == 1
+    assert result.matches_resolved == 2
+    assert result.fixtures_changed == 2
+    assert (first.outcome, second.outcome) == (
+        Match.OUTCOME_HOME,
+        Match.OUTCOME_AWAY,
+    )
+    assert not MatchSourceRef.objects.filter(external_id="39999").exists()
+    assert [
+        parse_qs(urlsplit(request.full_url).query) for request, _ in opener.requests
+    ] == [{"date": ["2026-09-16"], "timezone": ["America/Lima"]}]
+    audit = ProviderCallAudit.objects.get(
+        capability=ProviderCallAudit.Capability.NONBET_RESULT_BATCH
+    )
+    assert audit.fixture_count == 2
+    assert audit.capture_run_id == result.run_id
+    assert audit.capture_work_item_id is not None
+    assert audit.request_metadata["acquisition"] == "date_sweep"
+    assert audit.request_metadata["relevant_fixture_ids"] == ["39001", "40001"]
+    assert audit.quota_remaining == 7
 
 
 @override_settings(
@@ -1183,7 +1357,7 @@ def test_result_refresh_reuses_canonical_sync_and_resolves_outcome():
         }
     )
 )
-def test_result_debt_has_priority_and_can_use_bounded_mandatory_reserve():
+def test_nonbet_result_batch_is_optional_when_t30_reserve_is_protected():
     now = timezone.now().replace(microsecond=0)
     past, _ = create_match(
         league_id=39,
@@ -1200,12 +1374,14 @@ def test_result_debt_has_priority_and_can_use_bounded_mandatory_reserve():
     plan = run_capture(at=now, dry_run=True)
     result = run_capture(at=now, client_factory=FakeCaptureClient)
 
-    assert plan.plan["items"][0]["purpose"] == (CaptureWorkItem.Purpose.RESULT_REFRESH)
-    assert result.provider_attempts == 1
-    assert FakeCaptureClient.instances[0].requests == [
-        ("fixtures", {"id": str(39 * 1000 + 1)})
-    ]
-    assert result.completed_work[0]["match_id"] == past.pk
+    result_item = next(
+        item
+        for item in plan.plan["items"]
+        if item["purpose"] == CaptureWorkItem.Purpose.RESULT_REFRESH
+    )
+    assert result_item["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
+    assert result.provider_attempts == 0
+    assert past.outcome == ""
 
 
 @override_settings(
@@ -1218,7 +1394,7 @@ def test_result_debt_has_priority_and_can_use_bounded_mandatory_reserve():
         }
     )
 )
-def test_result_then_due_odds_precede_discovery_under_constrained_budget():
+def test_required_discovery_precedes_optional_work_under_constrained_budget():
     now = datetime(2026, 8, 28, 12, tzinfo=UTC)
     create_match(
         league_id=39,
@@ -1252,10 +1428,9 @@ def test_result_then_due_odds_precede_discovery_under_constrained_budget():
     )
 
     assert [item["purpose"] for item in executable] == [
-        CaptureWorkItem.Purpose.RESULT_REFRESH,
-        CaptureWorkItem.Purpose.ODDS_CAPTURE,
+        CaptureWorkItem.Purpose.FIXTURE_REFRESH,
     ]
-    assert discovery["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
+    assert discovery["status"] == CaptureWorkItem.Status.PLANNED
 
 
 @override_settings(**CAPTURE_SETTINGS)
@@ -1336,9 +1511,8 @@ def test_terminal_no_outcome_is_explicit_and_never_polled():
     )
 
     assert result.provider_attempts == 0
-    assert result.skipped_work[0]["status"] == (
-        CaptureWorkItem.Status.STATUS_INELIGIBLE
-    )
+    assert result.status == CaptureRun.Status.NO_WORK
+    assert result.skipped_work == []
     assert FakeCaptureClient.instances == []
 
 
@@ -1350,7 +1524,7 @@ def test_terminal_no_outcome_is_explicit_and_never_polled():
         }
     )
 )
-def test_unresolved_result_debt_survives_future_capture_horizon():
+def test_older_nonbet_result_debt_is_not_probed_by_automatic_api_football():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
         league_id=39,
@@ -1365,12 +1539,37 @@ def test_unresolved_result_debt_survives_future_capture_horizon():
         purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
     )
 
-    assert len(result.plan["items"]) == 1
-    item = result.plan["items"][0]
+    assert result.plan["items"] == []
+    match.refresh_from_db()
+    assert match.outcome == ""
 
-    assert item["match_id"] == match.pk
-    assert item["purpose"] == CaptureWorkItem.Purpose.RESULT_REFRESH
-    assert item["status"] == CaptureWorkItem.Status.PLANNED
+
+@override_settings(**CAPTURE_SETTINGS)
+def test_nonbet_recent_boundary_keeps_yesterday_and_defers_older_debt():
+    at = datetime(2026, 9, 16, 20, tzinfo=UTC)
+    create_match(
+        league_id=39,
+        name="Yesterday League",
+        kickoff=at - timedelta(days=1, hours=3),
+    )
+    create_match(
+        league_id=40,
+        name="Older League",
+        kickoff=at - timedelta(days=2, hours=3),
+    )
+
+    plan = run_capture(
+        at=at,
+        dry_run=True,
+        purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+        allow_bootstrap=True,
+    )
+
+    assert len(plan.plan["items"]) == 1
+    assert plan.plan["items"][0]["target_fixture_count"] == 1
+    assert plan.plan["items"][0]["logical_identity"].startswith(
+        "api_football:nonbet-results:2026-09-15:"
+    )
 
 
 @override_settings(
@@ -1407,6 +1606,11 @@ def test_fixture_discovery_is_shared_bounded_capability_not_every_wake():
     assert first.provider_attempts == 1
     assert first.fixtures_changed > 0
     assert repeated.provider_attempts == 0
+    assert first.run_id is not None
+    assert repeated.status == CaptureRun.Status.NO_WORK
+    assert repeated.run_id is None
+    assert CaptureRun.objects.count() == 1
+    assert CaptureWorkItem.objects.count() == 1
     assert repeated.skipped_work[0]["status"] == (
         CaptureWorkItem.Status.ALREADY_FULFILLED
     )

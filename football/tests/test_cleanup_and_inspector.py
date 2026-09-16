@@ -28,6 +28,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "export_historical_market_data",
         "import_historical_market_data",
         "retire_capital_v1",
+        "football_quota_summary",
     }
     for name in (
         "get_leagues",
@@ -52,7 +53,8 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
     assert "FOOTBALL_CAPTURE_ENABLED" in settings_source
     assert "FOOTBALL_PIPELINE_ENABLED" in settings_source
     assert "default=False" in settings_source
-    assert '"football-capture-wake"' in settings_source
+    assert '"football-capture-wake"' not in settings_source
+    assert '"football-pipeline-wake"' in settings_source
     assert not list((ROOT / "accounts").glob("**/*.py"))
 
 

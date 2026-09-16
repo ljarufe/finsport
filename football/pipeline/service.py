@@ -571,6 +571,17 @@ def run_pipeline(
     candidates.extend(_dixon_coles_candidates(at))
     for model_code in ("INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT"):
         candidates.extend(_sporting_candidates(at, model_code=model_code))
+    if not dry_run and candidates:
+        existing_identities = set(
+            PredictionExperiment.objects.filter(
+                logical_identity__in=[row["logical_identity"] for row in candidates]
+            ).values_list("logical_identity", flat=True)
+        )
+        candidates = [
+            row
+            for row in candidates
+            if row["logical_identity"] not in existing_identities
+        ]
     experiment_rows = []
     prediction_unavailable = []
     prediction_errors = []
@@ -786,6 +797,28 @@ def run_pipeline(
             },
         )
         errors.extend({"phase": "CAPITAL", **item} for item in capital_errors)
+
+        if capital_runtime_result.get("settled", 0):
+            try:
+                catch_up = settle_prospective_predictions(
+                    competition_ids=competition_ids,
+                    dry_run=False,
+                ).as_dict()
+                phases["RESULT_SETTLEMENT"].details["post_capital_catch_up"] = catch_up
+                if catch_up.get("status") == "SUCCESS":
+                    phases["RESULT_SETTLEMENT"].state = PhaseState.SUCCESS
+            except Exception as error:
+                message = f"{type(error).__name__}:{error}"[:500]
+                phases["RESULT_SETTLEMENT"].details.setdefault("errors", []).append(
+                    {"operation": "POST_CAPITAL_CATCH_UP", "error": message}
+                )
+                errors.append(
+                    {
+                        "phase": "RESULT_SETTLEMENT",
+                        "operation": "POST_CAPITAL_CATCH_UP",
+                        "error": message,
+                    }
+                )
 
     if len(competitions) < 2:
         warnings.append(

@@ -249,7 +249,7 @@ def test_exact_automatic_provisioning_is_idempotent_and_independent():
     assert all(row.execution_version == EXECUTION_VERSION for row in first)
 
 
-def test_final_t30_places_concurrent_policies_and_expires_recovery_capacity(
+def test_final_t30_places_concurrent_policies_and_retains_pending_capacity(
     runtime_graph,
 ):
     high, _, _ = make_match(runtime_graph, 0, price="2.1000")
@@ -259,7 +259,8 @@ def test_final_t30_places_concurrent_policies_and_expires_recovery_capacity(
     result = reconcile_execution_events(run.pk)
 
     assert result.placed == 11
-    assert result.not_placed == 3
+    assert result.not_placed == 0
+    assert result.pending_capacity == 3
     for code in (
         FLAT_UNIT,
         FIXED_FRACTION_BANKROLL,
@@ -277,7 +278,8 @@ def test_final_t30_places_concurrent_policies_and_expires_recovery_capacity(
         config = CapitalRuntimeConfig.objects.get(policy_code=code, automatic=True)
         assert config.positions.filter(status=CapitalPosition.Status.OPEN).count() == 1
         state = config.execution_states.get(match=low)
-        assert state.non_placement_reason == "EXPIRED_CAPACITY"
+        assert state.status == CapitalExecutionState.Status.PENDING_CAPACITY
+        assert state.position_id is None
 
     flat = CapitalRuntimeConfig.objects.get(policy_code=FLAT_UNIT, automatic=True)
     position = flat.positions.get(match=high)
@@ -539,10 +541,9 @@ def test_unavailable_price_cash_and_policy_ineligible_reasons_are_distinct(
     flat.save()
     cash_run, _ = make_capture(runtime_graph, [cash])
     reconcile_execution_events(cash_run.pk)
-    assert (
-        CapitalExecutionState.objects.get(config=flat, match=cash).non_placement_reason
-        == "INSUFFICIENT_AVAILABLE_CASH"
-    )
+    cash_state = CapitalExecutionState.objects.get(config=flat, match=cash)
+    assert cash_state.status == CapitalExecutionState.Status.PENDING_CAPACITY
+    assert cash_state.diagnostics["reason"] == "INSUFFICIENT_AVAILABLE_CASH"
     flat.refresh_from_db()
     assert flat.status == CapitalRuntimeConfig.Status.ACTIVE
     assert flat.practical_ruin is False
@@ -649,7 +650,7 @@ def test_terminal_match_without_api_authority_stays_open_until_canonical_refresh
 
         def get_all(self, endpoint, params):
             assert endpoint == "fixtures"
-            assert params == {"ids": "3000"}
+            assert params == {"date": "2026-09-14", "timezone": "America/Lima"}
             self.calls += 1
             return [{"fixture": {"id": 3000}}]
 
@@ -659,6 +660,7 @@ def test_terminal_match_without_api_authority_stays_open_until_canonical_refresh
         Match.objects.filter(pk=match.pk).update(
             status_short="FT", outcome=Match.OUTCOME_HOME
         )
+        return None, {"3000": match}
 
     monkeypatch.setattr(
         "football.capital.runtime.sync_fixture_payloads", canonical_sync
@@ -796,8 +798,8 @@ def test_partial_t30_processing_recovers_original_fulfilled_evidence(
 
     recovered = reconcile_execution_events(retry_run.pk, at=retry_at)
 
-    assert recovered.placed == 4
-    assert recovered.not_placed == 0
+    assert recovered.placed == 0
+    assert recovered.not_placed == 4
     assert CapitalExecutionState.objects.count() == 7
     assert {
         state.config_id: (state.pk, state.position_id, state.execution_basis_id)
@@ -814,9 +816,12 @@ def test_partial_t30_processing_recovers_original_fulfilled_evidence(
     assert set(CapitalExecutionBasis.objects.values_list("action", flat=True)) == {
         Match.OUTCOME_HOME
     }
-    assert not CapitalExecutionState.objects.filter(
-        non_placement_reason="MISSED_EXECUTION_WINDOW"
-    ).exists()
+    assert (
+        CapitalExecutionState.objects.filter(
+            non_placement_reason="EXPIRED_CAPACITY"
+        ).count()
+        == 4
+    )
     assert reconcile_execution_events(retry_run.pk, at=retry_at).status == "NO_WORK"
 
 
@@ -842,8 +847,8 @@ def test_capacity_ranks_ev_before_probability(runtime_graph):
     )
     assert recovery.positions.get().match == high_ev
     assert (
-        recovery.execution_states.get(match=high_probability).non_placement_reason
-        == "EXPIRED_CAPACITY"
+        recovery.execution_states.get(match=high_probability).status
+        == CapitalExecutionState.Status.PENDING_CAPACITY
     )
 
 
@@ -897,7 +902,7 @@ def test_concurrent_workers_cannot_double_place_same_config_match(runtime_graph)
     assert flat.reserved_exposure == Decimal("1")
 
 
-def test_unique_open_matches_use_one_batched_provider_request(
+def test_unique_open_matches_use_one_date_sweep_provider_request(
     runtime_graph, settings, monkeypatch
 ):
     first, _, _ = make_match(runtime_graph, 0)
@@ -948,6 +953,7 @@ def test_unique_open_matches_use_one_batched_provider_request(
         Match.objects.filter(pk__in=(first.pk, second.pk)).update(
             status_short="FT", status_long="Match Finished", outcome="HOME"
         )
+        return None, {"1000": first, "1001": second}
 
     monkeypatch.setattr("football.capital.runtime.sync_fixture_payloads", sync_stub)
 
@@ -957,11 +963,13 @@ def test_unique_open_matches_use_one_batched_provider_request(
     assert result.provider_calls == 1
     assert result.settled == 11
     assert result.open_debt == 0
-    assert FakeClient.instance.requests == [("fixtures", {"ids": "1000-1001"})]
+    assert FakeClient.instance.requests == [
+        ("fixtures", {"date": "2026-09-14", "timezone": "America/Lima"})
+    ]
     assert CapitalResultObservation.objects.count() == 2
 
 
-def test_result_debt_rotates_unattempted_then_least_recently_attempted_matches(
+def test_result_debt_rotates_unattempted_then_least_recently_attempted_dates(
     runtime_graph, settings, monkeypatch
 ):
     base_at = datetime(2026, 9, 14, 15, tzinfo=timezone.utc)
@@ -972,8 +980,7 @@ def test_result_debt_rotates_unattempted_then_least_recently_attempted_matches(
         max_lanes=100,
     )
     matches = []
-    external_by_match = {}
-    for index in range(21):
+    for index in range(2):
         match, _, _ = make_match(
             runtime_graph,
             index % 4,
@@ -985,7 +992,11 @@ def test_result_debt_rotates_unattempted_then_least_recently_attempted_matches(
         )
         external_id = str(9000 - index)
         add_api_football_ref(runtime_graph, match, external_id=external_id)
-        external_by_match[match.pk] = external_id
+        match.kickoff = due_at - timedelta(days=index + 1)
+        match.save(update_fields=["kickoff", "modified"])
+        CapitalPosition.objects.filter(config=config, match=match).update(
+            next_result_check_at=due_at
+        )
         matches.append(match)
     CompetitionSourceRef.objects.create(
         source=runtime_graph["source"],
@@ -1005,44 +1016,54 @@ def test_result_debt_rotates_unattempted_then_least_recently_attempted_matches(
         def get_all(self, endpoint, params):
             assert endpoint == "fixtures"
             self.calls += 1
-            requests.append(params["ids"].split("-"))
-            return []
+            requests.append(params)
+            fixture_id = 9000 if params["date"] == "2026-09-13" else 8999
+            return [{"fixture": {"id": fixture_id}}]
 
     monkeypatch.setattr(
         "football.capital.runtime.sync_fixture_payloads",
-        lambda payloads, competitions: None,
+        lambda payloads, competitions: (
+            None,
+            {
+                str(item["fixture"]["id"]): matches[
+                    0 if item["fixture"]["id"] == 9000 else 1
+                ]
+                for item in payloads
+            },
+        ),
     )
     ordered = sorted(matches, key=lambda match: (match.kickoff, match.pk))
-    expected_first = [external_by_match[match.pk] for match in ordered[:20]]
 
     first = refresh_open_result_debt(at=due_at, client_factory=FakeClient)
 
     assert first.provider_calls == 1
-    assert requests[0] == expected_first
-    never_attempted = CapitalPosition.objects.get(config=config, match=ordered[20])
+    assert requests[0] == {"date": "2026-09-12", "timezone": "America/Lima"}
+    never_attempted = CapitalPosition.objects.get(config=config, match=ordered[1])
     assert never_attempted.result_refresh_attempted_at is None
 
     second_at = due_at + timedelta(minutes=1)
     second = refresh_open_result_debt(at=second_at, client_factory=FakeClient)
 
     assert second.provider_calls == 1
-    assert requests[1][0] == external_by_match[ordered[20].pk]
-    assert requests[1][1:] == [external_by_match[match.pk] for match in ordered[:19]]
-    least_recent = CapitalPosition.objects.get(config=config, match=ordered[19])
+    assert requests[1] == {"date": "2026-09-13", "timezone": "America/Lima"}
+    least_recent = CapitalPosition.objects.get(config=config, match=ordered[0])
     assert least_recent.result_refresh_attempted_at == due_at
 
     third = refresh_open_result_debt(
         at=due_at + timedelta(minutes=2), client_factory=FakeClient
     )
 
-    assert third.provider_calls == 1
-    assert requests[2][0] == external_by_match[ordered[19].pk]
-    assert all(len(batch) <= 20 for batch in requests)
+    assert third.provider_calls == 0
+    fourth = refresh_open_result_debt(
+        at=due_at + timedelta(minutes=30), client_factory=FakeClient
+    )
+    assert fourth.provider_calls == 1
+    assert requests[2] == requests[0]
     assert (
         CapitalPosition.objects.filter(
             config=config, status=CapitalPosition.Status.OPEN
         ).count()
-        == 21
+        == 2
     )
 
 

@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from football.models import CompetitionSourceRef, OddsMarket, ReconciliationStatus
+from football.providers.api_football import fixtures_by_date
 from football.providers.api_inkabet import InkabetClient
 from football.providers.inkabet_capture import capture_inkabet_matches
 from football.sync import (
@@ -35,10 +36,7 @@ class Command(SyncCommand):
         competitions_by_external_id = {
             ref.external_id: ref.competition for ref in api_refs
         }
-        fixtures = client.get_all(
-            "fixtures",
-            {"date": sync_date.isoformat(), "timezone": settings.TIME_ZONE},
-        )
+        fixtures = fixtures_by_date(client, sync_date, settings.TIME_ZONE)
         stats, accepted = sync_fixture_payloads(fixtures, competitions_by_external_id)
         self.stats = stats
         if not options["with_odds"] or not accepted:

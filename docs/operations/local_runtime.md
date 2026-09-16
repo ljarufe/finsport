@@ -166,7 +166,7 @@ docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web 
 
 The first global Lima-timezone fixture-date response is filtered locally by `Competition.enabled`. API-Football Teams and Matches are canonicalized through resolved source refs. With odds enabled, API Match Winner calls are per relevant fixture and require explicit Season API odds coverage. Inkabet categories are fetched once, mappings are reconciled without prompts, and accordion MW3W is fetched only for resolved relevant Match refs. Pending mappings are skipped and reported for Django Admin review.
 
-Every API-Football call and pagination page is counted. Quota headers are authoritative; the legacy sync command retains its own `API_FOOTBALL_DAILY_RESERVE`, while FS-005 uses `FOOTBALL_CAPTURE_MANDATORY_RESERVE`. Retries, pagination, and sequential pacing are bounded. No final T-minus cutoff or intraday allocation algorithm is implemented.
+Every API-Football call and pagination page is counted. The manual sync command retains its own `API_FOOTBALL_DAILY_RESERVE`; automatic capture/Capital admission instead uses observed headers, durable physical attempts, and dynamic critical reserves. `FOOTBALL_CAPTURE_MANDATORY_RESERVE` is not automatic admission authority. Retries, pagination, and sequential pacing are bounded.
 
 There is no notification email. Automatic new-season work uses only a current
 Season already discovered by catalogue maintenance, an enabled Competition, a
@@ -211,10 +211,10 @@ Capture policy is local configuration:
 
 - `FOOTBALL_MARKET_CONSENSUS_WINDOWS`: the sole scheduled prospective odds-acquisition collection. Its non-overlapping windows are exactly `market-t6h`, `market-t60m`, and `market-t30m`; each item has `offset_minutes`, `before_tolerance_minutes`, `normal_tolerance_minutes`, and `late_tolerance_minutes`. Historical local `FOOTBALL_CAPTURE_WINDOWS` values are no longer read and cannot schedule `early`/`middle` provider work;
 - `FOOTBALL_CAPTURE_HORIZON_HOURS`: future eligibility horizon;
-- `FOOTBALL_CAPTURE_MANDATORY_RESERVE`: absolute quota protected from optional odds work;
+- `FOOTBALL_CAPTURE_MANDATORY_RESERVE`: legacy configuration field; it is not the normal admission authority. The live admission boundary uses observed provider headers, durable physical attempts, and the dynamic fixture/T30/OPEN reserve;
 - `FOOTBALL_CAPTURE_MAX_OPERATION_PAGES`, `FOOTBALL_CAPTURE_MAX_PROVIDER_ATTEMPTS`, and `FOOTBALL_CAPTURE_BOOTSTRAP_MAX_ATTEMPTS`: independent safety bounds;
-- `FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED`, `FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES`, and `FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES`: bounded canonical outcome refresh;
-- `FOOTBALL_CAPTURE_DISCOVERY_ENABLED`, `FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES`, and `FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD`: optional canonical date discovery horizon/cadence, disabled by default. The free-plan-safe baseline is `1`, meaning today and tomorrow only; a genuinely unsupported request remains an actionable `provider_access_denied` failure.
+- `FOOTBALL_CAPTURE_RESULT_REFRESH_ENABLED`, `FOOTBALL_CAPTURE_RESULT_DELAY_MINUTES`, and `FOOTBALL_CAPTURE_RESULT_CADENCE_MINUTES`: optional/surplus non-bet result work uses one locally filtered API-Football date sweep for each due recent Lima date (today or yesterday). Older non-bet gaps remain for twice-weekly Football-Data current-season reconciliation. Capital owns separate urgent OPEN debt: first hint at kickoff +130m, date-sweep coalescing, and a quota-guarded singular `id=` fallback only when due truth is missing;
+- `FOOTBALL_CAPTURE_DISCOVERY_ENABLED`, `FOOTBALL_CAPTURE_DISCOVERY_CADENCE_MINUTES`, and `FOOTBALL_CAPTURE_DISCOVERY_DAYS_AHEAD`: protected, enabled-by-default persisted fixture discovery for Lima today and tomorrow (`1` day ahead). Today+2 is not within the supported current-plan contract.
 
 The single collection is owned by `football.pipeline.wake` and the existing planner, executor, quota, and provider bounds. One acquisition persists temporal evidence that Market Consensus, R45, and Decision policies can reuse from the database; consumers do not schedule additional provider work. The shipped opportunities open at their T-6h/T-60m/T-30m targets and close 15 minutes later. They therefore cannot collapse into one scheduler wake and are not continuous polling. These research defaults may be revised only by later evidence. `target_at`, `not_before`, `not_after`, actual execution time, observation time, and lateness remain distinct aware timestamps. A kickoff change produces new future targets; observations always retain actual capture time.
 
@@ -226,23 +226,21 @@ For `fs013-market-consensus-v2`, one completed `ODDS_CAPTURE` work item/window i
 
 ### Automatic wake lifecycle
 
-`FOOTBALL_CAPTURE_ENABLED=False` is the default. In the operational path it
-contributes no capture Beat schedule and causes zero automated provider calls;
-the development path never starts Beat at all. Direct invocation of the task
-also returns `DISABLED` without calling the service.
+The sole automatic product schedule is `football.pipeline.wake` at a fixed
+300-second cadence when `FOOTBALL_PIPELINE_ENABLED=True`. Pipeline owns due
+capture, Capital OPEN settlement, and maintenance; `football.capture.wake`
+remains a directly invokable compatibility task, not a Beat owner. A fulfilled
+or not-due empty wake is `NO_WORK`, makes no provider/model call, and creates no
+duplicate `CaptureRun` or `CaptureWorkItem`. `FOOTBALL_CAPTURE_ENABLED` gates
+capture within the pipeline; it does not create a second scheduler.
 
-To opt in, set at least:
-
-```dotenv
-FOOTBALL_CAPTURE_ENABLED=True
-FOOTBALL_CAPTURE_WAKE_SECONDS=900
-```
-
-Then restart with `make operational-up`; no additional activation command is
-needed after later operational starts while the setting remains enabled. Django
-settings add `football.capture.wake` to the file-backed Beat schedule. Beat only
-wakes `run_capture`; a no-due plan instantiates no provider client, records a
-`NO_WORK` run, and consumes zero quota. Development Compose contains no Beat.
+Normal operation starts with `make up` using the immutable operational image;
+after an approved merge, use `make deploy-local` to publish the new local image.
+Development `finsport-dev` runs no Beat and must not automatically call
+providers. Fixture discovery is enabled by default in branch code, with the
+protected today+tomorrow horizon. API-Football quota authority comes from
+observed headers and durable physical attempts, not a synthetic reset or a
+fixed mandatory reserve.
 
 The required processes are PostgreSQL, Redis, Django, the `finsport.local.safe` Celery worker, and Celery Beat. Verify wake delivery with:
 

@@ -1660,6 +1660,7 @@ class CapitalExecutionState(TimeStampedModel):
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending execution event"
+        PENDING_CAPACITY = "PENDING_CAPACITY", "Pending capacity"
         PLACED = "PLACED", "Placed"
         NOT_PLACED = "NOT_PLACED", "Terminal without position"
 
@@ -1813,6 +1814,7 @@ class CapitalPosition(models.Model):
         max_length=20, choices=DebtStatus.choices, default=DebtStatus.CURRENT
     )
     result_refresh_attempted_at = models.DateTimeField(null=True, blank=True)
+    next_result_check_at = models.DateTimeField(null=True, blank=True, db_index=True)
     result_refresh_error = models.CharField(max_length=500, blank=True)
 
     class Meta:
@@ -1851,6 +1853,10 @@ class MaintenanceRun(TimeStampedModel):
             "Historical market bootstrap",
         )
         WEEKLY_EVALUATION = "WEEKLY_EVALUATION", "Weekly evaluation"
+        CURRENT_SEASON_RECONCILIATION = (
+            "CURRENT_SEASON_RECONCILIATION",
+            "Current-season reconciliation",
+        )
 
     class Status(models.TextChoices):
         RUNNING = "RUNNING", "Running"
@@ -1892,4 +1898,85 @@ class MaintenanceRun(TimeStampedModel):
                 fields=["capability", "status", "period_start"],
                 name="football_maintenance_due_idx",
             )
+        ]
+
+
+class ProviderCallAudit(models.Model):
+    """Durable attribution for every physical API-Football request attempt."""
+
+    class Capability(models.TextChoices):
+        DAILY_FIXTURE_DISCOVERY = (
+            "DAILY_FIXTURE_DISCOVERY",
+            "Daily fixture discovery",
+        )
+        ODDS_T30 = "ODDS_T30", "Odds T-30"
+        ODDS_T60 = "ODDS_T60", "Odds T-60"
+        ODDS_T6H = "ODDS_T6H", "Odds T-6h"
+        OPEN_RESULT_BATCH = "OPEN_RESULT_BATCH", "Open result batch"
+        NONBET_RESULT_BATCH = "NONBET_RESULT_BATCH", "Non-bet result batch"
+        CATALOGUE_OR_SEASON_MAINTENANCE = (
+            "CATALOGUE_OR_SEASON_MAINTENANCE",
+            "Catalogue or season maintenance",
+        )
+        OTHER_EXPLICIT_MAINTENANCE = (
+            "OTHER_EXPLICIT_MAINTENANCE",
+            "Other explicit maintenance",
+        )
+        FUTURE_EXECUTION_QUOTE = (
+            "FUTURE_EXECUTION_QUOTE",
+            "Future execution quote",
+        )
+
+    provider = models.CharField(max_length=40, default="API_FOOTBALL")
+    capability = models.CharField(max_length=50, choices=Capability.choices)
+    logical_identity = models.CharField(max_length=500)
+    endpoint_family = models.CharField(max_length=80)
+    request_metadata = models.JSONField(default=dict, blank=True)
+    fixture_count = models.PositiveIntegerField(default=0)
+    attempt_number = models.PositiveIntegerField(default=1)
+    page_number = models.PositiveIntegerField(default=1)
+    retry_number = models.PositiveIntegerField(default=0)
+    retry_reason = models.CharField(max_length=120, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    outcome = models.CharField(max_length=50, default="STARTED")
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    quota_limit = models.PositiveIntegerField(null=True, blank=True)
+    quota_remaining = models.PositiveIntegerField(null=True, blank=True)
+    minute_limit = models.PositiveIntegerField(null=True, blank=True)
+    minute_remaining = models.PositiveIntegerField(null=True, blank=True)
+    quota_observed_at = models.DateTimeField(null=True, blank=True)
+    capture_run = models.ForeignKey(
+        CaptureRun,
+        on_delete=models.SET_NULL,
+        related_name="provider_call_audits",
+        null=True,
+        blank=True,
+    )
+    capture_work_item = models.ForeignKey(
+        CaptureWorkItem,
+        on_delete=models.SET_NULL,
+        related_name="provider_call_audits",
+        null=True,
+        blank=True,
+    )
+    maintenance_run = models.ForeignKey(
+        MaintenanceRun,
+        on_delete=models.SET_NULL,
+        related_name="provider_call_audits",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ("started_at", "id")
+        indexes = [
+            models.Index(
+                fields=["provider", "-started_at"],
+                name="football_provider_latest_idx",
+            ),
+            models.Index(
+                fields=["capability", "started_at"],
+                name="football_provider_cap_idx",
+            ),
         ]

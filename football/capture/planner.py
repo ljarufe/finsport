@@ -6,15 +6,20 @@ from django.db.models import Count, Max, Q
 
 from football.models import (
     CapitalPosition,
-    CaptureRun,
     CaptureWorkItem,
-    MaintenanceRun,
     Match,
     MatchSourceRef,
     OddsMarket,
     ReconciliationStatus,
     Source,
 )
+from football.providers.api_football import (
+    FIXTURE_TIMEZONE,
+    fixture_date_params,
+    fixture_id_params,
+)
+from football.quota import dynamic_reserve
+from football.quota import quota_state as shared_quota_state
 from football.sync import API_FOOTBALL_CODE, FINISHED_STATUSES, MATCH_WINNER_NAMES
 
 from .contracts import CapturePlan, PlannedWork, QuotaState
@@ -35,71 +40,8 @@ def _slot_start(at, cadence):
 
 
 def quota_state(at, config):
-    utc_at = at.astimezone(UTC)
-    epoch_start = utc_at.replace(hour=0, minute=0, second=0, microsecond=0)
-    observed_candidates = [
-        row
-        for row in (
-            CaptureRun.objects.filter(
-                quota_observed_at__gte=epoch_start,
-                quota_observed_at__lte=at,
-                quota_remaining_after__isnull=False,
-            )
-            .order_by("-quota_observed_at", "-id")
-            .first(),
-            MaintenanceRun.objects.filter(
-                quota_observed_at__gte=epoch_start,
-                quota_observed_at__lte=at,
-                quota_remaining_after__isnull=False,
-            )
-            .order_by("-quota_observed_at", "-id")
-            .first(),
-        )
-        if row is not None
-    ]
-    observed = max(
-        observed_candidates, key=lambda row: row.quota_observed_at, default=None
-    )
-    if observed is None:
-        bootstrap_attempts = sum(
-            sum(
-                model.objects.filter(
-                    started_at__gte=epoch_start,
-                    started_at__lte=at,
-                    quota_observed_at__isnull=True,
-                ).values_list("provider_attempts", flat=True)
-            )
-            for model in (CaptureRun, MaintenanceRun)
-        )
-        return QuotaState(
-            basis="BOUNDED_BOOTSTRAP",
-            limit=None,
-            remaining=max(0, config.bootstrap_max_attempts - bootstrap_attempts),
-            observed_at=None,
-            freshness_seconds=None,
-        )
-    # Header-less runs are already bounded. Their exact attempt count is summed
-    # separately because Count(id) alone would understate multi-attempt failures.
-    headerless_attempts = sum(
-        sum(
-            model.objects.filter(
-                started_at__gt=observed.quota_observed_at,
-                started_at__lte=at,
-                quota_observed_at__isnull=True,
-            ).values_list("provider_attempts", flat=True)
-        )
-        for model in (CaptureRun, MaintenanceRun)
-    )
-    remaining = max(0, observed.quota_remaining_after - headerless_attempts)
-    return QuotaState(
-        basis="HEADER_CURRENT_UTC_EPOCH",
-        limit=observed.quota_limit,
-        remaining=remaining,
-        observed_at=observed.quota_observed_at,
-        freshness_seconds=max(
-            0, int((at - observed.quota_observed_at).total_seconds())
-        ),
-    )
+    state = shared_quota_state(at, config)
+    return QuotaState(**state)
 
 
 class CapturePlanner:
@@ -126,6 +68,7 @@ class CapturePlanner:
         source = Source.objects.get(code=API_FOOTBALL_CODE)
         market = self._market(source)
         quota = quota_state(at, self.config)
+        reserve = dynamic_reserve(at, self.config)
         items = []
         if purpose in (None, CaptureWorkItem.Purpose.RESULT_REFRESH):
             items.extend(self._result_items(at, source, match_id))
@@ -136,8 +79,15 @@ class CapturePlanner:
         if purpose in (None, CaptureWorkItem.Purpose.ODDS_CAPTURE):
             items.extend(self._odds_items(at, source, market, match_id, window))
         items.sort(key=lambda item: item.priority)
-        self._admit(items, quota, allow_bootstrap=allow_bootstrap)
-        return CapturePlan(at, self.config, quota, items, allow_bootstrap)
+        self._admit(items, quota, reserve, allow_bootstrap=allow_bootstrap)
+        return CapturePlan(
+            at,
+            self.config,
+            quota,
+            items,
+            allow_bootstrap,
+            reserve=reserve,
+        )
 
     @staticmethod
     def _market(source):
@@ -169,38 +119,45 @@ class CapturePlanner:
         refs = self._refs(source, queryset)
         slot = _slot_start(at, self.config.result_cadence)
         items = []
-        for match in queryset.order_by("kickoff", "id"):
-            ref = refs.get(match.pk)
+        local_today = at.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+        recent_dates = {local_today - timedelta(days=1), local_today}
+        eligible = [
+            match
+            for match in queryset.order_by("kickoff", "id")
+            if refs.get(match.pk) is not None
+            and match.status_short
+            not in FINISHED_STATUSES | TERMINAL_NO_OUTCOME_STATUSES
+            and match.kickoff.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+            in recent_dates
+        ]
+        by_date = {}
+        for match in eligible:
+            day = match.kickoff.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+            by_date.setdefault(day, []).append(match)
+        for day, batch in sorted(by_date.items()):
+            external_ids = tuple(
+                dict.fromkeys(refs[match.pk].external_id for match in batch)
+            )
             identity = (
-                f"{source.code}:result:{ref.external_id if ref else match.pk}:"
-                f"{slot.isoformat()}"
+                f"{source.code}:nonbet-results:{day.isoformat()}:{slot.isoformat()}"
             )
             status, reason = self._identity_status(identity)
-            if match.status_short in FINISHED_STATUSES | TERMINAL_NO_OUTCOME_STATUSES:
-                status = CaptureWorkItem.Status.STATUS_INELIGIBLE
-                reason = "terminal fixture has no canonical outcome to refresh"
-            if ref is None:
-                status = CaptureWorkItem.Status.UNRESOLVED_IDENTITY
-                reason = "resolved API-Football MatchSourceRef is required"
             items.append(
                 PlannedWork(
                     purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
                     status=status,
                     source=source,
-                    match=match,
-                    external_id=ref.external_id if ref else "",
                     logical_identity=identity,
-                    intended_window="result-refresh",
-                    target_at=match.kickoff + self.config.result_delay,
-                    not_before=match.kickoff + self.config.result_delay,
-                    priority=(0, match.kickoff, match.pk),
-                    priority_reason="mandatory unresolved outcome debt",
+                    intended_window="nonbet-result-date",
+                    target_at=slot,
+                    not_before=slot,
+                    priority=(3, batch[0].kickoff, -1, batch[0].pk),
+                    priority_reason="surplus-only recent-date non-bet result completion",
                     reason=reason,
                     estimated_min_cost=1 if status == "PLANNED" else 0,
-                    estimated_max_cost=(
-                        self.config.worst_operation_cost if status == "PLANNED" else 0
-                    ),
-                    params={"id": ref.external_id} if ref else {},
+                    estimated_max_cost=1 if status == "PLANNED" else 0,
+                    params=fixture_date_params(day, FIXTURE_TIMEZONE),
+                    target_external_ids=external_ids,
                 )
             )
         return items
@@ -208,12 +165,11 @@ class CapturePlanner:
     def _discovery_items(self, at, source):
         if not self.config.discovery_enabled:
             return []
-        slot = _slot_start(at, self.config.discovery_cadence)
         local_date = at.astimezone(ZoneInfo(settings.TIME_ZONE)).date()
         items = []
         for days_ahead in range(self.config.discovery_days_ahead + 1):
             discovery_date = local_date + timedelta(days=days_ahead)
-            identity = f"{source.code}:discovery:{discovery_date}:{slot.isoformat()}"
+            identity = f"{source.code}:discovery:{discovery_date}"
             status, reason = self._identity_status(identity)
             items.append(
                 PlannedWork(
@@ -222,19 +178,53 @@ class CapturePlanner:
                     source=source,
                     logical_identity=identity,
                     intended_window="fixture-discovery",
-                    target_at=slot,
-                    not_before=slot,
-                    priority=(2, slot, days_ahead),
-                    priority_reason="configured canonical fixture discovery horizon",
+                    target_at=at,
+                    not_before=at,
+                    priority=(0, days_ahead),
+                    priority_reason="protected persisted fixture discovery horizon",
                     reason=reason,
                     estimated_min_cost=1 if status == "PLANNED" else 0,
-                    estimated_max_cost=(
-                        self.config.worst_operation_cost if status == "PLANNED" else 0
-                    ),
-                    params={
-                        "date": discovery_date.isoformat(),
-                        "timezone": settings.TIME_ZONE,
-                    },
+                    estimated_max_cost=1 if status == "PLANNED" else 0,
+                    params=fixture_date_params(discovery_date, settings.TIME_ZONE),
+                )
+            )
+        recovery_matches = list(
+            Match.objects.filter(
+                status_short="PST",
+                capital_positions__status=CapitalPosition.Status.OPEN,
+            )
+            .select_related("season__competition")
+            .distinct()
+            .order_by("kickoff", "id")
+        )
+        recovery_refs = self._refs(source, recovery_matches)
+        recovery_slot = _slot_start(at, self.config.discovery_cadence)
+        for match in recovery_matches:
+            ref = recovery_refs.get(match.pk)
+            if ref is None:
+                continue
+            identity = (
+                f"{source.code}:fixture-recovery:{ref.external_id}:"
+                f"{recovery_slot.isoformat()}"
+            )
+            status, reason = self._identity_status(identity)
+            items.append(
+                PlannedWork(
+                    purpose=CaptureWorkItem.Purpose.FIXTURE_REFRESH,
+                    status=status,
+                    source=source,
+                    match=match,
+                    external_id=ref.external_id,
+                    logical_identity=identity,
+                    intended_window="pst-fixture-reconciliation",
+                    target_at=recovery_slot,
+                    not_before=recovery_slot,
+                    priority=(0, -1, match.kickoff, match.pk),
+                    priority_reason="explicit postponed OPEN fixture reconciliation",
+                    reason=reason,
+                    estimated_min_cost=1 if status == "PLANNED" else 0,
+                    estimated_max_cost=1 if status == "PLANNED" else 0,
+                    params=fixture_id_params(ref.external_id),
                 )
             )
         return items
@@ -340,7 +330,7 @@ class CapturePlanner:
                         normal_until=normal_until,
                         not_after=not_after,
                         priority=(
-                            1,
+                            1 if candidate.name == "market-t30m" else 3,
                             not_after,
                             *base_priority,
                             index,
@@ -351,11 +341,7 @@ class CapturePlanner:
                         ),
                         reason=reason,
                         estimated_min_cost=1 if status == "PLANNED" else 0,
-                        estimated_max_cost=(
-                            self.config.worst_operation_cost
-                            if status == "PLANNED"
-                            else 0
-                        ),
+                        estimated_max_cost=1 if status == "PLANNED" else 0,
                         params={"fixture": ref.external_id, "bet": market.external_id},
                     )
                 )
@@ -412,15 +398,29 @@ class CapturePlanner:
             reason=reason,
         )
 
-    def _admit(self, items, quota, *, allow_bootstrap):
+    def _admit(self, items, quota, reserve, *, allow_bootstrap):
+        reserve = dict(reserve)
         projected = quota.remaining
         total_allowed = self.config.max_provider_attempts
         if quota.basis == "BOUNDED_BOOTSTRAP":
             total_allowed = min(total_allowed, self.config.bootstrap_max_attempts)
+        elif quota.basis == "HEADER_STALE_EPOCH":
+            # Exactly one physical critical attempt may establish this epoch.
+            # A headerless attempt anywhere in the system consumes that allowance.
+            projected = 1 if quota.stale_establishing_attempt_available else 0
+            total_allowed = min(total_allowed, 1)
         for item in items:
             if item.status != CaptureWorkItem.Status.PLANNED:
                 continue
-            mandatory = item.purpose != CaptureWorkItem.Purpose.ODDS_CAPTURE
+            critical_component = None
+            if item.purpose == CaptureWorkItem.Purpose.FIXTURE_REFRESH:
+                critical_component = "fixture"
+            elif (
+                item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
+                and item.intended_window == "market-t30m"
+            ):
+                critical_component = "t30"
+            mandatory = critical_component is not None
             if (
                 quota.basis == "BOUNDED_BOOTSTRAP"
                 and not mandatory
@@ -431,30 +431,40 @@ class CapturePlanner:
                 item.estimated_min_cost = 0
                 item.estimated_max_cost = 0
                 continue
-            reserve = 0 if mandatory else self.config.mandatory_reserve
-            if quota.basis == "BOUNDED_BOOTSTRAP" and allow_bootstrap:
-                reserve = 0
-            if quota.basis == "BOUNDED_BOOTSTRAP" and (mandatory or allow_bootstrap):
-                item.estimated_max_cost = min(
-                    item.estimated_max_cost, self.config.bootstrap_max_attempts
-                )
-            if projected <= reserve:
+            protected = reserve["total"]
+            if critical_component:
+                protected = 0
+            if quota.basis == "HEADER_STALE_EPOCH" and not mandatory:
                 item.status = CaptureWorkItem.Status.QUOTA_RESERVE
-                item.reason = "conservative remaining is at mandatory reserve"
+                item.reason = "optional work waits for a current provider header"
                 item.estimated_min_cost = 0
                 item.estimated_max_cost = 0
                 continue
-            if item.estimated_max_cost > projected - reserve:
+            if (
+                quota.basis == "HEADER_STALE_EPOCH"
+                and critical_component == "t30"
+                and reserve["fixture"] > 0
+            ):
+                item.status = CaptureWorkItem.Status.QUOTA_RESERVE
+                item.reason = "fixture discovery has stale-epoch priority"
+                item.estimated_min_cost = 0
+                item.estimated_max_cost = 0
+                continue
+            if projected - 1 < protected:
+                item.status = CaptureWorkItem.Status.QUOTA_RESERVE
+                item.reason = "deferred to protect dynamic critical reserve"
+                item.estimated_min_cost = 0
+                item.estimated_max_cost = 0
+                continue
+            if total_allowed < 1:
                 item.status = CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET
-                item.reason = "worst-case bounded operation does not fit"
+                item.reason = "finite admitted-call circuit breaker reached"
                 item.estimated_min_cost = 0
                 item.estimated_max_cost = 0
                 continue
-            if item.estimated_max_cost > total_allowed:
-                item.status = CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET
-                item.reason = "run attempt bound cannot admit operation worst case"
-                item.estimated_min_cost = 0
-                item.estimated_max_cost = 0
-                continue
-            projected -= item.estimated_max_cost
-            total_allowed -= item.estimated_max_cost
+            item.estimated_max_cost = 1
+            projected -= 1
+            total_allowed -= 1
+            if critical_component and reserve[critical_component] > 0:
+                reserve[critical_component] -= 1
+                reserve["total"] -= 1

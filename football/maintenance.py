@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -18,6 +18,7 @@ from football.historical_market import (
     market_baseline_is_promoted,
     process_competition_market_bootstrap,
 )
+from football.historical_market.current_season import recover_current_season
 from football.models import (
     Competition,
     CompetitionSourceRef,
@@ -36,6 +37,7 @@ from football.providers.api_football import (
     APIFootballOperationBudgetError,
     APIFootballQuotaReserveError,
 )
+from football.quota import dynamic_reserve
 from football.sync import sync_catalog_payloads, sync_fixture_payloads
 
 
@@ -132,14 +134,26 @@ def _emit_terminal(run, *, error=None):
     )
 
 
-def _bounded_client(client_factory, *, at, maximum_attempts, maximum_pages):
+def _bounded_client(
+    client_factory,
+    *,
+    at,
+    maximum_attempts,
+    maximum_pages,
+    maintenance_run=None,
+):
     state = quota_state(at, CaptureConfig.from_settings())
+    if state.basis == "HEADER_STALE_EPOCH":
+        raise APIFootballQuotaReserveError(
+            "Optional maintenance waits for a current provider quota header.",
+            diagnostic_context={"attempts": 0},
+        )
     available = state.remaining
-    reserve = settings.FOOTBALL_CAPTURE_MANDATORY_RESERVE
+    reserve = dynamic_reserve(at, CaptureConfig.from_settings())["total"]
     admission_reserve = reserve
     if state.basis == "BOUNDED_BOOTSTRAP":
         available = settings.FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS
-        admission_reserve = 0
+        admission_reserve = reserve
     if available - admission_reserve < maximum_attempts:
         raise APIFootballQuotaReserveError(
             "Periodic maintenance cannot fit inside the conservative quota budget.",
@@ -148,8 +162,16 @@ def _bounded_client(client_factory, *, at, maximum_attempts, maximum_pages):
     client = client_factory(
         max_pages=maximum_pages,
         max_retries=0,
-        daily_reserve=reserve,
+        daily_reserve=0,
     )
+    if hasattr(client, "set_audit_context"):
+        client.set_audit_context(
+            "CATALOGUE_OR_SEASON_MAINTENANCE",
+            maintenance_run.logical_identity if maintenance_run else "maintenance",
+            audit_links={
+                "maintenance_run_id": maintenance_run.pk if maintenance_run else None
+            },
+        )
 
     def guard(active_client):
         if active_client.calls >= maximum_attempts:
@@ -206,6 +228,7 @@ def run_catalogue_maintenance(*, at=None, client_factory=APIFootballClient):
             at=at,
             maximum_attempts=settings.FOOTBALL_MAINTENANCE_CATALOGUE_MAX_ATTEMPTS,
             maximum_pages=settings.FOOTBALL_MAINTENANCE_CATALOGUE_MAX_PAGES,
+            maintenance_run=run,
         )
         leagues = client.get_all("leagues")
         bets = client.get_all("odds/bets")
@@ -300,6 +323,7 @@ def _bootstrap_season(season, day, at, client_factory):
             at=at,
             maximum_attempts=settings.FOOTBALL_MAINTENANCE_SEASON_MAX_ATTEMPTS,
             maximum_pages=settings.FOOTBALL_MAINTENANCE_SEASON_MAX_PAGES,
+            maintenance_run=run,
         )
         ref = CompetitionSourceRef.objects.get(
             competition=season.competition,
@@ -568,14 +592,11 @@ def _backtest_population(competition):
 def run_weekly_evaluation(*, at=None, force=False, backtest_runner=run_backtest):
     from football.prediction.readiness_lifecycle import run_readiness_maintenance
 
-    readiness = run_readiness_maintenance()
     at = at or timezone.now()
     due, previous = _weekly_due(at, force=force)
     if not due:
-        return {
-            **_not_due(previous, "WEEKLY_INTERVAL_NOT_ELAPSED"),
-            "readiness": readiness,
-        }
+        return _not_due(previous, "WEEKLY_INTERVAL_NOT_ELAPSED")
+    readiness = run_readiness_maintenance()
     day = _local_day(at)
     identity = f"weekly-evaluation:{day.isoformat()}"
     with transaction.atomic():
@@ -814,6 +835,112 @@ def run_historical_market_maintenance(
         )
 
 
+def _current_season_cycle(at):
+    """Latest Sunday/Wednesday source update represented at Mon/Thu 06:00 Lima."""
+
+    local_timezone = ZoneInfo(settings.TIME_ZONE)
+    local_at = at.astimezone(local_timezone)
+    candidates = []
+    for days_back in range(8):
+        day = local_at.date() - timedelta(days=days_back)
+        if day.weekday() not in {0, 3}:  # Monday / Thursday
+            continue
+        due_at = datetime.combine(day, time(hour=6), tzinfo=local_timezone)
+        if due_at <= local_at:
+            candidates.append((day, due_at))
+    return max(candidates, default=(None, None), key=lambda item: item[1] or local_at)
+
+
+def run_current_season_reconciliation(*, at=None, runner=recover_current_season):
+    """Run one idempotent Football-Data current-season source cycle."""
+
+    at = at or timezone.now()
+    cycle_day, due_at = _current_season_cycle(at)
+    if cycle_day is None:
+        return {"status": "NOT_DUE", "due": False}
+    identity = f"current-season-reconciliation:{cycle_day.isoformat()}"
+    with transaction.atomic():
+        run, created = MaintenanceRun.objects.select_for_update().get_or_create(
+            logical_identity=identity,
+            defaults={
+                "capability": MaintenanceRun.Capability.CURRENT_SEASON_RECONCILIATION,
+                "period_start": cycle_day,
+                "started_at": at,
+                "last_attempt_at": at,
+                "config_snapshot": {
+                    "owner": "football.pipeline.wake",
+                    "timezone": settings.TIME_ZONE,
+                    "due_at": due_at.isoformat(),
+                    "source": "FOOTBALL_DATA",
+                },
+            },
+        )
+        if not created:
+            return _not_due(run, "SOURCE_CYCLE_ALREADY_PROCESSED")
+        _claim(run, at)
+    results = []
+    errors = []
+    meaningful_delta = 0
+    for season in (
+        Season.objects.filter(is_current=True, competition__enabled=True)
+        .select_related("competition")
+        .order_by("competition_id", "id")
+    ):
+        try:
+            result = runner(season.competition, season, apply=True)
+        except Exception as error:
+            errors.append(
+                {
+                    "competition_id": season.competition_id,
+                    "season_id": season.pk,
+                    "error_class": error.__class__.__name__,
+                    "error_message": " ".join(sanitize_text(error, 500).split()),
+                }
+            )
+            continue
+        counts = result.get("counts", {})
+        meaningful_delta += sum(
+            int(counts.get(key, 0))
+            for key in (
+                "CREATE_MISSING_MATCH",
+                "FILL_MISSING_RESULT",
+                "CREATE_HISTORICAL_1X2",
+                "FILL_HISTORICAL_1X2",
+                "SOURCE_NO_COMPLETE_1X2",
+            )
+        )
+        results.append(result)
+    conflict_count = sum(
+        int((result.get("counts") or {}).get("RESULT_CONFLICT", 0))
+        + int((result.get("counts") or {}).get("HISTORICAL_MARKET_CONFLICT", 0))
+        for result in results
+    )
+    summary = {
+        "reason": (
+            "CURRENT_SEASON_RECONCILED"
+            if meaningful_delta
+            else "UNCHANGED_SOURCE_NO_WORK"
+        ),
+        "source_cycle": cycle_day.isoformat(),
+        "provider": "FOOTBALL_DATA",
+        "api_football_attempts": 0,
+        "meaningful_delta": meaningful_delta,
+        "conflict_count": conflict_count,
+        "results": results,
+        "errors": errors,
+    }
+    status = (
+        MaintenanceRun.Status.DEGRADED
+        if errors or conflict_count
+        else (
+            MaintenanceRun.Status.SUCCESS
+            if meaningful_delta
+            else MaintenanceRun.Status.NO_WORK
+        )
+    )
+    return _finish(run, status, at, summary)
+
+
 def run_periodic_maintenance(
     *,
     at=None,
@@ -822,6 +949,7 @@ def run_periodic_maintenance(
     backtest_runner=run_backtest,
     historical_runner=process_historical_bootstrap,
     historical_market_runner=process_competition_market_bootstrap,
+    current_season_runner=recover_current_season,
 ):
     at = at or timezone.now()
     if not settings.FOOTBALL_MAINTENANCE_ENABLED:
@@ -843,6 +971,9 @@ def run_periodic_maintenance(
     historical_market = run_historical_market_maintenance(
         at=at, runner=historical_market_runner
     )
+    current_season = run_current_season_reconciliation(
+        at=at, runner=current_season_runner
+    )
     weekly = run_weekly_evaluation(
         at=at,
         force=force_weekly,
@@ -854,5 +985,6 @@ def run_periodic_maintenance(
         "seasons": seasons,
         "historical": historical,
         "historical_market": historical_market,
+        "current_season": current_season,
         "weekly": weekly,
     }

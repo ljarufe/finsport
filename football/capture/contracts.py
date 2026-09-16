@@ -178,6 +178,7 @@ class QuotaState:
     remaining: int
     observed_at: datetime | None
     freshness_seconds: int | None
+    stale_establishing_attempt_available: bool = False
 
     def as_dict(self):
         return {
@@ -186,6 +187,7 @@ class QuotaState:
             "remaining": self.remaining,
             "observed_at": self.observed_at.isoformat() if self.observed_at else None,
             "freshness_seconds": self.freshness_seconds,
+            "stale_establishing_attempt_available": self.stale_establishing_attempt_available,
         }
 
 
@@ -209,6 +211,7 @@ class PlannedWork:
     estimated_min_cost: int = 0
     estimated_max_cost: int = 0
     params: dict = field(default_factory=dict)
+    target_external_ids: tuple[str, ...] = ()
 
     def as_dict(self):
         priority = [
@@ -234,6 +237,7 @@ class PlannedWork:
             "reason": self.reason,
             "estimated_min_cost": self.estimated_min_cost,
             "estimated_max_cost": self.estimated_max_cost,
+            "target_fixture_count": len(self.target_external_ids),
         }
 
 
@@ -244,16 +248,32 @@ class CapturePlan:
     quota: QuotaState
     items: list[PlannedWork]
     allow_bootstrap: bool = False
+    reserve: dict = field(default_factory=dict)
 
     @property
     def executable(self):
         return [item for item in self.items if item.status == "PLANNED"]
 
     def as_dict(self):
+        reserve = {
+            key: (
+                value.isoformat()
+                if isinstance(value, datetime)
+                else (
+                    [
+                        item.isoformat() if hasattr(item, "isoformat") else item
+                        for item in value
+                    ]
+                    if isinstance(value, list)
+                    else value
+                )
+            )
+            for key, value in self.reserve.items()
+        }
         return {
             "planning_at": self.planning_at.isoformat(),
             "quota": self.quota.as_dict(),
-            "reserve": self.config.mandatory_reserve,
+            "reserve": reserve,
             "eligible": len(
                 {item.match.pk for item in self.items if item.match is not None}
             ),

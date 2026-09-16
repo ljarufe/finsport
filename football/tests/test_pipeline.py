@@ -448,7 +448,7 @@ def test_one_cycle_is_multi_competition_and_repeated_cycle_reuses_identity(monke
     assert PipelineRun.objects.count() == 2
     assert first_result.report["prediction"]["created_count"] == 2
     assert repeated.report["prediction"]["created_count"] == 0
-    assert repeated.report["prediction"]["reused_count"] == 2
+    assert repeated.report["prediction"]["reused_count"] == 0
     assert {row["id"] for row in first_result.report["competitions_considered"]} == {
         first[0].pk,
         second[0].pk,
@@ -711,6 +711,7 @@ def test_beat_enabled_pipeline_is_the_only_automatic_capture_owner(monkeypatch):
     configured = runpy.run_path("finsport/settings.py")
 
     assert configured["FOOTBALL_PIPELINE_ENABLED"] is True
+    assert configured["FOOTBALL_CAPTURE_WAKE_SECONDS"] == 300
     assert configured["CELERY_BEAT_SCHEDULE"] == {
         "football-pipeline-wake": {
             "task": "football.pipeline.wake",
