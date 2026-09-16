@@ -4,12 +4,15 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 from django.db.models import Count, Max, Q
 
+from football.capture_eligibility import (
+    match_winner_market,
+    odds_capture_prerequisite,
+)
 from football.models import (
     CapitalPosition,
     CaptureWorkItem,
     Match,
     MatchSourceRef,
-    OddsMarket,
     ReconciliationStatus,
     Source,
 )
@@ -20,7 +23,7 @@ from football.providers.api_football import (
 )
 from football.quota import dynamic_reserve
 from football.quota import quota_state as shared_quota_state
-from football.sync import API_FOOTBALL_CODE, FINISHED_STATUSES, MATCH_WINNER_NAMES
+from football.sync import API_FOOTBALL_CODE, FINISHED_STATUSES
 
 from .contracts import CapturePlan, PlannedWork, QuotaState
 
@@ -91,15 +94,7 @@ class CapturePlanner:
 
     @staticmethod
     def _market(source):
-        markets = OddsMarket.objects.filter(source=source)
-        return next(
-            (
-                market
-                for market in markets
-                if market.name.strip().casefold() in MATCH_WINNER_NAMES
-            ),
-            None,
-        )
+        return match_winner_market(source)
 
     def _result_items(self, at, source, match_id):
         if not self.config.result_refresh_enabled:
@@ -278,25 +273,16 @@ class CapturePlanner:
                     )
                 )
                 continue
-            if (match.season.coverage or {}).get("odds") is not True:
-                items.append(
-                    self._ineligible_item(
-                        source,
-                        match,
-                        CaptureWorkItem.Status.ODDS_NOT_COVERED,
-                        "season does not explicitly report odds coverage",
-                        (1, datetime.max.replace(tzinfo=UTC), *base_priority),
-                    )
-                )
-                continue
             ref = refs.get(match.pk)
-            if ref is None or market is None:
+            prerequisite = odds_capture_prerequisite(match, source, ref, market)
+            if prerequisite is not None:
+                status, reason = prerequisite
                 items.append(
                     self._ineligible_item(
                         source,
                         match,
-                        CaptureWorkItem.Status.UNRESOLVED_IDENTITY,
-                        "resolved fixture identity and Match Winner market are required",
+                        status,
+                        reason,
                         (1, datetime.max.replace(tzinfo=UTC), *base_priority),
                     )
                 )

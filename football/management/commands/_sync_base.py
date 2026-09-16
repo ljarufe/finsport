@@ -18,6 +18,13 @@ class SyncCommand(BaseCommand):
         error_message = None
         try:
             client = self.client_class()
+            if hasattr(client, "set_audit_context"):
+                command_name = self.__class__.__module__.rsplit(".", 1)[-1]
+                client.set_audit_context(
+                    "OTHER_EXPLICIT_MAINTENANCE",
+                    f"manual-sync:{command_name}",
+                    request_metadata={"command": command_name, "trigger": "manual"},
+                )
             self.stats = self.run_sync(client=client, **options)
         except (APIFootballError, InkabetError, FootballSyncError) as error:
             error_message = str(error)

@@ -804,14 +804,29 @@ def run_pipeline(
                     competition_ids=competition_ids,
                     dry_run=False,
                 ).as_dict()
-                phases["RESULT_SETTLEMENT"].details["post_capital_catch_up"] = catch_up
-                if catch_up.get("status") == "SUCCESS":
-                    phases["RESULT_SETTLEMENT"].state = PhaseState.SUCCESS
+                result_phase = phases["RESULT_SETTLEMENT"]
+                result_phase.details["post_capital_catch_up"] = catch_up
+                if catch_up.get("status") == "SUCCESS" and result_phase.state in (
+                    PhaseState.NO_WORK,
+                    PhaseState.SUCCESS,
+                ):
+                    phases["RESULT_SETTLEMENT"] = PhaseResult(
+                        PhaseState.SUCCESS,
+                        details=result_phase.details,
+                        reason=result_phase.reason,
+                    )
             except Exception as error:
                 message = f"{type(error).__name__}:{error}"[:500]
-                phases["RESULT_SETTLEMENT"].details.setdefault("errors", []).append(
+                result_phase = phases["RESULT_SETTLEMENT"]
+                result_phase.details.setdefault("errors", []).append(
                     {"operation": "POST_CAPITAL_CATCH_UP", "error": message}
                 )
+                if result_phase.state != PhaseState.FAILED:
+                    phases["RESULT_SETTLEMENT"] = PhaseResult(
+                        PhaseState.DEGRADED,
+                        details=result_phase.details,
+                        reason=result_phase.reason,
+                    )
                 errors.append(
                     {
                         "phase": "RESULT_SETTLEMENT",

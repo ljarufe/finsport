@@ -190,6 +190,9 @@ def test_integrated_empty_wake_has_no_duplicate_durable_capture_delta(runtime_gr
 def test_dynamic_reserve_protects_due_t30_from_optional_t60(runtime_graph):
     at = datetime(2026, 9, 14, 14, 30, tzinfo=UTC)
     match, _, _ = make_match(runtime_graph, 0, at=at)
+    runtime_graph["season"].coverage = {"odds": True}
+    runtime_graph["season"].save(update_fields=["coverage", "modified"])
+    add_api_football_ref(runtime_graph, match)
     ProviderCallAudit.objects.create(
         capability=ProviderCallAudit.Capability.ODDS_T60,
         logical_identity="header-authority",
@@ -210,6 +213,67 @@ def test_dynamic_reserve_protects_due_t30_from_optional_t60(runtime_graph):
         and item.status == CaptureWorkItem.Status.QUOTA_RESERVE
         for item in plan.items
     )
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status"),
+    [
+        ("no_coverage", CaptureWorkItem.Status.ODDS_NOT_COVERED),
+        ("no_ref", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
+        ("unresolved_ref", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
+        ("no_market", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
+        ("eligible", CaptureWorkItem.Status.PLANNED),
+    ],
+)
+@override_settings(FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False)
+def test_t30_reserve_and_planner_share_provider_prerequisites(
+    runtime_graph, case, expected_status
+):
+    at = datetime(2026, 9, 14, 14, 30, tzinfo=UTC)
+    match, _, _ = make_match(runtime_graph, 0, at=at)
+    if case != "no_coverage":
+        runtime_graph["season"].coverage = {"odds": True}
+        runtime_graph["season"].save(update_fields=["coverage", "modified"])
+    if case not in {"no_coverage", "no_ref"}:
+        ref = add_api_football_ref(runtime_graph, match)
+        if case == "unresolved_ref":
+            ref.reconciliation_status = ReconciliationStatus.PENDING
+            ref.save(update_fields=["reconciliation_status"])
+    if case == "no_market":
+        runtime_graph["market"].name = "Unsupported Market"
+        runtime_graph["market"].save(update_fields=["name", "modified"])
+
+    config = CaptureConfig.from_settings()
+    reserve = dynamic_reserve(at, config)
+    plan = CapturePlanner(config=config).plan(
+        at=at,
+        match_id=match.pk,
+        purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
+        window="market-t30m",
+        allow_bootstrap=True,
+    )
+
+    assert reserve["t30"] == int(case == "eligible")
+    assert plan.reserve["t30"] == reserve["t30"]
+    assert len(plan.items) == 1
+    assert plan.items[0].status == expected_status
+
+
+@override_settings(FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False)
+def test_t30_reserve_keeps_fulfilled_and_expired_temporal_rules(runtime_graph):
+    at = datetime(2026, 9, 14, 14, 30, tzinfo=UTC)
+    match, _, _ = make_match(runtime_graph, 0, at=at)
+    runtime_graph["season"].coverage = {"odds": True}
+    runtime_graph["season"].save(update_fields=["coverage", "modified"])
+    add_api_football_ref(runtime_graph, match)
+    config = CaptureConfig.from_settings()
+
+    assert dynamic_reserve(at, config)["t30"] == 1
+    assert dynamic_reserve(at + timedelta(minutes=14), config)["t30"] == 1
+    assert dynamic_reserve(at + timedelta(minutes=16), config)["t30"] == 0
+
+    make_capture(runtime_graph, [match], at=at)
+    assert dynamic_reserve(at, config)["t30"] == 0
 
 
 @override_settings(FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False)

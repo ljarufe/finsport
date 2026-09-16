@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -142,19 +143,20 @@ def _bounded_client(
     maximum_pages,
     maintenance_run=None,
 ):
-    state = quota_state(at, CaptureConfig.from_settings())
+    capture_config = CaptureConfig.from_settings()
+    quota_config = replace(
+        capture_config,
+        bootstrap_max_attempts=settings.FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS,
+    )
+    state = quota_state(at, quota_config)
     if state.basis == "HEADER_STALE_EPOCH":
         raise APIFootballQuotaReserveError(
             "Optional maintenance waits for a current provider quota header.",
             diagnostic_context={"attempts": 0},
         )
     available = state.remaining
-    reserve = dynamic_reserve(at, CaptureConfig.from_settings())["total"]
-    admission_reserve = reserve
-    if state.basis == "BOUNDED_BOOTSTRAP":
-        available = settings.FOOTBALL_MAINTENANCE_BOOTSTRAP_MAX_ATTEMPTS
-        admission_reserve = reserve
-    if available - admission_reserve < maximum_attempts:
+    reserve = dynamic_reserve(at, capture_config)["total"]
+    if available - reserve < maximum_attempts:
         raise APIFootballQuotaReserveError(
             "Periodic maintenance cannot fit inside the conservative quota budget.",
             diagnostic_context={"attempts": 0},
@@ -177,6 +179,17 @@ def _bounded_client(
         if active_client.calls >= maximum_attempts:
             raise APIFootballOperationBudgetError(
                 "Periodic maintenance reached its provider-attempt bound."
+            )
+        request_at = timezone.now()
+        current = quota_state(request_at, quota_config)
+        if current.basis == "HEADER_STALE_EPOCH":
+            raise APIFootballQuotaReserveError(
+                "Optional maintenance waits for a current provider quota header."
+            )
+        protected = dynamic_reserve(request_at, capture_config)["total"]
+        if current.remaining - 1 < protected:
+            raise APIFootballQuotaReserveError(
+                "Periodic maintenance request would cross the dynamic critical reserve."
             )
 
     client.attempt_guard = guard

@@ -9,6 +9,10 @@ from django.conf import settings
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
+from football.capture_eligibility import (
+    match_winner_market,
+    odds_capture_prerequisite,
+)
 from football.models import (
     CapitalExecutionState,
     CapitalPosition,
@@ -16,9 +20,13 @@ from football.models import (
     CaptureWorkItem,
     MaintenanceRun,
     Match,
+    MatchSourceRef,
     ProviderCallAudit,
+    ReconciliationStatus,
+    Source,
 )
 from football.providers.api_football import FIXTURE_TIMEZONE
+from football.sync import API_FOOTBALL_CODE
 
 FULFILLED = {
     CaptureWorkItem.Status.SUCCESS,
@@ -208,14 +216,33 @@ def _fixture_reserve(at, config):
 
 def _t30_obligations(at, config, epoch_end):
     window = next(item for item in config.windows if item.name == "market-t30m")
-    matches = Match.objects.filter(
-        season__competition__enabled=True,
-        status_short__in=("NS", "TBD"),
-        kickoff__gt=at,
-        kickoff__lte=epoch_end + window.offset,
-    ).order_by("kickoff", "id")
+    matches = list(
+        Match.objects.filter(
+            season__competition__enabled=True,
+            status_short__in=("NS", "TBD"),
+            kickoff__gt=at,
+            kickoff__lte=epoch_end + window.offset,
+        )
+        .select_related("season")
+        .order_by("kickoff", "id")
+    )
+    source = Source.objects.filter(code=API_FOOTBALL_CODE).first()
+    if source is None or not matches:
+        return []
+    market = match_winner_market(source)
+    refs = {
+        ref.match_id: ref
+        for ref in MatchSourceRef.objects.filter(
+            source=source,
+            match_id__in=[match.pk for match in matches],
+            reconciliation_status=ReconciliationStatus.RESOLVED,
+            match__isnull=False,
+        )
+    }
     obligations = []
     for match in matches:
+        if odds_capture_prerequisite(match, source, refs.get(match.pk), market):
+            continue
         target = match.kickoff - window.offset
         if target >= epoch_end:
             continue
