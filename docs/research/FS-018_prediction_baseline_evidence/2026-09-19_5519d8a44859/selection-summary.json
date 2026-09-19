@@ -1,0 +1,127 @@
+{
+  "acquisition_audit": {
+    "ambiguous": 2,
+    "cache_hits": {
+      "fixtures": 0,
+      "historical-odds": 1757
+    },
+    "cached": 1757,
+    "complete_book_counts": {
+      "1": 111,
+      "2": 299,
+      "3": 1608
+    },
+    "fetched": 261,
+    "fixture_status_counts": {
+      "AMBIGUOUS": 2,
+      "FAILED": 70,
+      "NO_USABLE_T30": 111,
+      "RECONSTRUCTED": 1907,
+      "UNMATCHED": 372
+    },
+    "http_429": 0,
+    "http_status_counts": {
+      "200": 271,
+      "404": 70
+    },
+    "in_flight": 0,
+    "matched": 2088,
+    "network_errors": 0,
+    "physical_calls": {
+      "account": 0,
+      "fixtures": 10,
+      "historical-odds": 331
+    },
+    "quote_age_seconds": {
+      "count": 16599,
+      "max": 1439966.198,
+      "median": 2783.036,
+      "min": 1800.052,
+      "p95": 474472.734
+    },
+    "retries": 0,
+    "skipped": 374,
+    "unmatched": 372
+  },
+  "analysis_id": "b9db09d96e5c5e5a390d29b72045c74e5c01d99e0512176f2105061e68e19a6a",
+  "baseline": "GLOBAL_PREDICTION_V1",
+  "candidates": {
+    "DIXON_COLES": {
+      "common_accuracy": 0.49760255727224295,
+      "common_n": 1877,
+      "coverage": 0.9801940177849636,
+      "equal_league_common_log_loss": 1.017933242332602,
+      "global_eligible": true,
+      "model_version": "fs011-dixon-coles-v2",
+      "natural_n": 2425
+    },
+    "ELO_MULTINOMIAL_LOGIT": {
+      "common_accuracy": 0.4938732019179542,
+      "common_n": 1877,
+      "coverage": 1.0,
+      "equal_league_common_log_loss": 1.014800788058603,
+      "global_eligible": true,
+      "model_version": "fs003-elo-multinomial-logit-v1",
+      "natural_n": 2474
+    },
+    "INDEPENDENT_POISSON": {
+      "common_accuracy": 0.4954714970697922,
+      "common_n": 1877,
+      "coverage": 0.9878738884397736,
+      "equal_league_common_log_loss": 1.0219865430121042,
+      "global_eligible": true,
+      "model_version": "fs003-independent-poisson-v1",
+      "natural_n": 2444
+    },
+    "MARKET_CONSENSUS": {
+      "common_accuracy": 0.5061267980820459,
+      "common_n": 1877,
+      "coverage": 0.7704122877930477,
+      "equal_league_common_log_loss": 0.9963326647768029,
+      "global_eligible": true,
+      "model_version": "fs013-market-consensus-v2",
+      "natural_n": 1906
+    }
+  },
+  "cohort_hash": "08d8f7c2852444c2e66ed28c4075e2bc51708d3ac918cdb7cf75daf858ae2c1c",
+  "common_n": 1877,
+  "coverage_used_for_selection": false,
+  "data_cutoff": "2026-09-19T03:17:33.457781+00:00",
+  "date": "2026-09-19",
+  "disposition": "CLEAR_SUPERIORITY",
+  "experiment_spec_id": "de5dc600168fd249f93848e9ca3d550b0de05eed07824f9874bf5fec68d4f9d0",
+  "full_local_artifact_location": "tmp/FS-018_final_evidence_local/2026-09-19_5519d8a44859/",
+  "full_local_artifact_sha256": {
+    "manifest.json.gz": "2bc97a233f41562a4d4670e66feff2c1b0e217af0402c6621683075a6bbec644",
+    "per_match.jsonl.gz": "e343676d374c9a4d962e88f96594b433160222726d12713389c105fe5bf55383",
+    "promoted-report-full.md": "5f496e1e86afbc20182d59d9c1f58964e37bc2055e0830100eab9fb665a74347",
+    "report.md": "c4c4cf92af0be7264969e6dc9ff19ce577ddf91cf0ab74fbb95bedb7bd212ade",
+    "summary.json": "57779a94d4fab6cf9db432bda5cb0356968d3c4c7ddbabb4b0f2da03678b4ca0"
+  },
+  "manifest_hash": "3339a7f8247feee99e232d94be109cb32424234661bf1a7c6c2179b4db82c61e",
+  "model_version": "fs013-market-consensus-v2",
+  "natural_used_for_selection": false,
+  "paired_bootstrap_95pct": {
+    "DIXON_COLES_minus_MARKET_CONSENSUS": {
+      "lower": 0.009728369877868856,
+      "upper": 0.03408732293396707
+    },
+    "ELO_MULTINOMIAL_LOGIT_minus_MARKET_CONSENSUS": {
+      "lower": 0.008044362281316173,
+      "upper": 0.029197522982896764
+    },
+    "INDEPENDENT_POISSON_minus_MARKET_CONSENSUS": {
+      "lower": 0.013908421583607162,
+      "upper": 0.03800511889487207
+    },
+    "block": "Competition x Lima ISO week",
+    "replicates": 5000,
+    "seed": 18092026
+  },
+  "run_id": "5519d8a44859478e7be5e6055d49fd3b6406b5eca590a195104337553414337e",
+  "schema": "FS018_PREDICTION_BASELINE_SELECTION_SUMMARY_V1",
+  "selected": "MARKET_CONSENSUS",
+  "selection_basis": "LOWEST_EQUAL_LEAGUE_COMMON_LOG_LOSS",
+  "selection_policy": "PAIRED_COMMON_EQUAL_LEAGUE_LOG_LOSS_V1",
+  "source_acquisition_id": "55e2c9682f20d229b3ca67a102d4c084c581f33686fea094139333e041838b81"
+}

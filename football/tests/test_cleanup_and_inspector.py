@@ -29,6 +29,8 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "import_historical_market_data",
         "retire_capital_v1",
         "football_quota_summary",
+        "enqueue_oddspapi_historical_backfill",
+        "run_prediction_experiment",
     }
     for name in (
         "get_leagues",

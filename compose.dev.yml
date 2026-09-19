@@ -13,6 +13,7 @@ x-app-environment: &app-environment
   DATABASE_PORT: "5432"
   FOOTBALL_CAPTURE_ENABLED: "False"
   FOOTBALL_PIPELINE_ENABLED: "False"
+  FINSPORT_EXPERIMENT_RUNTIME: finsport-dev
   INKABET_AUTOMATIC_ENABLED: "False"
   CSRF_TRUSTED_ORIGINS: http://localhost:18000,http://localhost:18001,http://localhost:8002
 

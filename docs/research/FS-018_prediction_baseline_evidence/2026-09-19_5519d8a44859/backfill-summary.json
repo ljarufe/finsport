@@ -1,0 +1,60 @@
+{
+  "audit": {
+    "ambiguous": 2,
+    "cache_hits": {
+      "fixtures": 0,
+      "historical-odds": 1757
+    },
+    "cached": 1757,
+    "complete_book_counts": {
+      "1": 111,
+      "2": 299,
+      "3": 1608
+    },
+    "fetched": 261,
+    "fixture_status_counts": {
+      "AMBIGUOUS": 2,
+      "FAILED": 70,
+      "NO_USABLE_T30": 111,
+      "RECONSTRUCTED": 1907,
+      "UNMATCHED": 372
+    },
+    "http_429": 0,
+    "http_status_counts": {
+      "200": 271,
+      "404": 70
+    },
+    "matched": 2088,
+    "network_errors": 0,
+    "physical_calls": {
+      "account": 0,
+      "fixtures": 10,
+      "historical-odds": 331
+    },
+    "quote_age_seconds": {
+      "count": 16599,
+      "max": 1439966.198,
+      "median": 2783.036,
+      "min": 1800.052,
+      "p95": 474472.734
+    },
+    "retries": 0,
+    "skipped": 374,
+    "unmatched": 372
+  },
+  "league_status": {
+    "1270": "PARTIAL",
+    "1272": "COMPLETE",
+    "1273": "PARTIAL",
+    "1274": "PARTIAL",
+    "1275": "PARTIAL",
+    "1276": "COMPLETE",
+    "1277": "PARTIAL",
+    "1278": "PARTIAL",
+    "1325": "COMPLETE",
+    "1459": "COMPLETE"
+  },
+  "run_id": "55e2c9682f20d229b3ca67a102d4c084c581f33686fea094139333e041838b81",
+  "spec_id": "de5dc600168fd249f93848e9ca3d550b0de05eed07824f9874bf5fec68d4f9d0",
+  "status": "PARTIAL"
+}
