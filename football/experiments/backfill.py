@@ -319,7 +319,15 @@ def backfill(spec, *, client=None, pilot=False):
 
 
 def _safe_reason(error):
-    return str(error) if isinstance(error, ProviderError) else type(error).__name__
+    if isinstance(error, ProviderError):
+        return str(error)
+    if (
+        isinstance(error, ValueError)
+        and str(error).startswith("HISTORICAL_")
+        and str(error).endswith("_SHAPE_MISMATCH")
+    ):
+        return str(error)
+    return type(error).__name__
 
 
 def _contradiction(error):

@@ -14,7 +14,23 @@ from .analysis import (
 )
 from .replay import sporting_replay
 from .spec import MODELS, PROFILE
+from .spec import _runtime_identity as execution_runtime
 from .storage import atomic_json, identity, instant, lock, read_json, require_dev, roots
+
+ANALYSIS_LINEAGE_VERSION = "FS018_EXECUTION_RUNTIME_V1"
+
+
+def analysis_identity(spec_id, acquisition_id, *, mode, selection_policy, runtime_id):
+    return identity(
+        {
+            "lineage_version": ANALYSIS_LINEAGE_VERSION,
+            "spec_id": spec_id,
+            "acquisition_id": acquisition_id,
+            "analysis_mode": mode,
+            "selection_policy": selection_policy,
+            "execution_runtime_id": runtime_id,
+        }
+    )
 
 
 def snapshot_matches(spec):
@@ -135,17 +151,18 @@ def run_experiment(spec, *, pilot=False, confirm=False):
         raise ValueError("Recovery requires full scope")
     if spec.data.get("acquisition", {}).get("mode") == "RECOVERY_V1" and not confirm:
         raise ValueError("RECOVERY_REQUIRES_FRESH_CONFIRMATION")
-    analysis_id = (
-        identity(
-            {
-                "spec_id": spec.id,
-                "acquisition_id": acquisition_id,
-                "analysis_mode": "FRESH_CONFIRMATION_V2",
-                "selection_policy": PAIRED_COMMON_SELECTION_POLICY,
-            }
-        )
-        if confirm
-        else acquisition_id
+    mode = "FRESH_CONFIRMATION_V2" if confirm else "STANDARD"
+    selection_policy = (
+        PAIRED_COMMON_SELECTION_POLICY if confirm else STANDARD_SELECTION_POLICY
+    )
+    actual_runtime = execution_runtime()
+    runtime_id = identity(actual_runtime)
+    analysis_id = analysis_identity(
+        spec.id,
+        acquisition_id,
+        mode=mode,
+        selection_policy=selection_policy,
+        runtime_id=runtime_id,
     )
     directory = roots()[1] / analysis_id
     with lock(directory / "analysis.lock"):
@@ -267,14 +284,17 @@ def run_experiment(spec, *, pilot=False, confirm=False):
             data["models"],
             data["competition_ids"],
             resources,
-            selection_policy=(
-                PAIRED_COMMON_SELECTION_POLICY if confirm else STANDARD_SELECTION_POLICY
-            ),
+            selection_policy=selection_policy,
         )
+        if identity(execution_runtime()) != runtime_id:
+            raise ValueError("EXECUTION_RUNTIME_CHANGED_DURING_ANALYSIS")
         result = {
+            "analysis_lineage_version": ANALYSIS_LINEAGE_VERSION,
             "analysis_id": analysis_id,
-            "analysis_mode": "FRESH_CONFIRMATION_V2" if confirm else "STANDARD",
+            "analysis_mode": mode,
             "source_acquisition_id": acquisition_id,
+            "execution_runtime": actual_runtime,
+            "execution_runtime_id": runtime_id,
             "spec_id": spec.id,
             "spec": data,
             "input_hash": saved["hash"],
@@ -308,3 +328,41 @@ def verify_run(result, spec):
         raise ValueError("RUN_HASH_MISMATCH")
     if identity(result["manifest"]) != result["summary"]["manifest_hash"]:
         raise ValueError("MANIFEST_HASH_MISMATCH")
+    runtime_fields = (
+        "analysis_lineage_version",
+        "execution_runtime",
+        "execution_runtime_id",
+    )
+    if any(field in result for field in runtime_fields):
+        if not all(field in result for field in runtime_fields):
+            raise ValueError("EXECUTION_RUNTIME_PROVENANCE_INCOMPLETE")
+        if (
+            result["analysis_lineage_version"] != ANALYSIS_LINEAGE_VERSION
+            or identity(result["execution_runtime"]) != result["execution_runtime_id"]
+        ):
+            raise ValueError("EXECUTION_RUNTIME_IDENTITY_MISMATCH")
+        acquisition_id = identity(
+            {"spec_id": spec.id, "pilot": result["acquisition"]["pilot"]}
+        )
+        mode = result["analysis_mode"]
+        if mode not in {"STANDARD", "FRESH_CONFIRMATION_V2"}:
+            raise ValueError("ANALYSIS_MODE_MISMATCH")
+        expected_policy = (
+            PAIRED_COMMON_SELECTION_POLICY
+            if mode == "FRESH_CONFIRMATION_V2"
+            else STANDARD_SELECTION_POLICY
+        )
+        if (
+            result["source_acquisition_id"] != acquisition_id
+            or result["acquisition"]["run_id"] != acquisition_id
+            or result["summary"]["selection_policy"] != expected_policy
+            or result["analysis_id"]
+            != analysis_identity(
+                spec.id,
+                acquisition_id,
+                mode=mode,
+                selection_policy=expected_policy,
+                runtime_id=result["execution_runtime_id"],
+            )
+        ):
+            raise ValueError("ANALYSIS_LINEAGE_MISMATCH")

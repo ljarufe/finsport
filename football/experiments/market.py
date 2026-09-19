@@ -10,28 +10,50 @@ from .spec import BOOKMAKERS, MODELS, PROFILE
 from .storage import identity, instant
 
 
+def _optional_mapping(container, key, error_code):
+    if key not in container:
+        return {}
+    value = container[key]
+    if not isinstance(value, dict):
+        raise ValueError(error_code)
+    return value
+
+
 def reconstruct(payload, *, fixture_id, match_id, kickoff):
-    if payload.get("fixtureId") != fixture_id or not isinstance(
-        payload.get("bookmakers"), dict
+    if (
+        not isinstance(payload, dict)
+        or payload.get("fixtureId") != fixture_id
+        or not isinstance(payload.get("bookmakers"), dict)
     ):
         raise ValueError("HISTORICAL_SHAPE_MISMATCH")
     cutoff = kickoff - timedelta(minutes=30)
     books, excluded = {}, {}
     for book in BOOKMAKERS:
-        outcomes = (
-            payload["bookmakers"]
-            .get(book, {})
-            .get("markets", {})
-            .get("101", {})
-            .get("outcomes", {})
+        bookmaker = _optional_mapping(
+            payload["bookmakers"], book, "HISTORICAL_BOOKMAKER_SHAPE_MISMATCH"
+        )
+        markets = _optional_mapping(
+            bookmaker, "markets", "HISTORICAL_MARKETS_SHAPE_MISMATCH"
+        )
+        market = _optional_mapping(markets, "101", "HISTORICAL_MARKET_SHAPE_MISMATCH")
+        outcomes = _optional_mapping(
+            market, "outcomes", "HISTORICAL_OUTCOMES_SHAPE_MISMATCH"
         )
         legs = []
         for outcome in ("101", "102", "103"):
-            series = outcomes.get(outcome, {}).get("players", {}).get("0", [])
+            outcome_node = _optional_mapping(
+                outcomes, outcome, "HISTORICAL_OUTCOME_SHAPE_MISMATCH"
+            )
+            players = _optional_mapping(
+                outcome_node, "players", "HISTORICAL_PLAYERS_SHAPE_MISMATCH"
+            )
+            series = players.get("0", [])
             if not isinstance(series, list):
                 raise ValueError("HISTORICAL_SERIES_SHAPE_MISMATCH")
             valid = []
             for state in series:
+                if not isinstance(state, dict):
+                    raise ValueError("HISTORICAL_STATE_SHAPE_MISMATCH")
                 try:
                     timestamp = instant(state["createdAt"])
                     price = float(state["price"])

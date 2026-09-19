@@ -173,7 +173,9 @@ def promote(
     path, report_path = base / PROMOTION_REF, base / REPORT_REF
     report = human_report(run)
     with lock(base / "tmp/FS-018_experiments/promotion.lock"):
-        conflicting = (path.exists() and read_json(path) != record) or (
+        if path.exists() and read_json(path) == record:
+            return record
+        conflicting = path.exists() or (
             report_path.exists() and report_path.read_text() != report
         )
         if conflicting:

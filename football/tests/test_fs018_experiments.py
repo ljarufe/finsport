@@ -739,6 +739,70 @@ def test_runner_offline_readonly_idempotent_and_pilot_cannot_promote(canonical_m
         artifacts.promotion_record(result)
 
 
+def test_execution_runtime_changes_analysis_not_acquisition(
+    canonical_match, monkeypatch
+):
+    client = Mock()
+    client.fixtures.return_value = (
+        provider.validate_fixtures(
+            [fixture_row()], 8, "2026-01-01T00:00:00Z", "2026-09-19T00:00:00Z"
+        ),
+        "FETCHED",
+    )
+    client.historical.return_value = (payload(), "FETCHED")
+    value = frozen()
+    acquired = backfill.backfill(value, client=client, pilot=True)
+    acquisition_bytes = (
+        storage.roots()[1] / acquired["run_id"] / "backfill.json"
+    ).read_bytes()
+    runtime = {
+        "name": "finsport-dev",
+        "python": "3.13",
+        "git_revision": "test-revision",
+        "dirty": False,
+        "code_identity": "runtime-A",
+        "dependencies": {"Django": "test-version"},
+    }
+    monkeypatch.setattr(runner, "execution_runtime", lambda: copy.deepcopy(runtime))
+    first = runner.run_experiment(value, pilot=True, confirm=True)
+    assert runner.run_experiment(value, pilot=True, confirm=True) == first
+    assert first["execution_runtime_id"] == storage.identity(runtime)
+    runtime["code_identity"] = "runtime-B"
+    second = runner.run_experiment(value, pilot=True, confirm=True)
+    assert second["analysis_id"] != first["analysis_id"]
+    assert second["run_id"] != first["run_id"]
+    assert (
+        second["source_acquisition_id"]
+        == first["source_acquisition_id"]
+        == acquired["run_id"]
+    )
+    assert (
+        second["spec"]["runtime"] == first["spec"]["runtime"] == value.data["runtime"]
+    )
+    assert runner.run_experiment(value, pilot=True, confirm=True) == second
+    runner.verify_run(
+        first, value
+    )  # Verifying old evidence does not use this machine's runtime.
+    tampered = copy.deepcopy(first)
+    tampered["execution_runtime_id"] = "incorrect"
+    tampered["run_id"] = storage.identity(
+        {k: v for k, v in tampered.items() if k != "run_id"}
+    )
+    with pytest.raises(ValueError, match="EXECUTION_RUNTIME_IDENTITY_MISMATCH"):
+        runner.verify_run(tampered, value)
+    tampered = copy.deepcopy(first)
+    tampered["analysis_id"] = "incorrect"
+    tampered["run_id"] = storage.identity(
+        {k: v for k, v in tampered.items() if k != "run_id"}
+    )
+    with pytest.raises(ValueError, match="ANALYSIS_LINEAGE_MISMATCH"):
+        runner.verify_run(tampered, value)
+    assert (
+        storage.roots()[1] / acquired["run_id"] / "backfill.json"
+    ).read_bytes() == acquisition_bytes
+    assert client.historical.call_count == 1
+
+
 def test_promotion_lineage_immutable(tmp_path):
     value = frozen(tuple(spec.TOURNAMENTS))
     rows = manifest(tuple(spec.TOURNAMENTS), identical=True)
@@ -765,7 +829,10 @@ def test_promotion_lineage_immutable(tmp_path):
         value.data, record["model_code"]
     )
     assert record["config_identity"] == storage.identity(record["effective_config"])
+    report_path = tmp_path / artifacts.REPORT_REF
+    storage.atomic_text(report_path, "Compact maintainer-authored report\n")
     assert record == artifacts.promote(run, base=tmp_path)
+    assert report_path.read_text() == "Compact maintainer-authored report\n"
     assert storage.canonical(run) == original
     assert (tmp_path / artifacts.REPORT_REF).exists()
     changed = copy.deepcopy(run)
@@ -1358,6 +1425,75 @@ def test_backfill_contract_contradiction_stops(canonical_match):
     assert storage.read_json(path)["status"] == "FAILED"
 
 
+@pytest.mark.parametrize(
+    "path,code",
+    [
+        (("bookmakers", "pinnacle"), "BOOKMAKER"),
+        (("bookmakers", "pinnacle", "markets"), "MARKETS"),
+        (("bookmakers", "pinnacle", "markets", "101"), "MARKET"),
+        (("bookmakers", "pinnacle", "markets", "101", "outcomes"), "OUTCOMES"),
+        (("bookmakers", "pinnacle", "markets", "101", "outcomes", "101"), "OUTCOME"),
+        (
+            ("bookmakers", "pinnacle", "markets", "101", "outcomes", "101", "players"),
+            "PLAYERS",
+        ),
+        (
+            (
+                "bookmakers",
+                "pinnacle",
+                "markets",
+                "101",
+                "outcomes",
+                "101",
+                "players",
+                "0",
+            ),
+            "SERIES",
+        ),
+    ],
+)
+def test_present_malformed_historical_node_is_classified(path, code):
+    data = payload(2)
+    node = data
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = [] if code != "SERIES" else {}
+    with pytest.raises(ValueError, match=f"HISTORICAL_{code}_SHAPE_MISMATCH"):
+        reconstruct_test(data)
+
+
+def test_missing_historical_node_is_incomplete_not_schema_failure():
+    data = payload(2)
+    del data["bookmakers"]["pinnacle"]["markets"]
+    result = reconstruct_test(data)
+    assert result["status"] == "UNAVAILABLE"
+    assert result["book_count"] == 1
+
+
+def test_malformed_historical_shape_aborts_backfill(canonical_match):
+    client = Mock()
+    client.fixtures.return_value = (
+        provider.validate_fixtures(
+            [fixture_row()], 8, "2026-01-01T00:00:00Z", "2026-09-19T00:00:00Z"
+        ),
+        "FETCHED",
+    )
+    malformed = payload(2)
+    malformed["bookmakers"]["pinnacle"]["markets"] = []
+    client.historical.return_value = (malformed, "FETCHED")
+    value = frozen()
+    with pytest.raises(ValueError, match="HISTORICAL_MARKETS_SHAPE_MISMATCH"):
+        backfill.backfill(value, client=client, pilot=True)
+    path = (
+        storage.roots()[1]
+        / storage.identity({"spec_id": value.id, "pilot": True})
+        / "backfill.json"
+    )
+    state = storage.read_json(path)
+    assert state["status"] == "FAILED"
+    assert state["leagues"]["1278"]["reason"] == "HISTORICAL_MARKETS_SHAPE_MISMATCH"
+
+
 def test_future_elo_target_results_do_not_change_predictions(canonical_match):
     from football.prediction.elo import EloMultinomialAdapter
 
@@ -1651,7 +1787,7 @@ def test_run_local_views_are_deterministic_and_derived(canonical_match):
     value = frozen()
     backfill.backfill(value, client=client, pilot=True)
     run = runner.run_experiment(value, pilot=True)
-    directory = storage.roots()[1] / run["acquisition"]["run_id"]
+    directory = storage.roots()[1] / run["analysis_id"]
     names = (
         "spec.json",
         "manifest.json",
