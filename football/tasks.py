@@ -10,6 +10,13 @@ from football.observability.pipeline import exception_diagnostic
 from football.pipeline import run_pipeline
 
 
+@shared_task(name="football.experiments.oddspapi_historical_backfill")
+def oddspapi_historical_backfill(spec_path, pilot=False):
+    from football.experiments.backfill import execute_backfill
+
+    return execute_backfill(spec_path, pilot=pilot)
+
+
 @shared_task(name="football.capture.wake")
 def wake_capture_planner():
     """Wake the shared planner; all eligibility and quota logic stays in service."""

@@ -134,15 +134,15 @@ def market_selection_as_of(match, cutoff, *, not_before=None):
                     }
                 )
             continue
-        implied = calculate_implied(list(prices), method="multiplicative")
+        fair, margin = multiplicative_fair(prices)
         selected_bookmakers.add(canonical.pk)
         quotes.append(
             MarketQuote(
                 observation=observation,
                 canonical_bookmaker=canonical,
                 prices=prices,
-                fair_probabilities=tuple(map(float, implied.probabilities)),
-                overround=float(implied.margin),
+                fair_probabilities=fair,
+                overround=margin,
             )
         )
     provenance = [
@@ -199,12 +199,9 @@ class MarketConsensusAdapter:
             return UnavailablePrediction(
                 "NO_VALID_CANONICAL_1X2_QUOTES", selection.diagnostics
             )
-        means = [
-            sum(quote.fair_probabilities[index] for quote in quotes) / len(quotes)
-            for index in range(3)
-        ]
-        total = sum(means)
-        probabilities = [value / total for value in means]
+        probabilities = equal_weight_consensus(
+            [quote.fair_probabilities for quote in quotes]
+        )
         overrounds = [quote.overround for quote in quotes]
         return ProbabilityResult(
             *probabilities,
@@ -240,3 +237,15 @@ def best_prices_as_of(match, cutoff, *, not_before=None):
             getattr(quote.observation, outcome.lower()),
         )
     return best
+
+
+def multiplicative_fair(prices):
+    """Shared v2 mathematics; evidence eligibility belongs to each caller."""
+    implied = calculate_implied(list(prices), method="multiplicative")
+    return tuple(map(float, implied.probabilities)), float(implied.margin)
+
+
+def equal_weight_consensus(vectors):
+    means = [sum(vector[i] for vector in vectors) / len(vectors) for i in range(3)]
+    total = sum(means)
+    return tuple(value / total for value in means)

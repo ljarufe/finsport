@@ -1,0 +1,94 @@
+{
+  "analysis_id": "15f313269bf23ed189ff3e50599b0b30785c23b61a1c361a7a7816f691a8ccc8",
+  "baseline": "GLOBAL_PREDICTION_V1",
+  "candidates": {
+    "DIXON_COLES": {
+      "common_accuracy": 0.49760255727224295,
+      "common_n": 1877,
+      "coverage": 0.9801940177849636,
+      "equal_league_common_log_loss": 1.017933242332602,
+      "global_eligible": true,
+      "model_version": "fs011-dixon-coles-v2",
+      "natural_n": 2425
+    },
+    "ELO_MULTINOMIAL_LOGIT": {
+      "common_accuracy": 0.4938732019179542,
+      "common_n": 1877,
+      "coverage": 1.0,
+      "equal_league_common_log_loss": 1.014800788058603,
+      "global_eligible": true,
+      "model_version": "fs003-elo-multinomial-logit-v1",
+      "natural_n": 2474
+    },
+    "INDEPENDENT_POISSON": {
+      "common_accuracy": 0.4954714970697922,
+      "common_n": 1877,
+      "coverage": 0.9878738884397736,
+      "equal_league_common_log_loss": 1.0219865430121042,
+      "global_eligible": true,
+      "model_version": "fs003-independent-poisson-v1",
+      "natural_n": 2444
+    },
+    "MARKET_CONSENSUS": {
+      "common_accuracy": 0.5061267980820459,
+      "common_n": 1877,
+      "coverage": 0.7704122877930477,
+      "equal_league_common_log_loss": 0.9963326647768029,
+      "global_eligible": true,
+      "model_version": "fs013-market-consensus-v2",
+      "natural_n": 1906
+    }
+  },
+  "cohort_hash": "08d8f7c2852444c2e66ed28c4075e2bc51708d3ac918cdb7cf75daf858ae2c1c",
+  "common_n": 1877,
+  "coverage_used_for_selection": false,
+  "date": "2026-09-19",
+  "disposition": "CLEAR_SUPERIORITY",
+  "execution_runtime_id": "7cbeae3db86c33001e5c82f8aa66d9619a54be247569ec5abddf465730e09cd3",
+  "experiment_spec_id": "de5dc600168fd249f93848e9ca3d550b0de05eed07824f9874bf5fec68d4f9d0",
+  "manifest_hash": "3339a7f8247feee99e232d94be109cb32424234661bf1a7c6c2179b4db82c61e",
+  "model_version": "fs013-market-consensus-v2",
+  "natural_used_for_selection": false,
+  "paired_intervals": {
+    "DIXON_COLES|MARKET_CONSENSUS": {
+      "a": "DIXON_COLES",
+      "b": "MARKET_CONSENSUS",
+      "lower": 0.009728369877868856,
+      "mean_delta": 0.021421884566057762,
+      "upper": 0.03408732293396707
+    },
+    "ELO_MULTINOMIAL_LOGIT|MARKET_CONSENSUS": {
+      "a": "ELO_MULTINOMIAL_LOGIT",
+      "b": "MARKET_CONSENSUS",
+      "lower": 0.008044362281316173,
+      "mean_delta": 0.018386717743744684,
+      "upper": 0.029197522982896764
+    },
+    "INDEPENDENT_POISSON|MARKET_CONSENSUS": {
+      "a": "INDEPENDENT_POISSON",
+      "b": "MARKET_CONSENSUS",
+      "lower": 0.013908421583607162,
+      "mean_delta": 0.025493852703245248,
+      "upper": 0.03800511889487207
+    }
+  },
+  "recovery_counts": {
+    "AMBIGUOUS": 2,
+    "FAILED": 70,
+    "NO_USABLE_T30": 111,
+    "RECONSTRUCTED": 1907,
+    "UNMATCHED": 372
+  },
+  "run_id": "b41fd8a324f4fd0265c8a9d43a1308dc21f5b862d45f6583b3a75542df5c711b",
+  "schema": "FS018_PREDICTION_BASELINE_SELECTION_SUMMARY_V2",
+  "score_order": [
+    "MARKET_CONSENSUS",
+    "ELO_MULTINOMIAL_LOGIT",
+    "DIXON_COLES",
+    "INDEPENDENT_POISSON"
+  ],
+  "selected": "MARKET_CONSENSUS",
+  "selection_basis": "LOWEST_EQUAL_LEAGUE_COMMON_LOG_LOSS",
+  "selection_policy": "PAIRED_COMMON_EQUAL_LEAGUE_LOG_LOSS_V1",
+  "source_acquisition_id": "55e2c9682f20d229b3ca67a102d4c084c581f33686fea094139333e041838b81"
+}
