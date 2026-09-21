@@ -35,4 +35,5 @@ The `make_bets` command must remain unconditionally fail-closed while Finsport i
 - Validation is delta-based. Do not make the gate red with unrelated legacy lint or migration drift solely to expand the gate.
 - Record discovered work with `evidence`, `impact`, and `recommendation`; do not automatically absorb it into the current ticket.
 - Do not invent UAT results. Final ticket feedback must distinguish automated evidence, manual UAT, warnings or deferred validation, and future work.
-- For implementation tickets, update `docs/process/<TICKET-ID>_feedback.md` and generate the requested untracked review artifacts under `tmp/` after all implementation and validation changes are complete.
+- Final ticket feedback is not a per-pass artifact. Do not create or update `docs/process/<TICKET-ID>_feedback.md` during intermediate implementation or correction passes. Write or update it once at the true final lifecycle checkpoint, after implementation, UAT, PR/CI, and substantive review changes are closed, preferably as the final feedback-only commit before merge.
+- Generate requested untracked review artifacts under `tmp/` after implementation and validation changes are complete.

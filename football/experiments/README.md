@@ -5,6 +5,63 @@ No migrations, prospective prediction/odds writes, Beat entry, or routing change
 The maintainer-owned methodology is
 `docs/research/FS-018_experiment_lab_global_prediction_research.md`.
 
+## FS-019 Decision extension
+
+FS-019 extends this Experiment Lab at the Decision layer without changing
+Prediction, Capital, provider acquisition, schedules, database models, or
+operational routing. Its frozen six candidates are `MODAL_ALL` followed by
+`SELECTIVE_CONFIDENCE` at 0.40, 0.45, 0.50, 0.55, and 0.60. `VALUE` is not an
+eligible candidate.
+
+The manual entry point is:
+
+```sh
+python manage.py run_decision_experiment --spec /app/tmp/FS-019_experiments/decision-spec.json --freeze
+python manage.py run_decision_experiment --spec /app/tmp/FS-019_experiments/decision-spec.json
+python manage.py run_decision_experiment --spec /app/tmp/FS-019_experiments/decision-spec.json --promote
+```
+
+The generic Experiment Lab workspace defaults to `<BASE_DIR>/tmp`. Pass
+`--workspace-root /visible/path` to place the FS-019 working tree under
+`/visible/path/FS-019_experiments`; the spec must also be inside that resolved
+tree. An external host path works from Docker only when it is mounted and visible
+inside the executing container. No external path or private archive is a runtime
+dependency, and the command never copies provider data automatically.
+
+`--freeze` is the only phase that reads the committed FS-018 promotion authority
+and retained FS-018 run, manifest, backfill, and per-Match view. It cross-checks
+their frozen identities, joins each Market row to its FS-018 `evidence_id`, and
+proves exact price, three-leg quote, timestamp, age, bookmaker-set, fixture and
+cache-hash equality against the retained acquisition evidence before writing a
+canonical deterministic-gzip Decision input snapshot. It does not replay
+Decision, calculate economic rankings, or promote. All later execution reads only
+that FS-019 snapshot, so cleanup of FS-018 local `tmp/` cannot alter the study.
+
+Normal execution writes only immutable disposable artifacts below
+`<workspace-root>/FS-019_experiments/<execution-id>/`. The input and all 11,436
+candidate Decision rows remain outside durable research evidence. `--promote`
+writes one compact selection summary, one selected 1,906-row deterministic-gzip
+Decision stream, its checksums, the human report, and
+`docs/research/FS-019_global_decision_v1.json` only for `CLEAR_SUPERIORITY`,
+`NO_CLEAR_SUPERIORITY`, or `UNSTABLE`; `INSUFFICIENT_EVIDENCE` is strictly
+`NO_PROMOTION`. Identical promotion is idempotent and a conflicting authority
+fails closed. The authority and selected stream are the sole historical Decision
+handoff to Capital Phase 3; current Capital runtime and configuration are not
+changed by FS-019.
+
+The preserved private FS-018 archive remains `PRESERVE_ACTIVE` during FS-019 and
+is recovery-only, never a runtime input. It becomes `DELETE_ELIGIBLE` only after
+the actual FS-019 run completes, `GLOBAL_DECISION_V1` is promoted, the durable
+selected stream is verified, the promotion resolves that stream and all required
+hashes, independent UAT is closed, and no downstream consumer needs direct
+FS-018 private evidence. Physical deletion and retention-index cleanup belong to
+final cleanup/handoff, not an implementation pass.
+
+The command requires the same isolated `finsport-dev` safety boundary as FS-018:
+automatic pipeline and capture disabled, Lima timezone, and the safe local Celery
+queue. It has no provider/network flag and does not read historical Prediction or
+Decision database rows.
+
 ## Ownership and artifacts
 
 - `spec.py`: canonical immutable JSON, frozen CURRENT configs/readiness profiles,
