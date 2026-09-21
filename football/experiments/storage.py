@@ -79,6 +79,16 @@ def roots():
     return base / "FS-018_oddspapi", base / "FS-018_experiments"
 
 
+def experiment_workspace_root(override=None):
+    """Resolve the generic local Experiment Lab workspace root."""
+    return Path(override or (Path(settings.BASE_DIR) / "tmp")).expanduser().resolve()
+
+
+def decision_root(workspace_root=None):
+    """Keep FS-019 artifacts separate from the frozen FS-018 roots."""
+    return experiment_workspace_root(workspace_root) / "FS-019_experiments"
+
+
 def require_dev():
     if (
         os.environ.get("FINSPORT_EXPERIMENT_RUNTIME") != "finsport-dev"
@@ -96,3 +106,21 @@ def local_spec_path(path):
     if not path.is_relative_to(root) or path.suffix != ".json":
         raise ValueError("Spec must be a JSON file under tmp/FS-018_experiments")
     return path
+
+
+def local_decision_spec_path(path, *, workspace_root=None):
+    root = decision_root(workspace_root)
+    path = Path(path).resolve()
+    if not path.is_relative_to(root) or path.suffix != ".json":
+        raise ValueError(f"Spec must be a JSON file under {root}")
+    return path
+
+
+def immutable_bytes(path, value, *, conflict):
+    """Create an artifact once, or verify that an existing artifact is identical."""
+    path = Path(path)
+    if path.exists():
+        if path.read_bytes() != value:
+            raise ValueError(conflict)
+        return
+    atomic_bytes(path, value)

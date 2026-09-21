@@ -31,6 +31,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "football_quota_summary",
         "enqueue_oddspapi_historical_backfill",
         "run_prediction_experiment",
+        "run_decision_experiment",
     }
     for name in (
         "get_leagues",
