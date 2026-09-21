@@ -407,14 +407,14 @@ def test_upstream_binding_verifies_all_local_lineage_and_fails_on_mismatch(
     run["run_id"] = identity(run)
     synthetic["full_run_id"] = run["run_id"]
     monkeypatch.setattr(decision_runner, "UPSTREAM", synthetic)
+    monkeypatch.setattr(decision_runner, "per_match_rows", lambda run: iter(()))
     root = tmp_path / "FS-018"
     directory = root / "analysis"
     directory.mkdir(parents=True)
     (root / "acquisition").mkdir()
     (directory / "run.json").write_text(canonical(run))
     (directory / "manifest.json").write_text(canonical(manifest))
-    with gzip.open(directory / "per_match.jsonl.gz", "wt") as stream:
-        stream.write("")
+    (directory / "per_match.jsonl.gz").write_bytes(deterministic_gzip([]))
     (root / "acquisition" / "backfill.json").write_text(canonical(acquisition))
     authority = {
         key: synthetic[key]
@@ -441,6 +441,38 @@ def test_upstream_binding_verifies_all_local_lineage_and_fails_on_mismatch(
     authority_path.write_text(canonical(authority))
     with pytest.raises(ValueError, match="UPSTREAM_AUTHORITY_MISMATCH:manifest_hash"):
         decision_runner._verify_upstream(authority_path, directory)
+
+
+def test_upstream_binding_rejects_tampered_derived_per_match_view(
+    monkeypatch, tmp_path
+):
+    expected = [
+        {
+            "match_id": 1,
+            "competition_id": 1270,
+            "kickoff": KICKOFF.isoformat(),
+        }
+    ]
+    monkeypatch.setattr(
+        decision_runner,
+        "per_match_rows",
+        lambda run: iter(expected),
+    )
+
+    path = tmp_path / "per_match.jsonl.gz"
+    path.write_bytes(deterministic_gzip(expected))
+
+    decision_runner._verify_per_match_view(path, {})
+
+    damaged = copy.deepcopy(expected)
+    damaged[0]["competition_id"] = 1272
+    path.write_bytes(deterministic_gzip(damaged))
+
+    with pytest.raises(
+        ValueError,
+        match="UPSTREAM_PER_MATCH_VIEW_MISMATCH",
+    ):
+        decision_runner._verify_per_match_view(path, {})
 
 
 def valid_spec(snapshot_hash="a" * 64, cohort_hash=None):

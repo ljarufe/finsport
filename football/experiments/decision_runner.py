@@ -32,7 +32,7 @@ from .storage import (
     read_json,
     require_dev,
 )
-from .views import deterministic_gzip
+from .views import deterministic_gzip, per_match_rows
 
 UPSTREAM = {
     "baseline": "GLOBAL_PREDICTION_V1",
@@ -173,6 +173,12 @@ def decision_common_cohort_hash(rows):
     return identity(opportunities)
 
 
+def _verify_per_match_view(path, run):
+    expected = deterministic_gzip(per_match_rows(run))
+    if Path(path).read_bytes() != expected:
+        raise ValueError("UPSTREAM_PER_MATCH_VIEW_MISMATCH")
+
+
 def _verify_upstream(authority_path, run_directory):
     authority = read_json(authority_path)
     for key in (
@@ -230,6 +236,7 @@ def _verify_upstream(authority_path, run_directory):
         or backfill.get("spec_id") != UPSTREAM["experiment_spec_id"]
     ):
         raise ValueError("UPSTREAM_BACKFILL_LINEAGE_MISMATCH")
+    _verify_per_match_view(run_directory / "per_match.jsonl.gz", run)
     return run, manifest, backfill
 
 
