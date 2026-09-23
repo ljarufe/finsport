@@ -277,3 +277,55 @@ vectors; it is not a redistributed provider payload. Run focused tests with pyte
 inside finsport-dev, then the repository gate `make check`. Live UAT, ten-league
 coverage, final scores, resource practicality and baseline promotion remain
 separate evidence that cannot be inferred from these tests.
+
+## FS-020 Capital (manual, E2.4)
+
+`capital_events.run_event_path` accepts immutable opportunities and versioned
+Capital candidates. Each call starts at 100u. It uses CURRENT policies and Decimal
+arithmetic, checks lanes before requesting a stake, retains frozen evidence while
+pending, and recomputes stake at later execution/settlement wakes. `trace=True`
+returns the transition ledger; bootstrap paths keep only aggregate diagnostics.
+No provider, database or automatic-routing API is used.
+
+`run_capital_experiment` is an isolated dev-only management command. Its workspace
+is `<workspace-root>/FS-020_experiments` (default root: `<BASE_DIR>/tmp`). The
+production spec fixes all seven candidates, three lags and 5,000 replicates; the
+command offers no parameter tuning or replicate-count override.
+
+```text
+python manage.py run_capital_experiment --spec tmp/FS-020_experiments/spec.json --freeze
+python manage.py run_capital_experiment --spec tmp/FS-020_experiments/spec.json --shard 150 2 0 100
+python manage.py run_capital_experiment --spec tmp/FS-020_experiments/spec.json --run
+python manage.py run_capital_experiment --spec tmp/FS-020_experiments/spec.json --publish-existing EXECUTION_ID
+```
+
+Use `--publish-existing` only with an authenticated, completed run's exact
+64-hex `execution_id`. This checks the frozen spec, original run identity and
+artifact hashes, then publishes without recomputing the economic election.
+Publishing is idempotent and fails on incompatible existing authority/report.
+`--run --promote` is intentionally rejected: CLI or publisher changes affect the
+current runtime hash and might silently start a second economic run.
+`--run` alone remains an explicit new/resumable experimental execution.
+
+Shards are half-open absolute replicate ranges, with every replicate replaying
+all seven candidates against identical sampled blocks. Never shard a path at a
+week boundary: open positions, bankroll and recovery state cross block seams.
+All draws are derived from the full deterministic matrix, regardless of shard
+range. Full execution resumes valid existing non-overlapping partitions and
+fills gaps; overlapping, corrupted or incompatible shards fail closed. Repeated
+identical shards are verified and reused. Code, Decimal context, Python/NumPy,
+research, spec and upstream input bind the execution identity.
+
+Observed ledgers, immutable shard files and candidate×replicate NumPy scores stay
+in the workspace. Inference streams one pair at a time. Publication retains a
+compact run record, report and authority under `docs/research`; it also records
+`NO_PROMOTION` explicitly. Existing incompatible publication members are never
+overwritten. Neither a run nor publication activates operational Capital.
+
+RNG manifests explicitly hash C-order little-endian int64 block-start matrices.
+The three reference hashes in E2.4 are preserved separately: that document does
+not specify their serialization. Equivalence with those original artifacts
+remains `PENDING_ORIGINAL_ENCODING_OR_MANIFEST`; the implementation does not claim
+that a hash of its own encoding verifies a differently encoded reference file.
+The frozen generator, seed, block geometry and replicate ordering have synthetic
+contract tests. Original artifact equivalence must be reviewed before UAT-4.
