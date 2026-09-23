@@ -1,14 +1,14 @@
 # E2 — Global Capital Baseline Methodology
 ## Corrected self-contained research authority — E2.4 targeted semantic-conformance correction
 
-**Project:** Finsport
-**Canonical research artifact:** `docs/research/FS-020_global_capital_methodology_research.md`
-**Artifact status:** `E2.4 RECONCILED VIA VERSIONED V2R — READY FOR UAT-4`
-**Date:** 2026-09-23
-**Economic Capital tournament:** NOT EXECUTED
-**GLOBAL_CAPITAL_V1:** NOT SELECTED
-**GLOBAL_STRATEGY_V1:** NOT SELECTED
-**Automatic operational routing:** UNCHANGED
+**Project:** Finsport  
+**Canonical research artifact:** `docs/research/FS-020_global_capital_methodology_research.md`  
+**Artifact status:** `E2.4 RECONCILED VIA VERSIONED V2R — READY FOR UAT-4`  
+**Date:** 2026-09-23  
+**Economic Capital tournament:** NOT EXECUTED  
+**GLOBAL_CAPITAL_V1:** NOT SELECTED  
+**GLOBAL_STRATEGY_V1:** NOT SELECTED  
+**Automatic operational routing:** UNCHANGED  
 **Real betting:** FORBIDDEN
 
 ---
