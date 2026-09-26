@@ -8,8 +8,6 @@ repos:
     hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
-        # FS-020 research is SHA-256-bound by the immutable published run.
-        exclude: ^docs/research/FS-020_global_capital_methodology_research\.md$
       - id: check-yaml
       - id: check-json
       - id: check-toml
