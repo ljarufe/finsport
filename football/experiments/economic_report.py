@@ -303,6 +303,31 @@ def output_files(result, enriched):
         "opportunity_cost",
         "bootstrap_path_risk",
     )
+    bootstrap_risk = result["bootstrap_intrareplicate_diagnostics"]
+    bootstrap_risk_status = bootstrap_risk["status"]
+
+    if bootstrap_risk_status == "AVAILABLE":
+        require(
+            bootstrap_risk.get("schema") == "FS021_BOOTSTRAP_RISK_V1"
+            and bootstrap_risk.get("columns"),
+            "ECONOMIC_BOOTSTRAP_RISK_REPORT",
+        )
+        bootstrap_risk_note = (
+            "Intrareplicate bootstrap risk diagnostics are `AVAILABLE` under "
+            f"`{bootstrap_risk['schema']}` with retained columns "
+            f"{bootstrap_risk['columns']}; terminal equity <=5u remains a "
+            "separate terminal proxy."
+        )
+    else:
+        require(
+            bootstrap_risk_status == "UNAVAILABLE_UPSTREAM",
+            "ECONOMIC_BOOTSTRAP_RISK_STATUS",
+        )
+        bootstrap_risk_note = (
+            "Intrareplicate drawdown and depletion are `UNAVAILABLE_UPSTREAM`; "
+            "terminal equity <=5u is only a proxy."
+        )
+
     report = f"""# FS-021 economic selector v1
 
 Execution: `{result['execution_id']}`. Method: `{METHOD_VERSION}`.
@@ -311,7 +336,7 @@ Simulation-only selection: integrated #{result['winner']} ({result['mode']}); or
 
 Tier {result['tier']}; frontier {result['frontier']}; risk-budget survivors {result['survivors']}; thresholds {result['thresholds']}; fallback {result['fallback']}. Risk warnings: {result['risk_warnings']}.
 
-All {result['reconciled_ledgers']} observed ledgers were reconciled; {result['logical_suffixes_verified']} logical depletion suffixes were verified against retained streams. Bootstrap matrices are terminal T+150 only. Intrareplicate drawdown and depletion are `UNAVAILABLE_UPSTREAM`; terminal equity <=5u is only a proxy. Cross-lag results are observed sensitivity, not inference. Selection used the same historical sample and is post-hoc, not prospective validation. 7% over 36 weeks is a hypothetical benchmark without comparable risk.
+All {result['reconciled_ledgers']} observed ledgers were reconciled; {result['logical_suffixes_verified']} logical depletion suffixes were verified against retained streams. Bootstrap matrices are terminal T+150 only. {bootstrap_risk_note} Cross-lag results are observed sensitivity, not inference. Selection used the same historical sample and is post-hoc, not prospective validation. 7% over 36 weeks is a hypothetical benchmark without comparable risk.
 
 Operational routing: false. Real betting: false. Retention is verified in a separate execution status, never inside this immutable economic result.
 """

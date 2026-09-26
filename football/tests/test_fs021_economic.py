@@ -174,6 +174,10 @@ def test_explanatory_top20_places_selected_and_risk_survivors_first():
         risk_warnings=[],
         reconciled_ledgers=0,
         logical_suffixes_verified=0,
+        bootstrap_intrareplicate_diagnostics=dict(
+            status="UNAVAILABLE_UPSTREAM",
+            reason="ORIGINAL_RUN_RETAINED_TERMINAL_RETURNS_ONLY",
+        ),
     )
     files = output_files(result, [])
     ranked = list(
@@ -191,6 +195,23 @@ def test_explanatory_top20_places_selected_and_risk_survivors_first():
         223,
     ]
     assert b"upstream_retention_index" not in files["FS-021_economic_selector_v1.json"]
+    historical_report = files["FS-021_economic_report.md"].decode()
+    assert "`UNAVAILABLE_UPSTREAM`" in historical_report
+    assert (
+        "Intrareplicate bootstrap risk diagnostics are `AVAILABLE`"
+        not in historical_report
+    )
+
+    result["bootstrap_intrareplicate_diagnostics"] = dict(
+        status="AVAILABLE",
+        schema="FS021_BOOTSTRAP_RISK_V1",
+        columns=["maximum_drawdown", "operational_depletion"],
+    )
+    future_report = output_files(result, [])["FS-021_economic_report.md"].decode()
+    assert "Intrareplicate bootstrap risk diagnostics are `AVAILABLE`" in future_report
+    assert "`FS021_BOOTSTRAP_RISK_V1`" in future_report
+    assert "maximum_drawdown" in future_report
+    assert "`UNAVAILABLE_UPSTREAM`" not in future_report
 
 
 def test_reporting_v1_1_is_immutable_and_independent_of_retention_status(
@@ -238,6 +259,10 @@ def test_reporting_v1_1_is_immutable_and_independent_of_retention_status(
         ),
         reconciled_ledgers=0,
         logical_suffixes_verified=0,
+        bootstrap_intrareplicate_diagnostics=dict(
+            status="UNAVAILABLE_UPSTREAM",
+            reason="ORIGINAL_RUN_RETAINED_TERMINAL_RETURNS_ONLY",
+        ),
     )
     monkeypatch.setattr(report, "build_economic_analysis", lambda *_: (result, []))
     spec = dict(
