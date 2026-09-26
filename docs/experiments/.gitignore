@@ -1,0 +1,3 @@
+
+# Locks locales de publicación; nunca versionarlos.
+**/.FS-021_*.lock

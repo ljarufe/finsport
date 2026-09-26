@@ -33,6 +33,7 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "run_prediction_experiment",
         "run_decision_experiment",
         "run_capital_experiment",
+        "run_integrated_experiment",
     }
     for name in (
         "get_leagues",

@@ -107,7 +107,7 @@ lint:
 	$(APP) ruff check --no-cache .
 
 format:
-	$(APP) sh -c "black . && ruff check --no-cache --fix ."
+	$(APP) sh -c "ruff check --no-cache --fix . && black ."
 
 format-check:
 	$(APP) black --check .
@@ -132,3 +132,28 @@ historical-market-import:
 	@test -n "$(PACKAGE)" || (echo "Set PACKAGE to the FS-015 package path." && exit 1)
 	@test -n "$(MANIFEST)" || (echo "Set MANIFEST to the FS-015 manifest path." && exit 1)
 	$(APP) python manage.py import_historical_market_data --package "$(PACKAGE)" --manifest "$(MANIFEST)" --apply
+
+# Offline FS-021: explicit commands only; external evidence is mounted at its host path.
+FS021_ROOT ?= $(HOME)/Documents/finsport/research-evidence/FS-021
+FS021_ID ?=
+FS021_ARGS ?=
+FS021_MONITOR_ARGS ?=
+ifeq ($(IN_CONTAINER),1)
+FS021_APP =
+else
+FS021_APP = python3 tools/fs014_lifecycle.py dev-assert-ready && $(DEV_COMPOSE) run --rm --no-deps -v "$(FS021_ROOT):$(FS021_ROOT)" django-web
+endif
+
+.PHONY: fs021 fs021-supervise fs021-sound-test fs021-ack
+fs021:
+	mkdir -p "$(FS021_ROOT)"
+	$(FS021_APP) python manage.py run_integrated_experiment --root "$(FS021_ROOT)" $(FS021_ARGS)
+
+fs021-supervise:
+	python3 tools/fs021_supervisor.py "$(FS021_ROOT)/$(FS021_ID)" $(FS021_MONITOR_ARGS) -- $(MAKE) fs021 FS021_ROOT="$(FS021_ROOT)" FS021_ARGS="$(FS021_ARGS) --execution-id $(FS021_ID)"
+
+fs021-sound-test:
+	python3 tools/fs021_supervisor.py "$(FS021_ROOT)/sound-test" --sound-test
+
+fs021-ack:
+	python3 tools/fs021_supervisor.py "$(FS021_ROOT)/$(FS021_ID)" --ack-alarm
