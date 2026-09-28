@@ -4,7 +4,6 @@ from decimal import Decimal
 
 import pytest
 from django.db import close_old_connections
-from django.test import Client
 
 from football.capital.contracts import RunUnavailable
 from football.capital.policies import (
@@ -62,9 +61,23 @@ from football.models import (
     Team,
 )
 from football.providers.api_football import APIFootballQuotaReserveError
-from football.reporting.selectors import _capital_v2_rows
 
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture(autouse=True)
+def pre_cutover_runtime(monkeypatch):
+    """These retained regressions model FS-016 before the FS-022 barrier."""
+    from football.tests.fs016_historical_runtime import provision_historical_configs
+
+    monkeypatch.setattr(
+        "football.capital.runtime.provision_automatic_configs",
+        provision_historical_configs,
+    )
+    monkeypatch.setattr(
+        "football.tests.test_capital_runtime_v2.provision_automatic_configs",
+        provision_historical_configs,
+    )
 
 
 @pytest.fixture
@@ -1037,6 +1050,7 @@ def test_result_debt_rotates_unattempted_then_least_recently_attempted_dates(
     first = refresh_open_result_debt(at=due_at, client_factory=FakeClient)
 
     assert first.provider_calls == 1
+    assert first.status != "OPEN_RESULT_NOT_DUE"
     assert requests[0] == {"date": "2026-09-12", "timezone": "America/Lima"}
     never_attempted = CapitalPosition.objects.get(config=config, match=ordered[1])
     assert never_attempted.result_refresh_attempted_at is None
@@ -1510,54 +1524,3 @@ def test_historical_study_preserves_fs015_synthetic_time_provenance(runtime_grap
     assert basis.provenance["timestamp_is_imputed"] is True
     assert basis.provenance["time_semantics"] == "ASSUMED_T30M"
     assert basis.provenance["settlement_time"] == "SYNTHETIC_RESEARCH_ONLY"
-
-
-def test_normal_reporting_surface_answers_current_capital_questions(runtime_graph):
-    match, _, _ = make_match(runtime_graph, 0)
-    run, _ = make_capture(runtime_graph, [match])
-    reconcile_execution_events(run.pk)
-
-    response = Client().get("/")
-    content = response.content.decode()
-
-    assert response.status_code == 200
-    assert "Capital v2 CURRENT · event-time" in content
-    assert "DIXON_COLES + MODAL_ALL" in content
-    for value in (
-        "FLAT_UNIT",
-        "FIXED_FRACTION_BANKROLL",
-        "FIXED_TARGET_PROFIT_NO_RECOVERY",
-        "LEGACY_RECOVERY",
-        "LEGACY_CAPPED",
-        "LEGACY_PARTIAL",
-        "FRACTIONAL_KELLY",
-        "Reservado / disponible",
-        "OPEN / capacidad",
-        "PnL / ROI",
-        "Ruina / terminación",
-        "días",
-        "Capital v1 legado / evidencia superseded (no CURRENT)",
-    ):
-        assert value in content
-
-
-def test_current_realized_roi_uses_settled_stake_not_initial_bankroll(runtime_graph):
-    match, _, _ = make_match(runtime_graph, 0, price="1.5000")
-    run, _ = make_capture(runtime_graph, [match])
-    reconcile_execution_events(run.pk)
-    add_api_football_ref(runtime_graph, match)
-    match.status_short = "FT"
-    match.outcome = Match.OUTCOME_HOME
-    match.save()
-    observation, _ = observe_terminal_result(match)
-    settle_observation(observation)
-
-    row = next(
-        item
-        for item in _capital_v2_rows()
-        if item["config"].policy_code == FIXED_TARGET_PROFIT_NO_RECOVERY
-    )
-
-    assert row["settled_stake"] == Decimal("2")
-    assert row["realized_pnl"] == Decimal("1")
-    assert row["realized_roi"] == Decimal("0.5")

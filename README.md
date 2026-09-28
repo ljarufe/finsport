@@ -31,8 +31,9 @@ the current branch migrations, then starts Django, the worker, and Nginx. It
 never starts Celery Beat and explicitly disables automatic provider work.
 `make dev-up` only restarts an environment already created by that lifecycle.
 
-Open development Admin through Nginx at <http://localhost:18001/>. Direct
-development Django is at <http://localhost:18000/>.
+Open the development product UI through Nginx at <http://localhost:18001/>.
+Django Admin is at <http://localhost:18001/admin/>. Direct development Django
+is at <http://localhost:18000/>.
 
 The operational browser and direct endpoints remain at ports 8001 and 8000.
 `make up` starts only previously deployed immutable images; it never builds the

@@ -17,15 +17,6 @@ def as_percent(value, digits=1):
 
 
 @register.filter
-def yes_no_unknown(value):
-    if value is True:
-        return "Sí"
-    if value is False:
-        return "No"
-    return "—"
-
-
-@register.filter
 def value_or_dash(value):
     return "—" if value is None or value == "" else value
 

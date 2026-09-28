@@ -78,7 +78,7 @@ def test_v1_retirement_dry_run_apply_and_second_run_preserve_upstream():
         "Decision": Decision.objects.count(),
         "OddsObservation": OddsObservation.objects.count(),
     } == upstream
-    assert len(provision_automatic_configs()) == 7
+    assert len(provision_automatic_configs()) == 1
     assert retire_v1_capital()["status"] == "NO_WORK"
     assert Decision.objects.filter(pk=decisions[0].pk).exists()
 

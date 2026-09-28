@@ -24,12 +24,13 @@ operational project.
 | 15432 | Development PostgreSQL |
 | 16379 | Development Redis |
 | 18000 | Direct development Django/Gunicorn endpoint |
-| 18001 | Development browser/Admin endpoint through Nginx |
+| 18001 | Development product UI/Admin endpoint through Nginx |
 | 8002 | VS Code Django debug server |
 
-Admin is mounted at the root `/`, not `/admin/`. The supported development
-browser endpoint is <http://localhost:18001/>. Nginx proxies development Django
-and serves collected files under `/static/`, including Django Admin CSS.
+The supported development product UI is mounted at `/` and is available at
+<http://localhost:18001/>. Django Admin remains mounted at `/admin/`.
+Nginx proxies development Django and serves collected files under `/static/`,
+including Django Admin CSS.
 
 The direct development endpoint <http://localhost:18000/> reaches
 Gunicorn/Django and is useful for technical probes. It is not expected to serve
@@ -259,7 +260,7 @@ football authority and does not inherit API-Football quota semantics.
 
 ## Prospective Multi-League Pipeline
 
-FS-006 composes capture, prospective prediction, canonical settlement, the normalized research capital comparator, cancellation hygiene, and a rolling JSON report without invoking management commands from Python services:
+FS-022 composes fixture discovery, API-Football capture, canonical settlement, cancellation hygiene, and the single governed #209 simulation. T-6h and T-60m collect market observations; only eligible T-30 work can evaluate MARKET_CONSENSUS / SELECTIVE_CONFIDENCE(0.45) and enter the shared FRACTIONAL_KELLY(0.25) bank. The pipeline does not invoke management commands from Python services:
 
 ```python
 from football.pipeline import run_pipeline
@@ -280,11 +281,11 @@ docker compose -p finsport-dev -f compose.dev.yml run --rm --no-deps django-web 
   --dry-run
 ```
 
-Dry-run calls the FS-005 DB-only planner but makes zero provider calls and writes no pipeline audit, prediction, Decision, capital, or cleanup rows. Executed cycles persist a read-only `PipelineRun` audit with phase states, linked run/experiment IDs, warnings/errors, and the `fs006-report-v1` report.
+Dry-run inspects the DB-only capture plan and recoverable T-30 evidence without provider calls or writes. Executed cycles persist phase states, linked current-cycle IDs, warnings/errors, and a bounded `fs022-operational-report-v1` receipt. They do not rebuild historical experiment reports.
 
-Prospective identity is `competition + America/Lima match day + intended_window + target_at`; the database prevents duplicates for the same logical cutoff while allowing a later FS-005 window. Missing market evidence is explicit and does not suppress fitted non-market arms. Settlement accepts only a canonical finished status plus canonical HOME/DRAW/AWAY outcome and never rewrites the original Decision or selected price.
+The #209 prospective identity binds the cutover and durable capture-work identity. Its period date is the kickoff day in America/Lima. Evaluation and placement use the effective wall clock; an older planning timestamp never authorizes a position after kickoff. The original capture cutoff, quote, and execution times remain auditable. Missing quotes and NO_BET do not create exposure. Settlement accepts only a canonical finished status plus canonical HOME/DRAW/AWAY outcome and never rewrites the original Decision or selected price.
 
-The capital phase uses only the labeled research comparator `REPLAY / 100 units / FLAT_UNIT {"unit": "1"}` over the frozen Dixon-Coles/MODAL_ALL basis. It records `UNAVAILABLE` without creating a `CapitalExperiment` when outcomes, actionable Decisions, or timestamp-valid prices are absent. This is not a selected production model or capital policy.
+The seven prior automatic configurations remain retired for new entries, with their balances and positions preserved for audit and settlement. Their historical replay semantics remain available only to explicit manual/replay paths. The current #209 bank is simulation-only: initial equity 100u, ten shared lanes, and no bookmaker execution.
 
 Cancellation hygiene triggers only on canonical `status_short == "CANC"`. It preserves Match, MatchSourceRef, CaptureRun, and CaptureWorkItem audit while transactionally removing invalid OddsSnapshot, OddsObservation, Prediction, Decision, and whole dependent CapitalExperiments. `PST`, `SUSP`, `FT`, and ambiguous statuses are not destructive triggers.
 

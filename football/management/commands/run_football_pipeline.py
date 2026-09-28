@@ -8,7 +8,7 @@ from football.pipeline import run_pipeline
 
 
 class Command(BaseCommand):
-    help = "Run the local-only FS-006 prospective football research pipeline."
+    help = "Run the local-only FS-022 automatic simulation pipeline."
 
     def add_arguments(self, parser):
         parser.add_argument(

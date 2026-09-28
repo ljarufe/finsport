@@ -34,7 +34,6 @@ from football.prediction.contracts import (
     UnavailablePrediction,
 )
 from football.prediction.service import (
-    ProspectivePredictionResult,
     predict_competition_day,
 )
 from football.prediction.settlement import settle_prospective_predictions
@@ -172,7 +171,7 @@ def test_pipeline_dry_run_is_provider_and_write_free(monkeypatch):
     assert result.phases["RESULT_SETTLEMENT"]["state"] == "SKIPPED"
     assert result.phases["CAPITAL"]["state"] == "SKIPPED"
     assert result.report["capture"]["provider_attempts"] == 0
-    assert result.report["schema_version"] == "fs006-report-v1"
+    assert result.report["schema_version"] == "fs022-operational-report-v1"
     assert before == {
         "pipeline": PipelineRun.objects.count(),
         "experiments": PredictionExperiment.objects.count(),
@@ -182,139 +181,26 @@ def test_pipeline_dry_run_is_provider_and_write_free(monkeypatch):
     }
 
 
-def test_classified_dc_failure_drives_failed_or_degraded_prediction_phase(monkeypatch):
+def test_automatic_pipeline_never_invokes_retired_sporting_models(monkeypatch):
     at = datetime(2026, 8, 28, 18, tzinfo=dt_timezone.utc)
-    failed_competition, failed_match = create_target(
-        "Failed DC League", "PE", at + timedelta(hours=2)
+    competition, match = create_target(
+        "Retired DC League", "PE", at + timedelta(hours=2)
     )
-    successful_competition, successful_match = create_target(
-        "Successful DC League", "DE", at + timedelta(hours=2)
+    HistoricalCoverage.objects.create(
+        competition=competition, status=HistoricalCoverage.Status.COMPLETE
     )
-    for competition in (failed_competition, successful_competition):
-        HistoricalCoverage.objects.create(
-            competition=competition,
-            status=HistoricalCoverage.Status.COMPLETE,
-        )
-
-    def candidates(*competitions):
-        return [
-            {
-                "competition_id": competition.pk,
-                "day": match.kickoff.date(),
-                "intended_window": "football-evidence",
-                "target_at": None,
-                "logical_identity": f"dc-classification-{competition.pk}",
-                "match_ids": [match.pk],
-                "model_codes": [Prediction.DIXON_COLES],
-                "cutoff": match.kickoff - timedelta(microseconds=1),
-                "evidence_identity": f"evidence-{competition.pk}",
-            }
-            for competition, match in competitions
-        ]
-
     monkeypatch.setattr(
         "football.pipeline.service.run_capture",
-        lambda **kwargs: fake_capture(at, []),
+        lambda **kwargs: fake_capture(at, [(competition, match)]),
     )
-
-    def predict_stub(competition, day, cutoff, **kwargs):
-        del cutoff
-        target = Match.objects.get(pk=kwargs["match_ids"][0])
-        experiment = PredictionExperiment.objects.create(
-            competition_id=competition,
-            mode=PredictionExperiment.MODE_PROSPECTIVE,
-            period_start=day,
-            period_end=day,
-            logical_identity=kwargs["logical_identity"],
-            config={"target_match_ids": kwargs["match_ids"]},
-        )
-        if competition == failed_competition.pk:
-            experiment.summary = {
-                "target_count": 1,
-                "failed": {
-                    f"DIXON_COLES:{target.pk}": {
-                        "reason": "DIXON_COLES_PREDICTION_FAILED"
-                    }
-                },
-                "dixon_coles": {
-                    "status": "FAILED",
-                    "reasons": ["DIXON_COLES_PREDICTION_FAILED"],
-                },
-            }
-        else:
-            Prediction.objects.create(
-                experiment=experiment,
-                match=target,
-                model_code=Prediction.DIXON_COLES,
-                model_version="test-v1",
-                model_config={},
-                cutoff=target.kickoff - timedelta(microseconds=1),
-                p_home=0.5,
-                p_draw=0.3,
-                p_away=0.2,
-                predicted_outcome=Match.OUTCOME_HOME,
-            )
-            experiment.summary = {
-                "target_count": 1,
-                "dixon_coles": {"status": "PRODUCED", "reasons": []},
-            }
-        experiment.save(update_fields=["summary", "modified"])
-        return ProspectivePredictionResult(experiment, True)
-
-    monkeypatch.setattr(
-        "football.pipeline.service.predict_competition_day", predict_stub
-    )
-    monkeypatch.setattr(
-        "football.pipeline.service._dixon_coles_candidates",
-        lambda cutoff: candidates((failed_competition, failed_match)),
-    )
-    failed = run_pipeline(at=at)
-
-    assert failed.phases["PREDICTION"]["state"] == "FAILED"
-    failed_report = failed.phases["PREDICTION"]["details"]["experiments"][0]
-    assert failed_report["models"]["failed"] == {"DIXON_COLES": 1}
-    assert failed_report["models"]["failure_reasons"] == {
-        "DIXON_COLES": ["DIXON_COLES_PREDICTION_FAILED"]
-    }
-
-    monkeypatch.setattr(
-        "football.pipeline.service._dixon_coles_candidates",
-        lambda cutoff: candidates((successful_competition, successful_match)),
-    )
-    mixed = run_pipeline(at=at)
-    assert mixed.phases["PREDICTION"]["state"] == "SUCCESS"
-
-    # A single new cycle containing successful work plus a classified failure degrades.
-    third_competition, third_match = create_target(
-        "Third Failed DC League", "US", at + timedelta(hours=2)
-    )
-    HistoricalCoverage.objects.create(
-        competition=third_competition, status=HistoricalCoverage.Status.COMPLETE
-    )
-    failed_competition = third_competition
-    monkeypatch.setattr(
-        "football.pipeline.service._dixon_coles_candidates",
-        lambda cutoff: candidates(
-            (third_competition, third_match),
-            (successful_competition, successful_match),
-        ),
-    )
-    # Give the successful arm a fresh logical identity in this cycle.
-    successful_competition, successful_match = create_target(
-        "Fresh Successful DC League", "FR", at + timedelta(hours=2)
-    )
-    HistoricalCoverage.objects.create(
-        competition=successful_competition, status=HistoricalCoverage.Status.COMPLETE
-    )
-    monkeypatch.setattr(
-        "football.pipeline.service._dixon_coles_candidates",
-        lambda cutoff: candidates(
-            (third_competition, third_match),
-            (successful_competition, successful_match),
-        ),
-    )
-    degraded = run_pipeline(at=at)
-    assert degraded.phases["PREDICTION"]["state"] == "DEGRADED"
+    with mock.patch(
+        "football.prediction.service.predict_competition_day",
+        side_effect=AssertionError("retired model called"),
+    ) as predictor:
+        result = run_pipeline(at=at)
+    assert result.phases["PREDICTION"]["state"] == "NO_WORK"
+    assert predictor.call_count == 0
+    assert not PredictionExperiment.objects.exists()
 
 
 def test_capture_provider_cause_reaches_single_pipeline_terminal_event(monkeypatch):
@@ -412,41 +298,12 @@ def test_one_cycle_is_multi_competition_and_repeated_cycle_reuses_identity(monke
         "football.pipeline.service.run_capture", lambda **kwargs: capture
     )
 
-    def predict_stub(competition, day, cutoff, **kwargs):
-        del cutoff
-        assert kwargs["match_ids"] == sorted(set(kwargs["match_ids"]))
-        existing = PredictionExperiment.objects.filter(
-            competition_id=competition,
-            logical_identity=kwargs["logical_identity"],
-        ).first()
-        if existing:
-            return ProspectivePredictionResult(existing, False, "ALREADY_EXISTS")
-        experiment = PredictionExperiment.objects.create(
-            competition_id=competition,
-            mode=PredictionExperiment.MODE_PROSPECTIVE,
-            period_start=day,
-            period_end=day,
-            logical_identity=kwargs["logical_identity"],
-            intended_window=kwargs["intended_window"],
-            target_at=kwargs["target_at"],
-            config={
-                "cutoff": at.isoformat(),
-                "target_match_ids": kwargs["match_ids"],
-            },
-            summary={"target_count": 1},
-        )
-        return ProspectivePredictionResult(experiment, True)
-
-    monkeypatch.setattr(
-        "football.pipeline.service.predict_competition_day", predict_stub
-    )
-
     first_result = run_pipeline(at=at)
     repeated = run_pipeline(at=at)
 
-    assert PredictionExperiment.objects.count() == 2
+    assert PredictionExperiment.objects.count() == 0
     assert PipelineRun.objects.count() == 2
-    assert first_result.report["prediction"]["created_count"] == 2
+    assert first_result.report["prediction"]["created_count"] == 0
     assert repeated.report["prediction"]["created_count"] == 0
     assert repeated.report["prediction"]["reused_count"] == 0
     assert {row["id"] for row in first_result.report["competitions_considered"]} == {
@@ -525,25 +382,12 @@ def test_pipeline_scopes_each_temporal_experiment_to_its_exact_match_batch(
 
     monkeypatch.setattr("football.pipeline.service.run_capture", capture_stub)
     run_pipeline(at=first_target)
-    first_experiment = PredictionExperiment.objects.get(target_at=first_target)
-
-    assert first_experiment.config["target_match_ids"] == sorted(
-        [first_match.pk, shared_match.pk]
-    )
-    assert first_experiment.config["model_codes"] == [Prediction.MODERNIZED_R45]
-    assert first_experiment.summary["unavailable"][Prediction.MODERNIZED_R45] == (
-        "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE"
-    )
-    assert not first_experiment.predictions.exists()
-    assert first_experiment.decisions.filter(match=later_match).count() == 0
-
     run_pipeline(at=later_target)
-    later_experiment = PredictionExperiment.objects.get(target_at=later_target)
-
-    assert later_experiment.logical_identity != first_experiment.logical_identity
-    assert later_experiment.config["target_match_ids"] == [later_match.pk]
-    assert later_experiment.config["model_codes"] == [Prediction.MODERNIZED_R45]
-    assert later_experiment.decisions.exclude(match=later_match).count() == 0
+    # Planned T-6h items alone are capture work, not legitimate #209 T-30
+    # evaluation; duplicate representations cannot fabricate opportunities.
+    assert not PredictionExperiment.objects.exists()
+    assert not Prediction.objects.exists()
+    assert not Decision.objects.exists()
 
 
 def test_prediction_identity_allows_later_window_and_missing_market_keeps_models(

@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
 
+from django.db.models import F, Q
 from penaltyblog.implied import calculate_implied
 
 from football.market_identity import CANONICAL_1X2_CODE, MAPPING_VERSION
@@ -37,6 +38,9 @@ def valid_prices(observation):
 def _raw_identity(observation):
     return {
         "observation_id": observation.pk,
+        "source_id": observation.source_id,
+        "bookmaker_id": observation.bookmaker_id,
+        "market_id": observation.market_id,
         "source": observation.source.code,
         "bookmaker_external_id": observation.bookmaker.external_id,
         "bookmaker_name": observation.bookmaker.name,
@@ -51,10 +55,24 @@ def _raw_identity(observation):
     }
 
 
-def market_selection_as_of(match, cutoff, *, not_before=None):
+def market_selection_as_of(match, cutoff, *, not_before=None, capture_work=None):
     queryset = OddsObservation.objects.filter(match=match, observed_at__lt=cutoff)
     if not_before is not None:
         queryset = queryset.filter(observed_at__gte=not_before)
+    if capture_work is not None:
+        # Filter the physical acquisition BEFORE canonical deduplication. A row
+        # from another source/market or a later capture cannot displace its vote.
+        queryset = queryset.filter(
+            source__code="api_football",
+            source_id=capture_work.source_id,
+            market_id=capture_work.market_id,
+            observed_at__lt=capture_work.completed_at,
+            bookmaker__source_id=F("source_id"),
+            market__source_id=F("source_id"),
+        ).filter(
+            Q(provider_updated_at__isnull=True)
+            | Q(provider_updated_at__lte=F("observed_at"))
+        )
     observations = queryset.select_related(
         "source",
         "bookmaker",
@@ -145,6 +163,8 @@ def market_selection_as_of(match, cutoff, *, not_before=None):
                 overround=margin,
             )
         )
+    if capture_work is not None:
+        quotes.sort(key=lambda q: (q.canonical_bookmaker.code, q.observation.pk))
     provenance = [
         {
             "canonical_bookmaker_code": quote.canonical_bookmaker.code,
@@ -194,6 +214,10 @@ class MarketConsensusAdapter:
 
     def predict(self, match, cutoff, *, not_before=None):
         selection = market_selection_as_of(match, cutoff, not_before=not_before)
+        return self.predict_selection(selection)
+
+    def predict_selection(self, selection):
+        """Use the exact same eligible votes as the execution-price consumer."""
         quotes = selection.quotes
         if not quotes:
             return UnavailablePrediction(

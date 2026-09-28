@@ -333,7 +333,9 @@ def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
             intended_window="market-t30m"
         ).values_list("config", flat=True)
     }
-    assert model_sets == {("MARKET_CONSENSUS",), ("MODERNIZED_R45",)}
+    # One retained bookmaker cannot satisfy the exact #209 two-book contract.
+    assert model_sets == set()
+    assert not PredictionExperiment.objects.exists()
 
 
 @override_settings(

@@ -9,14 +9,13 @@ from django.conf import settings
 from django.utils import timezone
 
 from football.capital.runtime import (
-    AUTOMATIC_CONFIGS,
-    run_automatic_runtime,
-)
-from football.capital.runtime import (
     EXECUTION_VERSION as CAPITAL_EXECUTION_VERSION,
 )
 from football.capital.runtime import (
     RUNTIME_VERSION as CAPITAL_RUNTIME_VERSION,
+)
+from football.capital.runtime import (
+    run_automatic_runtime,
 )
 from football.capture import run_capture
 from football.capture.contracts import MARKET_CONSENSUS_WINDOW_NAMES
@@ -28,21 +27,20 @@ from football.models import (
     HistoricalCoverage,
     Match,
     PipelineRun,
-    PredictionExperiment,
 )
 from football.observability.events import emit_event
 from football.observability.pipeline import emit_pipeline_terminal, exception_diagnostic
 from football.observability.reconciliation import emit_reconciliation_pending
 from football.prediction.constants import ENGINE_VERSION as PREDICTION_ENGINE_VERSION
 from football.prediction.evidence import sporting_evidence_basis
-from football.prediction.service import latest_selected_config, predict_competition_day
+from football.prediction.service import latest_selected_config
 from football.prediction.settlement import settle_prospective_predictions
 
 from .contracts import PhaseResult, PhaseState, PipelineResult
 from .hygiene import cleanup_cancelled_matches
 
 PIPELINE_VERSION = "fs006-v1"
-REPORT_SCHEMA = "fs006-report-v1"
+REPORT_SCHEMA = "fs022-operational-report-v1"
 
 
 def _parse_instant(value):
@@ -327,59 +325,6 @@ def _capital_experiment_allowed(experiment):
     return model_codes != {"MODERNIZED_R45"}
 
 
-def _experiment_report(experiment, *, created):
-    produced = Counter(experiment.predictions.values_list("model_code", flat=True))
-    unavailable = Counter()
-    failed = Counter()
-    failure_reasons = defaultdict(list)
-    for key in (experiment.summary or {}).get("unavailable", {}):
-        unavailable[key.split(":", 1)[0]] += 1
-    for key, detail in (experiment.summary or {}).get("failed", {}).items():
-        code = key.split(":", 1)[0]
-        failed[code] += 1
-        reason = detail.get("reason") if isinstance(detail, dict) else detail
-        if reason and str(reason) not in failure_reasons[code]:
-            failure_reasons[code].append(str(reason)[:200])
-    for code, detail in (experiment.summary or {}).get("r45_arms", {}).items():
-        if detail.get("status") == "UNAVAILABLE":
-            unavailable[code] += 1
-    policies = defaultdict(lambda: {"actionable": 0, "no_bet": 0})
-    for code, action in experiment.decisions.values_list("policy_code", "action"):
-        key = "no_bet" if action == "NO_BET" else "actionable"
-        policies[code][key] += 1
-    resolved = experiment.predictions.filter(actual_outcome__isnull=False).count()
-    prediction_count = experiment.predictions.count()
-    return {
-        "id": experiment.pk,
-        "created": created,
-        "logical_identity": experiment.logical_identity,
-        "competition_id": experiment.competition_id,
-        "local_day": experiment.period_start.isoformat(),
-        "intended_window": experiment.intended_window,
-        "target_at": (
-            experiment.target_at.isoformat() if experiment.target_at else None
-        ),
-        "cutoff": experiment.config.get("cutoff"),
-        "sample_sizes": {
-            "targets": experiment.summary.get("target_count", 0),
-            "predictions": prediction_count,
-            "decisions": experiment.decisions.count(),
-            "resolved_predictions": resolved,
-            "unresolved_predictions": prediction_count - resolved,
-        },
-        "models": {
-            "produced": dict(sorted(produced.items())),
-            "unavailable": dict(sorted(unavailable.items())),
-            "failed": dict(sorted(failed.items())),
-            "failure_reasons": {
-                code: reasons[:10] for code, reasons in sorted(failure_reasons.items())
-            },
-        },
-        "dixon_coles": (experiment.summary or {}).get("dixon_coles", {}),
-        "policies": {key: policies[key] for key in sorted(policies)},
-    }
-
-
 def _phase_status(phase_results):
     domain_states = [
         phase_results[name].state
@@ -402,40 +347,18 @@ def _report(
     cycle_identity,
     phases,
     competitions,
-    experiments,
     cycle_experiments,
     capital_runtime_result,
     capture_data,
     cancellation_data,
     warnings,
 ):
-    experiments_by_competition = defaultdict(list)
-    for item in experiments:
-        experiments_by_competition[item["competition_id"]].append(item)
-    competition_rows = []
-    for competition in competitions:
-        rows = experiments_by_competition[competition.pk]
-        competition_rows.append(
-            {
-                "id": competition.pk,
-                "name": competition.name,
-                "country": str(competition.country),
-                "prediction_state": ("SUCCESS" if rows else "NO_WORK"),
-                "prediction_experiments": rows,
-            }
-        )
-    resolved = sum(row["sample_sizes"]["resolved_predictions"] for row in experiments)
-    unresolved = sum(
-        row["sample_sizes"]["unresolved_predictions"] for row in experiments
-    )
+    """Bounded operational receipt for this wake, never a rolling experiment report."""
     return {
         "schema_version": REPORT_SCHEMA,
         "generated_at": generated_at.isoformat(),
         "cutoff": at.isoformat(),
         "local_day": at.astimezone(ZoneInfo(settings.TIME_ZONE)).date().isoformat(),
-        "windows": sorted(
-            {row["intended_window"] for row in experiments if row["intended_window"]}
-        ),
         "cycle_identity": cycle_identity,
         "versions": {
             "pipeline": PIPELINE_VERSION,
@@ -444,7 +367,10 @@ def _report(
             "capital_execution": CAPITAL_EXECUTION_VERSION,
         },
         "phases": {name: result.as_dict() for name, result in phases.items()},
-        "competitions_considered": competition_rows,
+        "competitions_considered": [
+            {"id": row.pk, "name": row.name, "country": str(row.country)}
+            for row in competitions
+        ],
         "capture": {
             "state": phases["CAPTURE"].state,
             "run_ids": [capture_data["run_id"]] if capture_data.get("run_id") else [],
@@ -456,8 +382,8 @@ def _report(
         },
         "prediction": {
             "state": phases["PREDICTION"].state,
-            "experiment_ids": [row["id"] for row in experiments],
-            "experiment_count": len(experiments),
+            "experiment_ids": [row["id"] for row in cycle_experiments],
+            "experiment_count": len(cycle_experiments),
             "current_cycle_experiment_ids": [row["id"] for row in cycle_experiments],
             "created_count": sum(row["created"] for row in cycle_experiments),
             "reused_count": sum(not row["created"] for row in cycle_experiments),
@@ -471,18 +397,47 @@ def _report(
             "runtime": capital_runtime_result,
         },
         "cancelled_match_hygiene": cancellation_data,
-        "sample_sizes": {
-            "competitions": len(competitions),
-            "prediction_experiments": len(experiments),
-            "predictions": sum(
-                row["sample_sizes"]["predictions"] for row in experiments
-            ),
-            "decisions": sum(row["sample_sizes"]["decisions"] for row in experiments),
-            "resolved_predictions": resolved,
-            "unresolved_predictions": unresolved,
-        },
         "data_quality_warnings": warnings,
     }
+
+
+def _global_prediction_phase(evaluations, experiment_rows, runtime_errors):
+    counts = dict(Counter(row["status"] for row in evaluations))
+    good = sum(counts.get(key, 0) for key in ("COMPLETED", "NO_BET", "DUPLICATE"))
+    bad = sum(
+        counts.get(key, 0)
+        for key in ("FAILED", "BLOCKED", "UNAVAILABLE", "MISSED_WINDOW")
+    )
+    authority_errors = [error for error in runtime_errors if "FS022" in error]
+    if counts.get("FAILED"):
+        state = PhaseState.DEGRADED if good else PhaseState.FAILED
+    elif bad or authority_errors:
+        state = PhaseState.DEGRADED if good else PhaseState.UNAVAILABLE
+    elif good:
+        state = PhaseState.SUCCESS
+    else:
+        state = PhaseState.NO_WORK
+    reasons = sorted({row["reason"] for row in evaluations})
+    return PhaseResult(
+        state,
+        reason=(
+            ",".join(reasons)[:500]
+            if reasons
+            else ("AUTHORITY_ADMISSION_BLOCKED" if authority_errors else "")
+        ),
+        details={
+            "experiments": experiment_rows,
+            "evaluations": evaluations,
+            "status_counts": counts,
+            "unavailable": [
+                row
+                for row in evaluations
+                if row["status"] in {"UNAVAILABLE", "MISSED_WINDOW", "BLOCKED"}
+            ],
+            "errors": [row for row in evaluations if row["status"] == "FAILED"],
+            "authority_errors": authority_errors,
+        },
+    )
 
 
 def run_pipeline(
@@ -531,6 +486,17 @@ def run_pipeline(
     capture_data = {"provider_attempts": 0, "plan": {"items": []}}
     capture_result = None
     operational_causes = []
+    if not dry_run:
+        # Establish the prospective era and close old admission before capture.
+        # Capture/settlement still run if authority resolution is unavailable.
+        from football.strategy.deployment import provision
+
+        try:
+            provision(at=started_at)
+        except (RuntimeError, ValueError) as error:
+            warnings.append(
+                f"STRATEGY_ADMISSION_BLOCKED:{type(error).__name__}:{error}"[:500]
+            )
     try:
         capture_result = run_capture(
             at=at,
@@ -563,136 +529,18 @@ def run_pipeline(
         errors.append({"phase": "CAPTURE", "error": message})
         phases["CAPTURE"] = PhaseResult(PhaseState.FAILED, reason=message)
 
-    candidates = (
-        _prediction_candidates(capture_result, at, dry_run=dry_run)
-        if capture_result
-        else []
-    )
-    candidates.extend(_dixon_coles_candidates(at))
-    for model_code in ("INDEPENDENT_POISSON", "ELO_MULTINOMIAL_LOGIT"):
-        candidates.extend(_sporting_candidates(at, model_code=model_code))
-    if not dry_run and candidates:
-        existing_identities = set(
-            PredictionExperiment.objects.filter(
-                logical_identity__in=[row["logical_identity"] for row in candidates]
-            ).values_list("logical_identity", flat=True)
-        )
-        candidates = [
-            row
-            for row in candidates
-            if row["logical_identity"] not in existing_identities
-        ]
+    # FS-022 evaluates only #209, from durable T-30 work, inside the serial
+    # Capital admission boundary. Manual Lab services retain all alternatives.
     experiment_rows = []
-    prediction_unavailable = []
-    prediction_errors = []
-    if dry_run:
-        phases["PREDICTION"] = PhaseResult(
-            PhaseState.SKIPPED,
-            reason="DRY_RUN",
-            details={
-                "planned": [
-                    {
-                        **candidate,
-                        "day": candidate["day"].isoformat(),
-                        "target_at": (
-                            candidate["target_at"].isoformat()
-                            if candidate["target_at"]
-                            else None
-                        ),
-                        "cutoff": candidate["cutoff"].isoformat(),
-                    }
-                    for candidate in candidates
-                ]
-            },
-        )
-    else:
-        for candidate in candidates:
-            try:
-                outcome = predict_competition_day(
-                    candidate["competition_id"],
-                    candidate["day"],
-                    candidate["cutoff"],
-                    logical_identity=candidate["logical_identity"],
-                    intended_window=candidate["intended_window"],
-                    target_at=candidate["target_at"],
-                    match_ids=candidate["match_ids"],
-                    model_codes=candidate["model_codes"],
-                    evidence_identity=candidate["evidence_identity"],
-                    market_evidence_identity=candidate.get(
-                        "market_evidence_identity", ""
-                    ),
-                    market_evidence_not_before_by_match=candidate.get(
-                        "market_evidence_not_before_by_match", {}
-                    ),
-                )
-                if outcome.experiment is None:
-                    prediction_unavailable.append(
-                        {
-                            "competition_id": candidate["competition_id"],
-                            "logical_identity": candidate["logical_identity"],
-                            "reason": outcome.reason,
-                        }
-                    )
-                    continue
-                experiment_rows.append(
-                    _experiment_report(outcome.experiment, created=outcome.created)
-                )
-            except Exception as error:
-                operational_causes.append(
-                    {
-                        **exception_diagnostic(error),
-                        "component": "prediction",
-                        "operation": "predict_competition_day",
-                    }
-                )
-                message = f"{type(error).__name__}:{error}"[:500]
-                prediction_errors.append(
-                    {
-                        "competition_id": candidate["competition_id"],
-                        "logical_identity": candidate["logical_identity"],
-                        "error": message,
-                    }
-                )
-        created_count = sum(row["created"] for row in experiment_rows)
-        created_rows = [row for row in experiment_rows if row["created"]]
-        classified_failed = [
-            row
-            for row in created_rows
-            if row.get("dixon_coles", {}).get("status") == "FAILED"
-        ]
-        classified_unavailable = [
-            row
-            for row in created_rows
-            if row.get("dixon_coles", {}).get("status") == "UNAVAILABLE"
-        ]
-        produced_count = sum(
-            sum(row["models"]["produced"].values()) for row in created_rows
-        )
-        if prediction_errors:
-            state = PhaseState.DEGRADED if experiment_rows else PhaseState.FAILED
-        elif classified_failed:
-            state = PhaseState.DEGRADED if produced_count else PhaseState.FAILED
-        elif classified_unavailable and not produced_count:
-            state = PhaseState.UNAVAILABLE
-        elif prediction_unavailable and not experiment_rows:
-            state = PhaseState.UNAVAILABLE
-        elif created_count:
-            state = (
-                PhaseState.DEGRADED if prediction_unavailable else PhaseState.SUCCESS
-            )
-        else:
-            state = PhaseState.NO_WORK
-        phases["PREDICTION"] = PhaseResult(
-            state,
-            details={
-                "experiments": experiment_rows,
-                "unavailable": prediction_unavailable,
-                "errors": prediction_errors,
-                "classified_failed": len(classified_failed),
-                "classified_unavailable": len(classified_unavailable),
-            },
-        )
-        errors.extend({"phase": "PREDICTION", **item} for item in prediction_errors)
+    phases["PREDICTION"] = PhaseResult(
+        PhaseState.SKIPPED if dry_run else PhaseState.NO_WORK,
+        reason="DRY_RUN" if dry_run else "",
+        details=(
+            {"planned": []}
+            if dry_run
+            else {"experiments": [], "unavailable": [], "errors": []}
+        ),
+    )
 
     settlement_data = {}
     cancellation_data = {}
@@ -758,7 +606,7 @@ def run_pipeline(
             details={
                 "runtime_version": CAPITAL_RUNTIME_VERSION,
                 "execution_version": CAPITAL_EXECUTION_VERSION,
-                "automatic_configs": len(AUTOMATIC_CONFIGS),
+                "automatic_configs": 1,
             },
         )
     else:
@@ -791,6 +639,11 @@ def run_pipeline(
             capital_state = PhaseState.NO_WORK
         phases["CAPITAL"] = PhaseResult(
             capital_state,
+            reason=(
+                capital_runtime_result.get("result_debt_state")
+                or ",".join(capital_runtime_result.get("errors", []))[:500]
+                or ",".join(item["error"] for item in capital_errors)[:500]
+            ),
             details={
                 "runtime": capital_runtime_result,
                 "errors": capital_errors,
@@ -835,41 +688,67 @@ def run_pipeline(
                     }
                 )
 
+    if dry_run:
+        from football.strategy.recovery import plan_global_evaluations
+
+        phases["PREDICTION"] = PhaseResult(
+            PhaseState.SKIPPED,
+            reason="DRY_RUN",
+            details=plan_global_evaluations(
+                at=at, capture_plan=capture_data.get("plan") if capture_result else None
+            ),
+        )
+    else:
+        evaluations = capital_runtime_result.get("evaluations", [])
+        created_ids = {
+            row["experiment_id"] for row in evaluations if row.get("created_experiment")
+        }
+        experiment_ids = {
+            row["experiment_id"] for row in evaluations if row.get("experiment_id")
+        }
+        experiment_rows = [
+            {"id": experiment_id, "created": experiment_id in created_ids}
+            for experiment_id in sorted(experiment_ids)
+        ]
+        phases["PREDICTION"] = _global_prediction_phase(
+            evaluations, experiment_rows, capital_runtime_result.get("errors", [])
+        )
+        for row in evaluations:
+            if row["status"] in {"FAILED", "BLOCKED", "UNAVAILABLE", "MISSED_WINDOW"}:
+                operational_causes.append(
+                    dict(
+                        component="prediction",
+                        operation="evaluate_prospective_t30",
+                        failure_kind="prediction_evaluation_" + row["status"].lower(),
+                        provider="API-Football",
+                        context={"reason": row["reason"], "status": row["status"]},
+                    )
+                )
+        errors.extend(
+            {
+                "phase": "PREDICTION",
+                "work_id": row["work_id"],
+                "error": row["details"].get("error", row["reason"]),
+            }
+            for row in evaluations
+            if row["status"] == "FAILED"
+        )
+
     if len(competitions) < 2:
         warnings.append(
             "REAL_MULTI_LEAGUE_UAT_UNAVAILABLE: fewer than two enabled domestic League competitions"
         )
     warnings.extend(
-        f"PREDICTION_UNAVAILABLE:{item['competition_id']}:{item['reason']}"
-        for item in prediction_unavailable
-    )
-    warnings.extend(
         f"CAPITAL_DEGRADED:{item}" for item in capital_runtime_result.get("errors", [])
     )
     generated_at = timezone.now()
     phases["REPORT"] = PhaseResult(PhaseState.SUCCESS)
-    cycle_created = {row["id"]: row["created"] for row in experiment_rows}
-    rolling_experiment_rows = [
-        _experiment_report(
-            experiment,
-            created=cycle_created.get(experiment.pk, False),
-        )
-        for experiment in PredictionExperiment.objects.filter(
-            mode=PredictionExperiment.MODE_PROSPECTIVE,
-            competition__enabled=True,
-            competition__competition_type="League",
-            competition__country__gt="",
-        )
-        .select_related("competition")
-        .order_by("competition_id", "period_start", "target_at", "id")
-    ]
     report = _report(
         at=at,
         generated_at=generated_at,
         cycle_identity=cycle_identity,
         phases=phases,
         competitions=competitions,
-        experiments=rolling_experiment_rows,
         cycle_experiments=experiment_rows,
         capital_runtime_result=capital_runtime_result,
         capture_data=capture_data,
@@ -878,7 +757,13 @@ def run_pipeline(
     )
     status = _phase_status(phases)
     if run:
-        capture_run_ids = [capture_data["run_id"]] if capture_data.get("run_id") else []
+        capture_run_ids = sorted(
+            {
+                row["capture_run_id"]
+                for row in capital_runtime_result.get("evaluations", [])
+            }
+            | ({capture_data["run_id"]} if capture_data.get("run_id") else set())
+        )
         prediction_ids = sorted({row["id"] for row in experiment_rows})
         capital_ids = []
         run.status = status
