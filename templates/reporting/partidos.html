@@ -1,0 +1,34 @@
+{% extends 'reporting/base.html' %}{% load reporting static %}
+{% block title %}Partidos · Finsport{% endblock %}
+{% block content %}
+<header class="page-heading mb-4"><div><p class="eyebrow">Seguimiento diario</p><h1>Partidos</h1></div><span class="badge text-bg-light border">{{ selected|date:'d/m/Y' }}</span></header>
+{% for error in errors %}<div class="alert alert-warning" role="alert">{{ error }}</div>{% endfor %}
+<section class="filter-panel mb-4" aria-label="Fecha y liga">
+  <form class="row g-3 align-items-end" method="get">
+    <div class="col-sm-5 col-lg-3"><label class="form-label" for="date">Fecha en Lima</label><input class="form-control" id="date" name="date" type="date" value="{{ selected|date:'Y-m-d' }}"></div>
+    <div class="col-sm-5 col-lg-4"><label class="form-label" for="competition">Liga</label><select class="form-select" id="competition" name="competition"><option value="">Todas las ligas</option>{% for league in competitions %}<option value="{{ league.pk }}" {% if competition.pk == league.pk %}selected{% endif %}>{{ league.name }}</option>{% endfor %}</select></div>
+    <div class="col-sm-2"><button class="btn btn-success w-100">Ver</button></div>
+  </form>
+  <nav class="day-links mt-3" aria-label="Navegación por fecha">
+    <a href="?date={{ previous|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}" aria-label="Día anterior">← Anterior</a>
+    <a href="?date={{ yesterday|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}">Ayer</a>
+    <a href="?date={{ today|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}">Hoy</a>
+    <a href="?date={{ tomorrow|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}">Mañana</a>
+    <a href="?date={{ next|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}" aria-label="Día siguiente">Siguiente →</a>
+  </nav>
+</section>
+{% if empty_calendar %}<div class="empty-panel mb-4" role="status">{{ empty_calendar }}</div>{% endif %}
+{% for title, rows in groups %}
+<section class="section-block" aria-labelledby="group-{{ forloop.counter }}"><div class="section-heading"><h2 id="group-{{ forloop.counter }}">{{ title }}</h2><span class="section-note">{{ rows|length }}</span></div>
+  {% for row in rows %}<article class="match-card mb-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2"><div><p class="match-league mb-1">{{ row.match.season.competition.name }} · {{ row.match.kickoff|date:'H:i' }}</p><h3 class="h5 mb-1">{{ row.match.home_team.name }} <span class="text-muted fw-normal">vs</span> {{ row.match.away_team.name }}</h3><p class="text-muted small mb-0">{{ row.match_state }}{% if row.score %} · {{ row.score }}{% endif %}{% if row.outcome %} · Resultado: {{ row.outcome }}{% endif %}</p></div><span class="badge text-bg-{{ row.tone }}">{{ row.label }}</span></div>
+    {% if row.action and row.action != 'NO_BET' %}<p class="match-decision mb-1 mt-3">Selección: <strong>{{ row.action }}</strong>{% if row.position %} · Cuota {{ row.position.execution_basis__selected_price|value_or_dash }}{% endif %}</p>{% endif %}
+    {% if row.reason %}<p class="text-muted small mt-2 mb-0">{{ row.reason }}</p>{% endif %}
+    {% if row.position %}<div class="match-money mt-2"><span>Apostado: <strong>{{ row.position.applied_stake|as_units }}</strong></span>{% if row.position.status == 'OPEN' %}<span class="text-warning-emphasis">Pendiente de resultado</span>{% elif row.position.status == 'VOID' %}<span class="text-muted">Sin P&amp;L realizado</span>{% else %}<strong class="{% if row.position.realized_pnl > 0 %}gain{% elif row.position.realized_pnl < 0 %}loss{% endif %}">{% if row.position.realized_pnl > 0 %}+{% endif %}{{ row.position.realized_pnl|as_units }}</strong>{% endif %}</div>{% endif %}
+    <details class="match-detail mt-3" data-url="{% url 'reporting-match-detail' row.match.pk %}"><summary>Más información</summary><div class="detail-content pt-3" role="region" aria-live="polite">Abre este detalle para cargar las cuotas y la evaluación.</div></details>
+  </article>{% empty %}<p class="text-muted small">Sin partidos en este grupo.</p>{% endfor %}
+</section>
+{% endfor %}
+{% if page.paginator.num_pages > 1 %}<nav class="day-links mb-4" aria-label="Páginas de partidos">{% if page.has_previous %}<a href="?date={{ selected|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}&page={{ page.previous_page_number }}">← Anterior</a>{% endif %}<span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?date={{ selected|date:'Y-m-d' }}{% if competition %}&competition={{ competition.pk }}{% endif %}&page={{ page.next_page_number }}">Siguiente →</a>{% endif %}</nav>{% endif %}
+{% endblock %}
+{% block extra_script %}<script src="{% static 'reporting/partidos.js' %}" defer></script>{% endblock %}

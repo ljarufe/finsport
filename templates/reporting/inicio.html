@@ -1,0 +1,44 @@
+{% extends 'reporting/base.html' %}{% load reporting %}
+{% block title %}Inicio · Finsport{% endblock %}
+{% block content %}
+<header class="page-heading mb-4"><div><p class="eyebrow">Resumen de simulación</p><h1>Inicio</h1></div><span class="badge text-bg-light border">Estrategia global</span></header>
+{% for warning in warnings %}<div class="alert alert-warning" role="alert">{{ warning }}</div>{% endfor %}
+{% if not config %}<div class="empty-panel mb-4" role="status">La estrategia global aún no tiene una banca operacional disponible. Las ligas y el calendario siguen visibles.</div>{% endif %}
+
+<section class="section-block" aria-labelledby="capital-title">
+  <div class="section-heading"><h2 id="capital-title">Capital</h2></div>
+  {% if capital %}
+  <div class="row g-3 mb-3">
+    <div class="col-sm-6"><div class="metric-card"><span class="metric-label">Capital actual total</span><strong class="metric-value">{{ capital.equity|as_units }}</strong></div></div>
+    <div class="col-sm-6"><div class="metric-card"><span class="metric-label">Capital inicial</span><strong class="metric-value">{{ capital.initial|as_units }}</strong></div></div>
+  </div>
+  <div class="capital-foot"><span>Disponible <strong>{{ capital.available|as_units }}</strong></span><span>Apostado actualmente <strong>{{ capital.reserved|as_units }}</strong></span></div>
+  {% else %}<div class="empty-panel">Sin capital de la estrategia global.</div>{% endif %}
+</section>
+
+<section class="section-block" aria-labelledby="results-title">
+  <div class="section-heading"><h2 id="results-title">Resultados</h2><span class="section-note">Liquidaciones registradas en hora de Lima</span></div>
+  {% if results %}<div class="row g-3">{% for period in results %}<div class="col-6 col-lg-3"><div class="metric-card h-100"><span class="metric-label">{{ period.label }}</span><strong class="result-value {% if period.pnl > 0 %}gain{% elif period.pnl < 0 %}loss{% else %}neutral{% endif %}">{% if period.pnl > 0 %}+{% endif %}{{ period.pnl|as_units }}</strong><span class="result-rate">{% if period.rate is not None %}{% if period.rate > 0 %}+{% endif %}{{ period.rate|as_percent }}{% else %}—{% endif %}</span><small class="text-muted">{% if period.count %}Base: {{ period.opening_equity|as_units }} · {{ period.count }} liquidación{{ period.count|pluralize:"es" }}{% else %}Sin liquidaciones{% endif %}</small></div></div>{% endfor %}</div>{% else %}<div class="empty-panel">Todavía no hay resultados de esta banca.</div>{% endif %}
+</section>
+
+<section class="section-block" aria-labelledby="chart-title">
+  <div class="section-heading"><h2 id="chart-title">Evolución del capital total</h2><span class="section-note">Equity, incluye exposición abierta</span></div>
+  {% if chart and not chart.empty %}
+  <div class="chart-panel">
+    <svg viewBox="0 0 640 200" role="img" aria-label="Capital inicial y evolución tras {{ chart.settlement_count }} liquidaciones reales"><line x1="20" y1="175" x2="620" y2="175" stroke="#cbd5dc"/><polyline points="{{ chart.path }}" fill="none" stroke="#15803d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>{% for point in chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="{% if point.kind == 'initial' %}5{% else %}4{% endif %}" fill="#15803d"/>{% endfor %}</svg>
+    <div class="chart-caption"><span>Inicio {{ chart.initial|as_units }}</span><strong>{{ capital.equity|as_units }} actual</strong><span>{{ chart.settlement_count }} liquidación{{ chart.settlement_count|pluralize:"es" }}</span></div>
+    <details class="chart-ledger mt-3"><summary>Ver P&amp;L y capital tras cada liquidación{% if chart.older_count %} (últimas 90; {{ chart.older_count }} anteriores agrupadas){% endif %}</summary><div class="table-responsive mt-2"><table class="table table-sm align-middle mb-0"><thead><tr><th>Hora de Lima</th><th>Movimiento realizado</th><th>Capital total</th></tr></thead><tbody><tr><td>Inicio</td><td>—</td><td>{{ chart.initial|as_units }}</td></tr>{% for point in chart.events %}<tr><td>{% if point.kind == 'prior' %}{{ point.count }} liquidaciones anteriores{% else %}{{ point.at|date:'d/m/Y H:i:s' }}{% endif %}</td><td class="{% if point.pnl > 0 %}gain{% elif point.pnl < 0 %}loss{% endif %}">{% if point.pnl > 0 %}+{% endif %}{{ point.pnl|as_units }}</td><td>{{ point.equity|as_units }}</td></tr>{% endfor %}</tbody></table></div></details>
+  </div>
+  {% elif chart and chart.inconsistent %}<div class="empty-panel text-warning">La curva no está disponible hasta conciliar el ledger con el capital actual.</div>{% else %}<div class="empty-panel">Capital inicial {{ chart.initial|as_units }}. Aún no hay liquidaciones para trazar una evolución.</div>{% endif %}
+</section>
+
+<section class="section-block" aria-labelledby="activity-title">
+  <div class="section-heading"><h2 id="activity-title">Actividad total</h2><span class="section-note">Porcentaje sobre partidos observados</span></div>
+  {% if activity %}<div class="row g-3">{% for item in activity %}<div class="col-6 col-lg-3"><div class="metric-card h-100"><span class="metric-label">{{ item.label }}</span><strong class="metric-value {% if item.label == 'Ganados' %}gain{% elif item.label == 'Perdidos' %}loss{% endif %}">{{ item.count }}</strong><span class="result-rate">{{ item.rate|as_percent }}</span></div></div>{% endfor %}</div>{% else %}<div class="empty-panel">Todavía no hay actividad de esta estrategia.</div>{% endif %}
+</section>
+
+<section class="section-block" aria-labelledby="leagues-title">
+  <div class="section-heading"><h2 id="leagues-title">Ligas activas</h2><span class="section-note">{{ league_count }} habilitadas</span></div>
+  {% if leagues %}<div class="table-responsive league-panel"><table class="table align-middle mb-0"><thead><tr><th>Liga</th><th>Temporada</th><th>Estado</th></tr></thead><tbody>{% for league in leagues %}<tr><td class="fw-semibold">{{ league.name }} <span class="text-muted small">{{ league.country }}</span></td><td>{% if league.season %}{{ league.season.start_date|date:'d/m/Y' }} – {{ league.season.end_date|date:'d/m/Y' }}{% else %}Por confirmar{% endif %}</td><td><span class="badge text-bg-{{ league.tone }}">{{ league.status }}</span></td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-panel">No hay ligas habilitadas.</div>{% endif %}
+</section>
+{% endblock %}

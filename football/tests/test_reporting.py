@@ -1,967 +1,494 @@
-from datetime import datetime, time, timedelta
+"""FS-022 product UI: only the governed #209 simulation and bounded reads."""
+
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from django.contrib.staticfiles import finders
 from django.db import connection
-from django.test import Client
+from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
-from django.utils import timezone
 
 from football.models import (
-    Bookmaker,
-    CapitalExperiment,
-    CapitalPolicyRun,
+    CapitalEvaluation,
+    CapitalExecutionState,
+    CapitalPosition,
+    CaptureWorkItem,
     Competition,
     Decision,
-    DixonColesReadinessProfile,
-    HistoricalCoverage,
-    Match,
-    OddsMarket,
-    OddsObservation,
     Prediction,
     PredictionExperiment,
     Season,
-    Source,
-    Team,
 )
-from football.prediction.constants import DIXON_COLES_VERSION
-from football.prediction.goal_models import DixonColesAdapter
-from football.reporting.presentation import (
-    decision_reason_presentations,
-    reason_presentations,
-)
-from football.reporting.selectors import _decision_metrics, historical
-from football.templatetags.reporting import as_percent, as_units, yes_no_unknown
+from football.reporting.selectors import home, match_detail, matches_day
+from football.strategy.deployment import provision
+from football.strategy.prospective import reconcile_global
+from football.tests.test_fs022_strategy import AT, capture
+from football.tests.test_fs022_strategy import graph as graph
+
+pytestmark = pytest.mark.django_db
+NOW = datetime(2026, 9, 29, 3, tzinfo=UTC)  # 28 September, 22:00 in Lima.
 
 
-@pytest.fixture
-def graph(db):
-    selected = timezone.localdate()
-    competition = Competition.objects.create(
-        name="Liga Informe", competition_type="League", country="ES", enabled=True
-    )
-    other_competition = Competition.objects.create(
-        name="Liga Fuera", competition_type="League", country="PE", enabled=True
-    )
-    season = Season.objects.create(competition=competition, year=selected.year)
-    home = Team.objects.create(competition=competition, name="Equipo Local")
-    away = Team.objects.create(competition=competition, name="Equipo Visitante")
-    kickoff = timezone.make_aware(
-        datetime.combine(selected, time(15)), timezone.get_current_timezone()
-    )
-    match = Match.objects.create(
-        season=season,
-        home_team=home,
-        away_team=away,
-        kickoff=kickoff,
-        status_short="FT",
-        status_long="Match Finished",
-        home_score=2,
-        away_score=1,
-        outcome=Match.OUTCOME_HOME,
-    )
-    return SimpleNamespace(
-        selected=selected,
-        competition=competition,
-        other_competition=other_competition,
-        season=season,
-        home=home,
-        away=away,
-        match=match,
-        kickoff=kickoff,
+@pytest.fixture(autouse=True)
+def simulated_clock(monkeypatch):
+    monkeypatch.setattr(
+        "football.strategy.clock.effective_now",
+        lambda *, planning_at=None: planning_at or AT,
     )
 
 
-def experiment(graph, *, mode="PROSPECTIVE", competition=None, summary=None):
-    return PredictionExperiment.objects.create(
-        competition=competition or graph.competition,
-        mode=mode,
-        period_start=graph.selected - timedelta(days=2),
-        period_end=graph.selected + timedelta(days=2),
-        summary=summary or {},
-    )
+def ui_client():
+    return Client(HTTP_HOST="localhost")
 
 
-def prediction(
-    graph,
-    exp,
-    *,
-    match=None,
-    model_code=Prediction.DIXON_COLES,
-    variant="base",
-    config=None,
-    predicted=Match.OUTCOME_HOME,
-    actual=Match.OUTCOME_HOME,
-):
-    return Prediction.objects.create(
-        experiment=exp,
-        match=match or graph.match,
-        model_code=model_code,
-        variant=variant,
-        model_version="v1",
-        model_config=config or {},
-        cutoff=graph.kickoff - timedelta(hours=1),
-        p_home=0.5,
-        p_draw=0.3,
-        p_away=0.2,
-        predicted_outcome=predicted,
-        actual_outcome=actual,
-    )
+def set_status(position, status, pnl, settled_at):
+    position.status = status
+    position.realized_pnl = Decimal(str(pnl))
+    position.settled_at = settled_at
+    position.save(update_fields=["status", "realized_pnl", "settled_at"])
 
 
-def decision(
-    graph,
-    exp,
-    pred,
-    *,
-    match=None,
-    policy="MODAL_ALL",
-    variant="base",
-    config=None,
-    action=Match.OUTCOME_HOME,
-    observation=None,
-    reason=None,
-):
-    return Decision.objects.create(
-        experiment=exp,
-        match=match or graph.match,
-        prediction=pred,
-        policy_code=policy,
-        policy_variant=variant,
-        policy_version="v1",
-        policy_config=config or {},
-        decision_time=graph.kickoff - timedelta(hours=1),
-        action=action,
-        reason=reason
-        or ("MODAL_OUTCOME" if action != Decision.ACTION_NO_BET else "NO_VALID_MARKET"),
-        selected_odds_observation=observation,
-        selected_price=(
-            getattr(observation, action.lower())
-            if observation and action != Decision.ACTION_NO_BET
-            else None
-        ),
-    )
-
-
-def observation(graph, observed_at):
-    source, _ = Source.objects.get_or_create(
-        code="reporting-test",
-        defaults={"name": "Reporting", "base_url": "https://example.test/"},
-    )
-    bookmaker, _ = Bookmaker.objects.get_or_create(
-        source=source, external_id="book", defaults={"name": "Book"}
-    )
-    market, _ = OddsMarket.objects.get_or_create(
-        source=source, external_id="mw", defaults={"name": "1X2"}
-    )
-    return OddsObservation.objects.create(
-        match=graph.match,
-        source=source,
-        bookmaker=bookmaker,
-        market=market,
-        home=Decimal("2.00"),
-        draw=Decimal("3.00"),
-        away=Decimal("4.00"),
-        observed_at=observed_at,
-    )
-
-
-@pytest.mark.django_db
-def test_routes_valid_invalid_and_empty_filters_are_safe(graph):
-    client = Client()
-    assert client.get("/").status_code == 200
-    assert (
-        client.get("/daily/", {"date": graph.selected.isoformat()}).status_code == 200
-    )
-    assert client.get("/admin/").status_code in {200, 302}
-    valid = client.get(
-        "/",
-        {
-            "competition": graph.competition.pk,
-            "date_from": graph.selected.isoformat(),
-            "date_to": graph.selected.isoformat(),
-        },
-    )
-    assert valid.status_code == 200
-    assert "No hay predicciones prospectivas" in valid.content.decode()
-    invalid = client.get("/", {"competition": "bad", "date_from": "bad"})
-    assert invalid.status_code == 200
-    assert "No se aplicaron los filtros" in invalid.content.decode()
-
-
-@pytest.mark.django_db
-def test_unavailable_reason_shapes_and_zero_row_arms_never_crash(graph):
-    shapes = {
-        "SCALAR": "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE",
-        "LIST": ["NO_VALID_MARKET", "UNKNOWN_CODE"],
-        "STRUCTURED": {"unexpected": "shape"},
-    }
-    experiment(graph, mode="BACKTEST", summary={"unavailable_arms": shapes})
-    response = Client().get("/")
-    content = response.content.decode()
-    assert response.status_code == 200
-    assert all(code in content for code in shapes)
-    assert "UNKNOWN_CODE" in content
-    assert "La forma persistida no es un código" in content
-    assert len(reason_presentations(("NO_VALID_MARKET", "UNKNOWN"))) == 2
-    assert (
-        f"PredictionExperiment #{PredictionExperiment.objects.get(mode='BACKTEST').pk}"
-        in content
-    )
-
-
-@pytest.mark.parametrize(
-    ("code", "label"),
-    (
-        ("MODAL_OUTCOME", "Resultado modal seleccionado"),
-        ("CONFIDENCE_THRESHOLD_MET", "Umbral de confianza alcanzado"),
-        ("BELOW_CONFIDENCE_THRESHOLD", "Confianza por debajo del umbral"),
-        ("VALUE_ABOVE_THRESHOLD", "Valor esperado por encima del umbral"),
-        (
-            "NO_POSITIVE_VALUE_ABOVE_THRESHOLD",
-            "Sin valor positivo por encima del umbral",
-        ),
-        ("NO_VALID_MARKET", "Sin mercado válido"),
-        ("EXACT_LEGACY_CONTEXT_UNAVAILABLE", "Contexto legacy exacto no disponible"),
-        ("UNAVAILABLE_FOR_REPLAY", "No disponible para replay"),
-    ),
-)
-def test_decision_reason_vocabulary_has_contextual_labels(code, label):
-    assert decision_reason_presentations(code)[0]["label"] == label
-
-
-def test_decision_unknown_reason_is_distinct_from_availability_fallback():
-    assert (
-        decision_reason_presentations("NEW_DECISION_REASON")[0]["label"]
-        == "Motivo no clasificado"
-    )
-    assert reason_presentations("NEW_AVAILABILITY_REASON")[0]["label"].startswith(
-        "No evaluable"
-    )
-
-
-@pytest.mark.django_db
-def test_model_and_decision_groups_preserve_both_configs(graph):
-    for value in (1, 2):
-        exp = experiment(graph)
-        pred = prediction(graph, exp, config={"strength": value})
-        decision(graph, exp, pred, config={"threshold": value}, variant=str(value))
-    context = historical({})
-    assert len(context["prediction_rows"]) == 2
-    assert len(context["decision_rows"]) == 2
-    assert len(context["crosses"]) == 2
-    content = Client().get("/").content.decode()
-    assert "strength=1" in content and "strength=2" in content
-    assert "threshold=1" in content and "threshold=2" in content
-
-
-@pytest.mark.django_db
-def test_prediction_detail_renders_semantic_confusion_and_calibration(graph):
-    exp = experiment(graph)
-    prediction(graph, exp, config={"xi": 0.01})
-    content = Client().get("/").content.decode()
-    assert "Matriz de confusión" in content
-    assert "Real \\ Predicha" in content
-    assert "Calibración" in content
-    assert "Probabilidad media" in content
-    assert "Frecuencia observada" in content
-    assert "50.0%" in content
-    assert "confusion_matrix" not in content
-
-
-@pytest.mark.django_db
-def test_decision_resolution_and_temporal_economics_are_separate(graph):
-    exp = experiment(graph)
-    resolved = prediction(graph, exp)
-    unresolved_match = Match.objects.create(
-        season=graph.season,
-        home_team=graph.home,
-        away_team=graph.away,
-        kickoff=graph.kickoff + timedelta(hours=1),
-        status_short="NS",
-        status_long="No iniciado",
-    )
-    unresolved_exp = experiment(graph)
-    unresolved = prediction(graph, unresolved_exp, match=unresolved_match, actual=None)
-    rows = [
-        decision(graph, unresolved_exp, unresolved, match=unresolved_match),
-        decision(graph, exp, resolved, variant="no-bet", action=Decision.ACTION_NO_BET),
-        decision(graph, exp, resolved, variant="hit"),
-        decision(graph, exp, resolved, variant="loss", action=Match.OUTCOME_AWAY),
-        decision(
-            graph,
-            exp,
-            resolved,
-            variant="late-price",
-            observation=observation(graph, graph.kickoff),
-        ),
-        decision(
-            graph,
-            exp,
-            resolved,
-            variant="valid-price",
-            observation=observation(graph, graph.kickoff - timedelta(hours=2)),
-        ),
-    ]
-    metrics = _decision_metrics(rows)
-    assert metrics["actionable"] == 5
-    assert metrics["resolved_actionable"] == 4
-    assert metrics["hits"] == 3
-    assert metrics["losses"] == 1
-    assert metrics["no_bet_count"] == 1
-    assert metrics["economic_decisions"] == 1
-    assert metrics["flat_unit_pnl"] == 1.0
-    content = Client().get("/").content.decode()
-    for heading in (
-        "Evaluadas",
-        "Accionables",
-        "Cobertura",
-        "NO_BET",
-        "Accionables resueltas",
-        "Aciertos",
-        "Pérdidas",
-        "N económico / Decisions con precio válido",
-        "Cobertura económica sobre resueltas",
-        "Hit rate",
-        "PnL simulado (stake plano 1u)",
-        "ROI simulado",
-    ):
-        assert heading in content
-    assert ">1u<" in content
-    assert ">100.0%<" in content
-    context = historical({})
-    assert any(
-        row["metrics"]["economic_decisions"] == 0
-        and row["metrics"]["flat_unit_pnl"] is None
-        and row["metrics"]["roi"] is None
-        for row in context["decision_rows"]
-    )
-
-
-@pytest.mark.django_db
-def test_agreement_is_instance_bounded_and_not_self_paired(graph):
-    for predicted_b in (Match.OUTCOME_HOME, Match.OUTCOME_AWAY):
-        exp = experiment(graph)
-        prediction(graph, exp, model_code=Prediction.DIXON_COLES)
-        prediction(
-            graph, exp, model_code=Prediction.INDEPENDENT_POISSON, predicted=predicted_b
-        )
-    agreements = historical({})["agreements"]
-    assert len(agreements) == 1
-    assert agreements[0]["n"] == 2
-    assert agreements[0]["agreement"] == 1
-    assert agreements[0]["disagreements"] == 1
-    assert agreements[0]["agreement_rate"] == 0.5
-
-
-@pytest.mark.django_db
-def test_daily_is_prospective_spanish_and_uses_selected_action(graph):
-    prospective = experiment(graph)
-    prospective_prediction = prediction(
-        graph, prospective, config={"xi": 0.01, "basis": "recent"}
-    )
-    selected_observation = observation(graph, graph.kickoff - timedelta(hours=2))
-    decision(
-        graph,
-        prospective,
-        prospective_prediction,
-        policy="PROSPECTIVE_POLICY",
-        config={"threshold": 0.4},
-        observation=selected_observation,
-    )
-    backtest = experiment(graph, mode="BACKTEST")
-    backtest_prediction = prediction(
-        graph, backtest, model_code=Prediction.MARKET_CONSENSUS
-    )
-    decision(graph, backtest, backtest_prediction, policy="BACKTEST_POLICY")
-    response = Client().get(
-        "/daily/",
-        {"date": graph.selected.isoformat(), "competition": graph.competition.pk},
-    )
-    content = response.content.decode()
-    assert response.status_code == 200
-    assert "PROSPECTIVE_POLICY" in content
-    assert "BACKTEST_POLICY" not in content
-    assert "DIXON_COLES · base · v1 · basis=recent · xi=0.01" in content
-    assert "threshold=0.4" in content
-    assert "Resultado modal seleccionado" in content
-    assert "Acierto" in content
-    assert "Equipo Local" in content and "Equipo Visitante" in content
-    assert "Equipo Local (Liga Informe)" not in content
-    assert "Finalizado" in content
-    assert "Precio seleccionado" in content
-    assert "Reporting" in content and "Book" in content
-    assert "Observado" in content and "Decisión" in content
-    assert (graph.selected - timedelta(days=1)).isoformat() in content
-    assert (graph.selected + timedelta(days=1)).isoformat() in content
-    assert "Calibración:" not in content
-
-
-@pytest.mark.django_db
-def test_capital_empty_metrics_do_not_crash_and_filters_do_not_leak(graph):
-    visible_source = experiment(graph)
-    hidden_source = experiment(graph, competition=graph.other_competition)
-    for source, code in (
-        (visible_source, "VISIBLE_POLICY"),
-        (hidden_source, "HIDDEN_POLICY"),
-    ):
-        capital = CapitalExperiment.objects.create(
-            source_experiment=source,
-            source_model_code=Prediction.DIXON_COLES,
-            decision_policy_code="MODAL_ALL",
-            mode=CapitalExperiment.MODE_REPLAY,
-            initial_bankroll=Decimal("100"),
-            input_hash=code,
-        )
-        CapitalPolicyRun.objects.create(
-            experiment=capital,
-            policy_code=code,
-            policy_version="v1",
-            status=(
-                CapitalPolicyRun.STATUS_PRODUCED
-                if code == "VISIBLE_POLICY"
-                else CapitalPolicyRun.STATUS_UNAVAILABLE
-            ),
-            metrics=(
-                {
-                    "terminal_bankroll": "0",
-                    "total_pnl": "0",
-                    "roi": "0",
-                    "maximum_drawdown": "0",
-                    "practical_ruin": False,
-                    "max_stake_pre_bankroll_ratio": "0",
-                    "stake_concentration": "0.25",
-                }
-                if code == "VISIBLE_POLICY"
-                else {}
-            ),
-        )
-        if code == "VISIBLE_POLICY":
-            CapitalPolicyRun.objects.create(
-                experiment=capital,
-                policy_code="TRUE_RUIN_POLICY",
-                policy_version="v1",
-                status=CapitalPolicyRun.STATUS_FAILED,
-                reason="INSUFFICIENT_CAPITAL",
-                metrics={"practical_ruin": True},
-            )
-    response = Client().get("/", {"competition": graph.competition.pk})
-    content = response.content.decode()
-    assert response.status_code == 200
-    assert "VISIBLE_POLICY" in content
-    assert "HIDDEN_POLICY" not in content
-    assert "CapitalExperiment #" in content
-    assert "Producido" in content and "Fallido" in content
-    assert "0u" in content
-    assert ">No<" in content and ">Sí<" in content
-    assert "Máx. stake / bankroll previo" in content
-    assert "Concentración de stake" in content
-    assert "25.0%" in content
-
-
-@pytest.mark.django_db
-def test_capital_reporting_uses_mode_specific_metric_contracts(graph):
-    source = experiment(graph)
-
-    def capital_run(mode, code, metrics, *, path_count=None):
-        capital = CapitalExperiment.objects.create(
-            source_experiment=source,
-            source_model_code=Prediction.DIXON_COLES,
-            decision_policy_code="MODAL_ALL",
-            mode=mode,
-            initial_bankroll=Decimal("100"),
-            input_count=4,
-            input_hash=code,
-        )
-        return CapitalPolicyRun.objects.create(
-            experiment=capital,
-            policy_code=code,
-            policy_version="v1",
-            status=CapitalPolicyRun.STATUS_PRODUCED,
-            path_count=path_count,
-            metrics=metrics,
-        )
-
-    replay = capital_run(
-        CapitalExperiment.MODE_REPLAY,
-        "REPLAY_POLICY",
-        {
-            "terminal_bankroll": "104",
-            "total_pnl": "4",
-            "roi": "0.04",
-            "maximum_drawdown": "0.02",
-            "practical_ruin": False,
-            "max_stake_pre_bankroll_ratio": "0.01",
-        },
-    )
-    stochastic_metrics = {
-        "path_count": 500,
-        "mean_terminal_bankroll": 112,
-        "median_terminal_bankroll": 109,
-        "terminal_bankroll_quantile_1": 70,
-        "terminal_bankroll_quantile_5": 82,
-        "mean_pnl": 12,
-        "median_pnl": 9,
-        "practical_ruin_probability": 0.03,
-        "maximum_drawdown_distribution": {
-            "mean": 0.12,
-            "median": 0.10,
-            "quantile_95": 0.30,
-            "maximum": 0.50,
-        },
-        "max_stake_distribution": {
-            "mean": 2,
-            "median": 1.5,
-            "quantile_95": 4,
-            "maximum": 6,
-        },
-        "max_stake_pre_bankroll_ratio_distribution": {
-            "mean": 0.02,
-            "median": 0.015,
-            "quantile_95": 0.04,
-            "maximum": 0.06,
-        },
-        "stake_concentration": 0.025,
-        "expected_shortfall": 75,
-    }
-    monte_carlo = capital_run(
-        CapitalExperiment.MODE_MONTE_CARLO,
-        "MONTE_CARLO_POLICY",
-        stochastic_metrics,
-        path_count=500,
-    )
-    stress_metrics = dict(stochastic_metrics)
-    stress_metrics.update(mean_terminal_bankroll=95, mean_pnl=-5)
-    stress = capital_run(
-        CapitalExperiment.MODE_STRESS,
-        "STRESS_POLICY",
-        stress_metrics,
-        path_count=500,
-    )
-
-    context = historical({})
-    assert [run.pk for run in context["replay_capital_runs"]] == [replay.pk]
-    assert {run.pk for run in context["stochastic_capital_runs"]} == {
-        monte_carlo.pk,
-        stress.pk,
-    }
-    assert not hasattr(context["stochastic_capital_runs"][0], "terminal_bankroll")
-    assert context["stochastic_capital_runs"][0].mean_terminal_bankroll == 112
-
-    content = Client().get("/").content.decode()
-    stochastic_section = content.split("Simulación estocástica", 1)[1].split(
-        "</section>", 1
-    )[0]
-    assert f"PredictionExperiment #{source.pk}" in stochastic_section
-    assert Prediction.DIXON_COLES in stochastic_section
-    assert "MODAL_ALL" in stochastic_section
-    assert "REPLAY_POLICY" not in stochastic_section
-    assert "MONTE_CARLO_POLICY" in stochastic_section
-    assert "STRESS_POLICY" in stochastic_section
-    assert "112u" in stochastic_section and "95u" in stochastic_section
-    assert "3.0%" in stochastic_section
-    assert "Shortfall esperado" in stochastic_section
-    assert "ROI" not in stochastic_section
-    assert "Bankroll final" not in stochastic_section
-
-
-def test_ratio_formatter_converts_half_to_fifty_percent():
-    assert as_percent(0.5) == "50.0%"
-    assert as_percent(-0.335) == "-33.5%"
-    assert as_percent(None) == "—"
-    assert yes_no_unknown(False) == "No"
-    assert yes_no_unknown(True) == "Sí"
-    assert yes_no_unknown(None) == "—"
-    assert as_units(Decimal("100.00000000")) == "100u"
-    assert as_units(Decimal("99.3300")) == "99.33u"
-    assert as_units(Decimal("-0.6700")) == "-0.67u"
-    assert as_units(0) == "0u"
-    assert as_units(None) == "—"
-
-
-def test_reporting_static_assets_are_discoverable_by_collectstatic():
-    assert finders.find("reporting/bootstrap.min.css")
-    assert finders.find("reporting/finsport.css")
-
-
-@pytest.mark.django_db
-def test_default_scope_excludes_all_disabled_competition_evidence(graph):
-    graph.other_competition.enabled = False
-    graph.other_competition.save(update_fields=["enabled", "modified"])
-    disabled_season = Season.objects.create(
-        competition=graph.other_competition, year=graph.selected.year
-    )
-    disabled_home = Team.objects.create(
-        competition=graph.other_competition, name="DISABLED_HOME"
-    )
-    disabled_away = Team.objects.create(
-        competition=graph.other_competition, name="DISABLED_AWAY"
-    )
-    disabled_match = Match.objects.create(
-        season=disabled_season,
-        home_team=disabled_home,
-        away_team=disabled_away,
-        kickoff=graph.kickoff,
-        status_short="FT",
-        status_long="Match Finished",
-        outcome=Match.OUTCOME_HOME,
-    )
-
-    enabled_exp = experiment(graph)
-    enabled_prediction = prediction(graph, enabled_exp)
-    decision(
-        graph,
-        enabled_exp,
-        enabled_prediction,
-        policy="ENABLED_DECISION",
-    )
-    enabled_backtest = experiment(
-        graph,
-        mode="BACKTEST",
-        summary={"unavailable_arms": {"ENABLED_BACKTEST": "NO_VALID_MARKET"}},
-    )
-    assert enabled_backtest.pk
-
-    disabled_exp = experiment(graph, competition=graph.other_competition)
-    disabled_prediction = prediction(
-        graph, disabled_exp, match=disabled_match, config={"scope": "DISABLED"}
-    )
-    decision(
-        graph,
-        disabled_exp,
-        disabled_prediction,
-        match=disabled_match,
-        policy="DISABLED_DECISION",
-    )
-    experiment(
-        graph,
-        mode="BACKTEST",
-        competition=graph.other_competition,
-        summary={"unavailable_arms": {"DISABLED_BACKTEST": "NO_VALID_MARKET"}},
-    )
-    disabled_capital = CapitalExperiment.objects.create(
-        source_experiment=disabled_exp,
-        source_model_code=Prediction.DIXON_COLES,
+def test_empty_home_uses_one_bank_and_real_calendar(graph):
+    (config,) = provision(at=AT)
+    old = config.__class__.objects.create(
+        identity="retired-comparator",
+        runtime_version="fs016-capital-runtime-v2",
+        execution_version="legacy",
+        mode="CURRENT",
+        automatic=True,
+        current=False,
+        entry_enabled=False,
+        source_model_code="DIXON_COLES",
         decision_policy_code="MODAL_ALL",
-        mode=CapitalExperiment.MODE_REPLAY,
-        initial_bankroll=Decimal("100"),
-        input_hash="disabled-capital",
-    )
-    CapitalPolicyRun.objects.create(
-        experiment=disabled_capital,
-        policy_code="DISABLED_CAPITAL",
+        policy_code="FLAT_UNIT",
         policy_version="v1",
-        status=CapitalPolicyRun.STATUS_UNAVAILABLE,
+        policy_config={},
+        max_lanes=1,
+        initial_bankroll=Decimal("100"),
+        bankroll_equity=Decimal("999"),
+        peak_equity=Decimal("999"),
+    )
+    assert old.pk != config.pk
+    context = home()
+    assert context["capital"] == {
+        "equity": Decimal("100"),
+        "initial": Decimal("100"),
+        "available": Decimal("100"),
+        "reserved": Decimal("0"),
+    }
+    assert len(context["results"]) == 4
+    assert all(row["pnl"] == 0 and row["rate"] is None for row in context["results"])
+    assert context["chart"]["empty"] and context["activity"][0]["count"] == 0
+    response = ui_client().get("/")
+    text = response.content.decode()
+    assert response.status_code == 200
+    assert "100u" in text and "999u" not in text
+    assert "Sin liquidaciones" in text
+    assert "Dixon-Coles" not in text and "MARKET_CONSENSUS" not in text
+    assert (
+        "Inicio" in text
+        and "Partidos" in text
+        and "Admin" in text
+        and "Grafana" in text
+    )
+    assert "FS022 League" in text
+
+
+def test_home_ledger_periods_chart_activity_and_void(graph, monkeypatch):
+    (config,) = provision(at=AT)
+    positions = []
+    for index in range(4):
+        work = capture(graph, index, at=AT + timedelta(minutes=index + 1))
+        assert reconcile_global(work.run_id, at=work.run.completed_at).placed == 1
+        positions.append(CapitalPosition.objects.get(match=work.match))
+    # Settlement day in Lima, rather than kickoff or UTC settlement date, owns P&L.
+    set_status(positions[0], "SETTLED_WIN", "2", datetime(2026, 9, 28, 3, tzinfo=UTC))
+    set_status(positions[1], "SETTLED_LOSS", "-1", datetime(2026, 9, 29, 2, tzinfo=UTC))
+    set_status(positions[3], "VOID", "0", datetime(2026, 9, 29, 1, tzinfo=UTC))
+    config.bankroll_equity = Decimal("101")
+    config.reserved_exposure = positions[2].applied_stake
+    config.save(update_fields=["bankroll_equity", "reserved_exposure", "modified"])
+    monkeypatch.setattr("football.reporting.selectors.timezone.now", lambda: NOW)
+    context = home()
+    assert context["warnings"] == []
+    assert context["capital"]["equity"] == 101
+    assert context["capital"]["reserved"] == positions[2].applied_stake
+    assert (
+        context["capital"]["available"] + context["capital"]["reserved"]
+        == context["capital"]["equity"]
+    )
+    today, week, month, total = context["results"]
+    assert today["pnl"] == -1 and today["opening_equity"] == 102
+    assert today["rate"] == Decimal("-1") / 102
+    assert week["pnl"] == -1
+    assert month["pnl"] == total["pnl"] == 1
+    assert total["opening_equity"] == 100
+    assert context["chart"]["points"][-1]["equity"] == 101
+    assert len(context["chart"]["points"]) <= 90
+    assert [item["count"] for item in context["activity"]] == [4, 4, 1, 1]
+    text = ui_client().get("/").content.decode()
+    assert "101u" in text and "102u" in text
+    assert "Apostado actualmente" in text
+
+
+def test_observed_counts_once_across_captures_and_excludes_no_bet_pnl(graph):
+    provision(at=AT)
+    work = capture(graph, 10, prices=(("3", "3", "3"), ("3", "3", "3")))
+    assert reconcile_global(work.run_id, at=work.run.completed_at).placed == 0
+    CaptureWorkItem.objects.create(
+        run=work.run,
+        purpose="ODDS_CAPTURE",
+        status="SUCCESS",
+        source=work.source,
+        market=work.market,
+        match=work.match,
+        logical_identity="extra-capture",
+        intended_window="market-t60m",
+        target_at=work.target_at,
+        executed_at=work.executed_at,
+        completed_at=work.completed_at,
+    )
+    context = home()
+    assert [item["count"] for item in context["activity"]] == [1, 0, 0, 0]
+    assert context["results"][-1]["pnl"] == 0
+    assert context["results"][-1]["rate"] is None
+    assert (
+        "No seleccionado"
+        in ui_client().get("/partidos/?date=2026-09-27").content.decode()
     )
 
-    home = Client().get("/")
-    home_content = home.content.decode()
-    assert home.status_code == 200
-    assert "ENABLED_DECISION" in home_content
-    assert "ENABLED_BACKTEST" in home_content
-    assert "DISABLED_DECISION" not in home_content
-    assert "DISABLED_BACKTEST" not in home_content
-    assert "DISABLED_CAPITAL" not in home_content
 
-    daily = Client().get("/daily/", {"date": graph.selected.isoformat()})
-    daily_content = daily.content.decode()
-    assert daily.status_code == 200
-    assert "Equipo Local" in daily_content
-    assert "DISABLED_HOME" not in daily_content
-
-    selected = Client().get("/", {"competition": graph.competition.pk})
-    assert selected.status_code == 200
-    assert "ENABLED_DECISION" in selected.content.decode()
-    invalid_disabled = Client().get("/", {"competition": graph.other_competition.pk})
-    assert invalid_disabled.status_code == 200
-    assert "No se aplicaron los filtros" in invalid_disabled.content.decode()
-
-
-@pytest.mark.django_db
-def test_daily_query_count_is_bounded_as_rows_grow(graph):
-    exp = experiment(graph)
-
-    def add_evidence(index):
-        match = Match.objects.create(
-            season=graph.season,
-            home_team=graph.home,
-            away_team=graph.away,
-            kickoff=graph.kickoff + timedelta(minutes=index),
-            status_short="FT",
-            status_long="Finalizado",
-            outcome=Match.OUTCOME_HOME,
-        )
-        pred = prediction(graph, exp, match=match)
-        decision(graph, exp, pred, match=match, variant=str(index))
-
-    add_evidence(1)
-    url = f"/daily/?date={graph.selected.isoformat()}"
-    with CaptureQueriesContext(connection) as small:
-        assert Client().get(url).status_code == 200
-    for index in range(2, 7):
-        add_evidence(index)
-    with CaptureQueriesContext(connection) as large:
-        assert Client().get(url).status_code == 200
-    assert len(large) == len(small)
-
-
-@pytest.mark.django_db
-def test_reporting_gets_are_read_only_and_do_not_dispatch(graph):
-    counts = (
-        Prediction.objects.count(),
-        Decision.objects.count(),
-        CapitalExperiment.objects.count(),
+def test_league_current_next_and_missing_calendar(graph, monkeypatch):
+    season = graph[-1]
+    season.start_date = date(2026, 1, 1)
+    season.end_date = date(2026, 9, 27)
+    season.save()
+    season.competition.seasons.create(
+        year=2027, start_date=date(2027, 1, 1), end_date=date(2027, 12, 31)
     )
-    with (
-        patch("football.tasks.run_pipeline") as pipeline,
-        patch("football.tasks.run_capture") as capture,
-    ):
-        assert Client().get("/").status_code == 200
-        assert (
-            Client().get("/daily/", {"date": graph.selected.isoformat()}).status_code
-            == 200
-        )
-    assert not pipeline.called and not capture.called
-    assert counts == (
-        Prediction.objects.count(),
-        Decision.objects.count(),
-        CapitalExperiment.objects.count(),
+    Competition.objects.create(
+        name="Sin fechas", country="AR", competition_type="League", enabled=True
+    )
+    monkeypatch.setattr(
+        "football.reporting.selectors.timezone.now",
+        lambda: datetime(2026, 9, 27, 19, tzinfo=UTC),
+    )
+    rows = home()["leagues"]
+    assert (
+        next(row for row in rows if row["name"] == graph[3].name)["status"]
+        == "En curso"
+    )
+    monkeypatch.setattr("football.reporting.selectors.timezone.now", lambda: NOW)
+    rows = home()["leagues"]
+    assert (
+        next(row for row in rows if row["name"] == graph[3].name)["season"].year == 2027
+    )
+    assert (
+        next(row for row in rows if row["name"] == "Sin fechas")["status"]
+        == "Sin calendario"
     )
 
 
-@pytest.mark.django_db
-def test_fs011_historical_and_daily_states_are_truthful_and_read_only(graph):
-    HistoricalCoverage.objects.create(
-        competition=graph.competition,
-        status=HistoricalCoverage.Status.PARTIAL,
-        required_seasons=[2022, 2023],
-        covered_seasons=[2022],
-        unresolved_seasons=[2023],
-        strategy_version="fs011-football-data-v1",
-        reason="UNMAPPED_TEAM_IDENTITY:frozen-team",
-    )
-    DixonColesReadinessProfile.objects.create(
-        competition=graph.other_competition,
-        version="reporting-profile-v1",
-        model_version=DIXON_COLES_VERSION,
-        model_config=DixonColesAdapter(xi=0.001).config,
-        approved=True,
-    )
-    produced_experiment = experiment(
+def test_matches_lima_day_filters_groups_and_lazy_detail(graph):
+    provision(at=AT)
+    placed = capture(graph, 20, at=datetime(2026, 9, 28, 0, 30, tzinfo=UTC))
+    assert reconcile_global(placed.run_id, at=placed.run.completed_at).placed == 1
+    position = CapitalPosition.objects.get(match=placed.match)
+    position.match.status_short = "FT"
+    position.match.fulltime_home_score = 2
+    position.match.fulltime_away_score = 1
+    position.match.outcome = "HOME"
+    position.match.save()
+    set_status(position, "SETTLED_WIN", "1", NOW)
+    no_bet = capture(
         graph,
-        summary={
-            "dixon_coles": {
-                "status": "PRODUCED",
-                "reasons": [],
-                "evidence_identity": "produced-evidence-id",
-            }
-        },
+        21,
+        at=datetime(2026, 9, 28, 0, 31, tzinfo=UTC),
+        prices=(("3", "3", "3"), ("3", "3", "3")),
     )
-    produced_experiment.config = {"target_match_ids": [graph.match.pk]}
-    produced_experiment.period_start = graph.selected
-    produced_experiment.period_end = graph.selected
-    produced_experiment.save(
-        update_fields=["config", "period_start", "period_end", "modified"]
+    reconcile_global(no_bet.run_id, at=no_bet.run.completed_at)
+    no_bet.match.status_short = "FT"
+    no_bet.match.outcome = "DRAW"
+    no_bet.match.save()
+    untouched = capture(graph, 22, at=datetime(2026, 9, 28, 0, 32, tzinfo=UTC))
+    # A second league on the same Lima day verifies the competition filter.
+    other = Competition.objects.create(
+        name="Otra Liga", country="PE", competition_type="League", enabled=True
     )
-    produced = prediction(graph, produced_experiment)
-    produced.bet_eligible = False
-    produced.evidence_identity = "produced-evidence-id"
-    produced.readiness_reason = "NO_APPROVED_READINESS_PROFILE"
-    produced.save(
-        update_fields=[
-            "bet_eligible",
-            "evidence_identity",
-            "readiness_reason",
-            "modified",
+    other_season = Season.objects.create(competition=other, year=2026)
+    untouched.match.season = other_season
+    untouched.match.save(update_fields=["season", "modified"])
+    response = ui_client().get("/partidos/?date=2026-09-27")
+    text = response.content.decode()
+    assert response.status_code == 200
+    assert "2–1" in text and "Apuesta ganada" in text
+    assert "No seleccionado" in text and "Sin evaluación" in text
+    assert "DIXON_COLES" not in text and "Probabilidad local" not in text
+    assert "Más información" in text
+    assert "Terminado" in text or "Terminados" in text
+    filtered = (
+        ui_client()
+        .get(f"/partidos/?date=2026-09-27&competition={graph[3].pk}")
+        .content.decode()
+    )
+    assert untouched.match.home_team.name not in filtered
+    assert placed.match.home_team.name in filtered
+    assert matches_day({"date": "2026-09-28"})["page"].paginator.count == 0
+    detail = ui_client().get(f"/partidos/{placed.match.pk}/detalle/")
+    assert detail.status_code == 200
+    assert "Probabilidad local" in detail.content.decode()
+    assert (
+        "T−30 min" in detail.content.decode() and "Pinnacle" in detail.content.decode()
+    )
+    assert "MARKET_CONSENSUS" not in detail.content.decode()
+
+
+def test_capacity_expiration_open_loss_and_void_statuses(graph):
+    (config,) = provision(at=AT)
+    open_work = capture(graph, 30)
+    reconcile_global(open_work.run_id, at=open_work.run.completed_at)
+    loss_work = capture(graph, 31)
+    reconcile_global(loss_work.run_id, at=loss_work.run.completed_at)
+    void_work = capture(graph, 32)
+    reconcile_global(void_work.run_id, at=void_work.run.completed_at)
+    for work, status, pnl in (
+        (loss_work, "SETTLED_LOSS", "-1"),
+        (void_work, "VOID", "0"),
+    ):
+        position = CapitalPosition.objects.get(match=work.match)
+        set_status(position, status, pnl, NOW)
+        work.match.status_short = "FT"
+        work.match.save()
+    pending = capture(graph, 33)
+    CapitalExecutionState.objects.create(
+        config=config, match=pending.match, status="PENDING_CAPACITY"
+    )
+    expired = capture(graph, 34)
+    CapitalExecutionState.objects.create(
+        config=config,
+        match=expired.match,
+        status="NOT_PLACED",
+        non_placement_reason="EXPIRED_CAPACITY",
+    )
+    statuses = {
+        row["match"].pk: row
+        for _, rows in matches_day({"date": "2026-09-27"})["groups"]
+        for row in rows
+    }
+    assert statuses[open_work.match_id]["label"] == "Apuesta pendiente"
+    assert statuses[loss_work.match_id]["label"] == "Apuesta perdida"
+    assert statuses[void_work.match_id]["label"] == "Apuesta anulada"
+    assert statuses[pending.match_id]["label"] == "Esperando capacidad"
+    assert (
+        statuses[expired.match_id]["reason"]
+        == "La capacidad se liberó después del inicio"
+    )
+
+
+def test_query_cost_does_not_grow_with_scientific_history(graph):
+    provision(at=AT)
+    work = capture(graph, 40)
+    result = reconcile_global(work.run_id, at=work.run.completed_at)
+    assert result.placed == 1
+    client = ui_client()
+    paths = ("/", "/partidos/?date=2026-09-27")
+
+    def measure():
+        counts = []
+        for path in paths:
+            with CaptureQueriesContext(connection) as queries:
+                response = client.get(path)
+            assert response.status_code == 200
+            sql = [row["sql"].lower() for row in queries.captured_queries]
+            assert not any('from "football_predictionexperiment"' in row for row in sql)
+            counts.append(len(queries))
+        return counts
+
+    before = measure()
+    PredictionExperiment.objects.bulk_create(
+        [
+            PredictionExperiment(
+                competition=graph[3],
+                mode="BACKTEST",
+                period_start=date(2025, 1, 1),
+                period_end=date(2025, 1, 1),
+                logical_identity=f"old-science-{index}",
+            )
+            for index in range(150)
         ]
     )
-    decision(
-        graph,
-        produced_experiment,
-        produced,
-        action=Decision.ACTION_NO_BET,
-        reason="NO_APPROVED_READINESS_PROFILE",
-    )
-    for status, reason in (
-        ("UNAVAILABLE", "INSUFFICIENT_TEAM_HISTORY"),
-        ("FAILED", "DIXON_COLES_PREDICTION_FAILED"),
-    ):
-        classified = experiment(
-            graph,
-            summary={
-                "dixon_coles": {
-                    "status": status,
-                    "reasons": [reason],
-                    "evidence_identity": f"{status.lower()}-evidence-id",
-                }
-            },
-        )
-        classified.config = {"target_match_ids": [graph.match.pk]}
-        classified.period_start = graph.selected
-        classified.period_end = graph.selected
-        classified.save(
-            update_fields=["config", "period_start", "period_end", "modified"]
-        )
-
-    counts = {
-        "coverage": HistoricalCoverage.objects.count(),
-        "profiles": DixonColesReadinessProfile.objects.count(),
-        "experiments": PredictionExperiment.objects.count(),
-        "predictions": Prediction.objects.count(),
-        "decisions": Decision.objects.count(),
-    }
-    with (
-        patch(
-            "football.providers.api_football.APIFootballClient.get_all",
-            side_effect=AssertionError("reporting called API-Football"),
-        ) as api_football,
-        patch(
-            "football.providers.api_inkabet.InkabetClient.get_json",
-            side_effect=AssertionError("reporting called Inkabet"),
-        ) as inkabet,
-        patch("football.tasks.run_pipeline") as pipeline,
-        patch("football.tasks.run_capture") as capture,
-    ):
-        home = Client().get("/")
-        daily = Client().get("/daily/", {"date": graph.selected.isoformat()})
-
-    home_content = home.content.decode()
-    assert home.status_code == 200
-    assert "Cobertura histórica y readiness Dixon-Coles" in home_content
-    assert "PARTIAL" in home_content
-    assert "UNMAPPED_TEAM_IDENTITY:frozen-team" in home_content
-    assert "1 / 2" in home_content
-    assert "Reintento automático" in home_content
-    assert "reporting-profile-v1" in home_content
-    assert "Sin perfil aprobado · fail-closed" in home_content
-
-    daily_content = daily.content.decode()
-    assert daily.status_code == 200
-    assert all(
-        status in daily_content for status in ("PRODUCED", "UNAVAILABLE", "FAILED")
-    )
-    assert "bet_eligible=false" in daily_content
-    assert "Sin perfil de readiness aprobado" in daily_content
-    assert "NO_APPROVED_READINESS_PROFILE" in daily_content
-    assert "INSUFFICIENT_TEAM_HISTORY" in daily_content
-    assert "DIXON_COLES_PREDICTION_FAILED" in daily_content
-    assert "produced-evidence-id" in daily_content
-    assert "No seleccionar (NO_BET)" in daily_content
-    assert not api_football.called and not inkabet.called
-    assert not pipeline.called and not capture.called
-    assert counts == {
-        "coverage": HistoricalCoverage.objects.count(),
-        "profiles": DixonColesReadinessProfile.objects.count(),
-        "experiments": PredictionExperiment.objects.count(),
-        "predictions": Prediction.objects.count(),
-        "decisions": Decision.objects.count(),
-    }
-
-
-@pytest.mark.django_db
-def test_daily_dc_status_and_reason_are_scoped_to_each_target_match(graph):
-    unavailable_match = Match.objects.create(
-        season=graph.season,
-        home_team=graph.home,
-        away_team=graph.away,
-        kickoff=graph.kickoff + timedelta(minutes=1),
-        status_short="NS",
-        status_long="Not Started",
-    )
-    failed_match = Match.objects.create(
-        season=graph.season,
-        home_team=graph.home,
-        away_team=graph.away,
-        kickoff=graph.kickoff + timedelta(minutes=2),
-        status_short="NS",
-        status_long="Not Started",
-    )
-    exp = experiment(graph)
-    exp.period_start = graph.selected
-    exp.period_end = graph.selected
-    exp.config = {
-        "target_match_ids": [graph.match.pk, unavailable_match.pk, failed_match.pk]
-    }
-    exp.summary = {
-        "unavailable": {
-            f"DIXON_COLES:{unavailable_match.pk}": "INSUFFICIENT_TEAM_HISTORY"
-        },
-        "failed": {
-            f"DIXON_COLES:{failed_match.pk}": {
-                "reason": "DIXON_COLES_PREDICTION_FAILED"
-            }
-        },
-        "dixon_coles": {
-            "status": "FAILED",
-            "reasons": [
-                "INSUFFICIENT_TEAM_HISTORY",
-                "DIXON_COLES_PREDICTION_FAILED",
-            ],
-            "evidence_identity": "mixed-target-evidence",
-            "targets": {
-                str(graph.match.pk): {"status": "PRODUCED", "reasons": []},
-                str(unavailable_match.pk): {
-                    "status": "UNAVAILABLE",
-                    "reasons": ["INSUFFICIENT_TEAM_HISTORY"],
-                },
-                str(failed_match.pk): {
-                    "status": "FAILED",
-                    "reasons": ["DIXON_COLES_PREDICTION_FAILED"],
-                },
-            },
-        },
-    }
-    exp.save(
-        update_fields=["period_start", "period_end", "config", "summary", "modified"]
-    )
-    prediction(graph, exp)
-
-    counts = (
-        PredictionExperiment.objects.count(),
-        Prediction.objects.count(),
-        Decision.objects.count(),
-    )
-    with (
-        patch("football.tasks.run_pipeline") as pipeline,
-        patch("football.tasks.run_capture") as capture,
-    ):
-        response = Client().get("/daily/", {"date": graph.selected.isoformat()})
-
+    after = measure()
+    assert after == before
+    assert before[0] <= 20 and before[1] <= 15
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(f"/partidos/{work.match_id}/detalle/")
     assert response.status_code == 200
-    matches = {match.pk: match for match in response.context["matches"]}
-    assert matches[graph.match.pk].dc_evidence[0]["status"] == "PRODUCED"
-    assert matches[graph.match.pk].dc_evidence[0]["reasons"] == []
-    assert matches[unavailable_match.pk].dc_evidence[0] == {
-        "experiment_id": exp.pk,
-        "status": "UNAVAILABLE",
-        "reasons": ["INSUFFICIENT_TEAM_HISTORY"],
-        "evidence_identity": "mixed-target-evidence",
-    }
-    assert matches[failed_match.pk].dc_evidence[0]["status"] == "FAILED"
-    assert matches[failed_match.pk].dc_evidence[0]["reasons"] == [
-        "DIXON_COLES_PREDICTION_FAILED"
-    ]
+    assert any("football_oddsobservation" in row["sql"].lower() for row in queries)
+    with CaptureQueriesContext(connection) as queries:
+        client.get("/partidos/?date=2026-09-27")
+    assert not any("football_oddsobservation" in row["sql"].lower() for row in queries)
 
-    content = response.content.decode()
 
-    def status_section(match_id):
-        start = content.index(f'id="dc-status-{match_id}"')
-        return content[start : content.index("</section>", start)]
-
-    produced_section = status_section(graph.match.pk)
-    assert "PRODUCED" in produced_section
-    assert "INSUFFICIENT_TEAM_HISTORY" not in produced_section
-    assert "DIXON_COLES_PREDICTION_FAILED" not in produced_section
-    assert "UNAVAILABLE" in status_section(unavailable_match.pk)
-    assert "INSUFFICIENT_TEAM_HISTORY" in status_section(unavailable_match.pk)
-    assert "FAILED" in status_section(failed_match.pk)
-    assert "DIXON_COLES_PREDICTION_FAILED" in status_section(failed_match.pk)
-    assert not pipeline.called and not capture.called
-    assert counts == (
-        PredictionExperiment.objects.count(),
+def test_navigation_no_historical_route_and_read_only(graph):
+    provision(at=AT)
+    work = capture(graph, 50)
+    before = (
+        CapitalPosition.objects.count(),
         Prediction.objects.count(),
         Decision.objects.count(),
+        CapitalEvaluation.objects.count(),
     )
+    with patch(
+        "football.providers.api_football.APIFootballClient.get_all",
+        side_effect=AssertionError("provider called"),
+    ):
+        with override_settings(FINSPORT_GRAFANA_URL="https://grafana.example.invalid/"):
+            home_response = ui_client().get("/")
+            day_response = ui_client().get("/partidos/?date=2026-09-27")
+    assert "https://grafana.example.invalid/" in home_response.content.decode()
+    assert "/admin/" in day_response.content.decode()
+    assert ui_client().get("/daily/").status_code == 404
+    assert before == (
+        CapitalPosition.objects.count(),
+        Prediction.objects.count(),
+        Decision.objects.count(),
+        CapitalEvaluation.objects.count(),
+    )
+    assert finders.find("reporting/bootstrap.min.css")
+    assert finders.find("reporting/finsport.css")
+    assert finders.find("reporting/partidos.js")
+    assert not finders.find("reporting/historical.css")
+    assert match_detail(work.match_id)["decision"] is None
+
+
+def test_no_calendar_verified_is_not_false_empty(graph):
+    context = matches_day({"date": "2026-10-04"})
+    assert (
+        context["empty_calendar"] == "Aún no hay calendario verificado para esta fecha."
+    )
+    assert context["page"].paginator.count == 0
+
+
+def test_persisted_capital_reasons_distinguish_no_edge_from_no_evaluation(graph):
+    from football.models import CapitalDeployment
+    from football.strategy.prospective import evaluate_work
+
+    (config,) = provision(at=AT)
+    no_bet = capture(graph, 61, prices=(("3", "3", "3"), ("3", "3", "3")))
+    reconcile_global(no_bet.run_id, at=no_bet.run.completed_at)
+    no_edge = capture(graph, 62)
+    decision, reason = evaluate_work(no_edge, at=no_edge.run.completed_at)
+    assert reason == "" and decision.action != "NO_BET"
+    CapitalEvaluation.objects.create(
+        deployment=CapitalDeployment.objects.get(pk=1),
+        work=no_edge,
+        experiment=decision.experiment,
+        status="COMPLETED",
+        reason=decision.reason,
+        attempted_at=no_edge.run.completed_at,
+    )
+    CapitalExecutionState.objects.create(
+        config=config,
+        match=no_edge.match,
+        status="NOT_PLACED",
+        non_placement_reason="INELIGIBLE",
+        diagnostics={"policy_reason": "NO_POSITIVE_KELLY_EDGE"},
+    )
+    open_work = capture(graph, 65)
+    assert reconcile_global(open_work.run_id, at=open_work.run.completed_at).placed == 1
+    settled_work = capture(graph, 66)
+    assert (
+        reconcile_global(settled_work.run_id, at=settled_work.run.completed_at).placed
+        == 1
+    )
+    set_status(
+        CapitalPosition.objects.get(match=settled_work.match), "SETTLED_WIN", "1", NOW
+    )
+    unseen = capture(graph, 60)
+    pending = capture(graph, 63)
+    CapitalExecutionState.objects.create(
+        config=config, match=pending.match, status="PENDING_CAPACITY"
+    )
+    expired = capture(graph, 64)
+    CapitalExecutionState.objects.create(
+        config=config,
+        match=expired.match,
+        status="NOT_PLACED",
+        non_placement_reason="EXPIRED_CAPACITY",
+    )
+    rows = {
+        row["match"].pk: row
+        for _, group in matches_day({"date": "2026-09-27"})["groups"]
+        for row in group
+    }
+    assert rows[unseen.match_id]["label"] == "Sin evaluación"
+    assert rows[no_bet.match_id]["label"] == "No seleccionado"
+    assert rows[no_edge.match_id]["label"] == "Sin apuesta"
+    assert rows[no_edge.match_id]["reason"] == "Sin valor económico positivo"
+    assert rows[no_edge.match_id]["action"] == "Local"
+    assert rows[pending.match_id]["label"] == "Esperando capacidad"
+    assert (
+        rows[expired.match_id]["reason"] == "La capacidad se liberó después del inicio"
+    )
+    assert rows[open_work.match_id]["label"] == "Apuesta pendiente"
+    assert rows[settled_work.match_id]["label"] == "Apuesta ganada"
+    page = ui_client().get("/partidos/?date=2026-09-27").content.decode()
+    detail = ui_client().get(f"/partidos/{no_edge.match_id}/detalle/").content.decode()
+    assert (
+        "Sin valor económico positivo" in page
+        and "Sin valor económico positivo" in detail
+    )
+    assert "Evaluación no disponible" not in page + detail
+    assert "Selección: <strong>Local</strong>" in detail
+
+
+def test_equity_chart_follows_each_settlement_and_stable_timestamp_ties(
+    graph, monkeypatch
+):
+    (config,) = provision(at=AT)
+    pnls = (
+        Decimal("-3.92585100"),
+        Decimal("7.27879589"),
+        Decimal("8.94241438"),
+        Decimal("-14.91216305"),
+    )
+    settled_at = (
+        datetime(2026, 9, 27, 23, tzinfo=UTC),
+        datetime(2026, 9, 28, 2, tzinfo=UTC),
+        datetime(2026, 9, 28, 12, tzinfo=UTC),
+        datetime(2026, 9, 28, 12, tzinfo=UTC),
+    )
+    for index, (pnl, at) in enumerate(zip(pnls, settled_at, strict=True)):
+        work = capture(graph, 70 + index)
+        assert reconcile_global(work.run_id, at=work.run.completed_at).placed == 1
+        position = CapitalPosition.objects.get(match=work.match)
+        set_status(position, "SETTLED_WIN" if pnl > 0 else "SETTLED_LOSS", pnl, at)
+    config.bankroll_equity = Decimal("97.38319622")
+    config.reserved_exposure = Decimal("0")
+    config.save(update_fields=["bankroll_equity", "reserved_exposure", "modified"])
+    monkeypatch.setattr("football.reporting.selectors.timezone.now", lambda: NOW)
+    chart = home()["chart"]
+    assert [point["kind"] for point in chart["points"]] == ["initial"] + [
+        "settlement"
+    ] * 4
+    assert [point["pnl"] for point in chart["events"]] == list(pnls)
+    assert [point["equity"] for point in chart["points"]] == [
+        Decimal("100"),
+        Decimal("96.07414900"),
+        Decimal("103.35294489"),
+        Decimal("112.29535927"),
+        Decimal("97.38319622"),
+    ]
+    assert [point["day"] for point in chart["events"]] == [
+        date(2026, 9, 27),
+        date(2026, 9, 27),
+        date(2026, 9, 28),
+        date(2026, 9, 28),
+    ]
+    assert chart["events"][2]["at"] == chart["events"][3]["at"]
+    page = ui_client().get("/").content.decode()
+    assert "96.074149u" in page and "112.29535927u" in page
+    assert "97.38319622u" in page and "-14.91216305u" in page
+    assert page.count("<circle ") == 5

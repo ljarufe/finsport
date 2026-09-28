@@ -76,6 +76,30 @@ from .test_client import QueueOpener, Response, payload
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def pre_cutover_runtime(monkeypatch, request):
+    """These retained regressions model FS-016 before the FS-022 barrier."""
+    if (
+        request.node.name
+        == "test_integrated_empty_wake_has_no_duplicate_durable_capture_delta"
+    ):
+        return
+    from football.tests.fs016_historical_runtime import provision_historical_configs
+
+    monkeypatch.setattr(
+        "football.capital.runtime.provision_automatic_configs",
+        provision_historical_configs,
+    )
+    monkeypatch.setattr(
+        "football.tests.test_fs017_runtime_continuity.provision_automatic_configs",
+        provision_historical_configs,
+    )
+    monkeypatch.setattr(
+        "football.tests.test_capital_runtime_v2.provision_automatic_configs",
+        provision_historical_configs,
+    )
+
+
 @pytest.fixture
 def runtime_graph():
     return capital_test.runtime_graph.__wrapped__()
@@ -172,7 +196,7 @@ def test_integrated_empty_wake_has_no_duplicate_durable_capture_delta(runtime_gr
             side_effect=AssertionError("empty wake attempted provider HTTP"),
         ) as provider_page,
         mock.patch(
-            "football.pipeline.service.predict_competition_day",
+            "football.prediction.service.predict_competition_day",
             side_effect=AssertionError("empty wake invoked heavy model work"),
         ) as predictor,
     ):

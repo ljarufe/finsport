@@ -1,6 +1,4 @@
-"""Spanish presentation helpers; persisted values are never rewritten or inferred."""
-
-import json
+"""Retained Spanish reason labels for explicit research/readiness diagnostics."""
 
 AVAILABILITY_REASONS = {
     "INSUFFICIENT_LEAK_SAFE_SELECTION_EVIDENCE": (
@@ -104,33 +102,6 @@ DECISION_REASONS = {
     ),
 }
 
-CAPITAL_STATUSES = {
-    "PRODUCED": "Producido",
-    "UNAVAILABLE": "No evaluable",
-    "FAILED": "Fallido",
-}
-
-MATCH_STATUSES = {
-    "FT": "Finalizado",
-    "Match Finished": "Finalizado",
-    "Finalizado": "Finalizado",
-    "NS": "No iniciado",
-    "Not Started": "No iniciado",
-    "TBD": "Horario por confirmar",
-    "Time To Be Defined": "Horario por confirmar",
-    "PST": "Pospuesto",
-    "Match Postponed": "Pospuesto",
-    "CANC": "Cancelado",
-    "Match Cancelled": "Cancelado",
-    "SUSP": "Suspendido",
-    "Match Suspended": "Suspendido",
-    "1H": "Primer tiempo",
-    "HT": "Entretiempo",
-    "2H": "Segundo tiempo",
-    "ET": "Tiempo extra",
-    "P": "Penales",
-}
-
 
 def _present_reasons(value, mapping, unknown_label, unknown_explanation):
     if not value:
@@ -171,64 +142,3 @@ def decision_reason_presentations(value):
         "Motivo no clasificado",
         "El código persistido no tiene una explicación de decisión verificada.",
     )
-
-
-def capital_reason_presentations(value):
-    return _present_reasons(
-        value,
-        AVAILABILITY_REASONS,
-        "Motivo de capital no clasificado",
-        "El código persistido no tiene una explicación de capital verificada.",
-    )
-
-
-def outcome_label(value):
-    return {
-        "HOME": "Local",
-        "DRAW": "Empate",
-        "AWAY": "Visitante",
-        "NO_BET": "No seleccionar (NO_BET)",
-    }.get(value, value or "—")
-
-
-def compact_config(config):
-    if not config:
-        return "configuración predeterminada"
-    items = config_items(config)
-    visible = [f"{item['key']}={item['value']}" for item in items[:3]]
-    if len(items) > 3:
-        visible.append(f"+{len(items) - 3}")
-    return " · ".join(visible)
-
-
-def config_items(config):
-    if not isinstance(config, dict):
-        return [{"key": "valor", "value": _display_value(config)}]
-    return [
-        {"key": str(key), "value": _display_value(value)}
-        for key, value in sorted(config.items(), key=lambda item: str(item[0]))
-    ]
-
-
-def _display_value(value):
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(
-            value,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-    if isinstance(value, bool):
-        return "sí" if value else "no"
-    if value is None:
-        return "—"
-    return str(value)
-
-
-def match_status(status_short, status_long):
-    label = MATCH_STATUSES.get(status_short) or MATCH_STATUSES.get(status_long)
-    if label:
-        return {"label": label, "technical": ""}
-    technical = status_long or status_short or "sin estado"
-    return {"label": "Estado no clasificado", "technical": technical}

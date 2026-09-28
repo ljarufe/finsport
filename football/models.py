@@ -8,6 +8,8 @@ from django.utils import timezone
 from django_countries.fields import CountryField
 from django_extensions.db.models import TimeStampedModel
 
+from football.strategy.constants import DEPLETION_FLOOR
+
 PROBABILITY_TOLERANCE = 1e-6
 
 
@@ -1508,6 +1510,7 @@ class CapitalRuntimeConfig(TimeStampedModel):
     execution_version = models.CharField(max_length=50)
     mode = models.CharField(max_length=20, choices=Mode.choices)
     automatic = models.BooleanField(default=False)
+    entry_enabled = models.BooleanField(default=False)
     current = models.BooleanField(default=False)
     source_model_code = models.CharField(max_length=30)
     decision_policy_code = models.CharField(max_length=30)
@@ -1567,6 +1570,81 @@ class CapitalRuntimeConfig(TimeStampedModel):
                 condition=Q(reserved_exposure__gte=0),
                 name="football_capital_v2_reserved_nonnegative",
             ),
+        ]
+
+
+class CapitalDeployment(TimeStampedModel):
+    """Singleton admission barrier; scientific publication remains immutable."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    config = models.OneToOneField(
+        CapitalRuntimeConfig, on_delete=models.PROTECT, null=True, blank=True
+    )
+    selection = models.JSONField(default=dict)
+    mode = models.CharField(max_length=50, default="SIMULATION_ONLY")
+    real_betting = models.BooleanField(default=False)
+    state = models.CharField(max_length=40, default="OLD_ACTIVE")
+    entry_enabled = models.BooleanField(default=False)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    cutover_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    retiring_config_ids = models.JSONField(default=list)
+    successor_mode = models.CharField(max_length=60, blank=True)
+    depletion_state = models.CharField(max_length=40, default="ACTIVE")
+    depletion_floor = models.DecimalField(
+        max_digits=24, decimal_places=8, default=DEPLETION_FLOOR
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(id=1), name="football_deployment_singleton"
+            ),
+            models.CheckConstraint(
+                condition=Q(real_betting=False), name="football_deployment_simulated"
+            ),
+            models.CheckConstraint(
+                condition=Q(entry_enabled=False)
+                | Q(state="ACTIVE", activated_at__isnull=False, config__isnull=False),
+                name="football_deployment_admission_active",
+            ),
+        ]
+
+
+class CapitalDeploymentEvent(models.Model):
+    deployment = models.ForeignKey(
+        CapitalDeployment, on_delete=models.PROTECT, related_name="events"
+    )
+    at = models.DateTimeField()
+    state = models.CharField(max_length=40)
+    reason = models.CharField(max_length=120)
+    evidence = models.JSONField(default=dict)
+
+
+class CapitalEvaluation(TimeStampedModel):
+    """One durable prospective evaluation receipt per deployment/capture work."""
+
+    deployment = models.ForeignKey(
+        CapitalDeployment, on_delete=models.PROTECT, related_name="evaluations"
+    )
+    work = models.ForeignKey(
+        CaptureWorkItem, on_delete=models.PROTECT, related_name="strategy_evaluations"
+    )
+    experiment = models.ForeignKey(
+        PredictionExperiment, on_delete=models.PROTECT, null=True, blank=True
+    )
+    status = models.CharField(max_length=20)
+    reason = models.CharField(max_length=120, blank=True)
+    attempted_at = models.DateTimeField()
+    attempts = models.PositiveIntegerField(default=1)
+    retryable = models.BooleanField(default=False)
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["deployment", "work"],
+                name="football_global_evaluation_work_unique",
+            )
         ]
 
 
@@ -1666,6 +1744,15 @@ class CapitalExecutionState(TimeStampedModel):
 
     NON_PLACEMENT_REASONS = (
         ("NO_BET", "No bet"),
+        ("STRATEGY_DRAINING", "Strategy draining"),
+        ("STRATEGY_STOPPED", "Strategy stopped"),
+        ("PRE_GLOBAL", "Before activation"),
+        ("INPUT_QUOTES_MISSING", "Missing coherent live quotes"),
+        ("INELEGIBLE_EXECUTION_QUOTE", "Ineligible execution quote"),
+        ("AUTHORITY_EVIDENCE_MISMATCH", "Authority evidence mismatch"),
+        ("EXECUTION_PRICE_MISMATCH", "Execution price mismatch"),
+        ("AWAITING_FINAL_OPEN_SETTLEMENT", "Awaiting final OPEN settlement"),
+        ("OPERATIONAL_DEPLETION", "Operational depletion"),
         ("UNAVAILABLE_NO_DECISION_AT_EXECUTION", "No execution Decision"),
         ("NO_EXECUTION_PRICE", "No execution price"),
         ("MISSED_EXECUTION_WINDOW", "Missed execution window"),

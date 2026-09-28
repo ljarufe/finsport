@@ -351,3 +351,6 @@ if FOOTBALL_PIPELINE_ENABLED:
         "task": "football.pipeline.wake",
         "schedule": FOOTBALL_CAPTURE_WAKE_SECONDS,
     }
+
+# Local observability link; configurable without embedding a machine-specific URL.
+FINSPORT_GRAFANA_URL = env("FINSPORT_GRAFANA_URL", default="http://localhost:3000/")

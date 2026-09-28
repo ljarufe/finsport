@@ -69,7 +69,6 @@ from .policies import (
     LEGACY_CAPPED,
     LEGACY_PARTIAL,
     LEGACY_RECOVERY,
-    POLICY_VERSIONS,
     make_policy,
 )
 
@@ -119,7 +118,9 @@ class RuntimeResult:
     settled: int = 0
     provider_calls: int = 0
     open_debt: int = 0
+    result_debt_state: str = ""
     errors: tuple[str, ...] = ()
+    evaluations: tuple[dict, ...] = ()
 
     def as_dict(self):
         return {
@@ -134,7 +135,9 @@ class RuntimeResult:
             "settled": self.settled,
             "provider_calls": self.provider_calls,
             "open_debt": self.open_debt,
+            "result_debt_state": self.result_debt_state,
             "errors": list(self.errors),
+            "evaluations": list(self.evaluations),
         }
 
 
@@ -173,57 +176,11 @@ def _config_identity(policy_code):
     return f"{RUNTIME_VERSION}:automatic:{policy_code}"
 
 
-@transaction.atomic
 def provision_automatic_configs():
-    """Idempotently provision the exact seven independent automatic bankrolls."""
+    """The normal runtime can only provision the reviewed FS-022 authority."""
+    from football.strategy.deployment import provision
 
-    configs = []
-    expected_identities = {_config_identity(code) for code, _, _ in AUTOMATIC_CONFIGS}
-    unexpected = CapitalRuntimeConfig.objects.filter(
-        automatic=True, current=True
-    ).exclude(identity__in=expected_identities)
-    if unexpected.exists():
-        raise CapitalRuntimeInvariantError("UNEXPECTED_CURRENT_AUTOMATIC_CONFIG")
-    for policy_code, policy_config, max_lanes in AUTOMATIC_CONFIGS:
-        policy = make_policy(policy_code, policy_config)
-        expected = {
-            "runtime_version": RUNTIME_VERSION,
-            "execution_version": EXECUTION_VERSION,
-            "mode": CapitalRuntimeConfig.Mode.CURRENT,
-            "automatic": True,
-            "current": True,
-            "source_model_code": AUTOMATIC_SOURCE[0],
-            "decision_policy_code": AUTOMATIC_SOURCE[1],
-            "decision_policy_variant": AUTOMATIC_SOURCE[2],
-            "policy_code": policy_code,
-            "policy_version": POLICY_VERSIONS[policy_code],
-            "policy_config": policy_config,
-            "max_lanes": max_lanes,
-            "initial_bankroll": Decimal("100"),
-        }
-        config, created = CapitalRuntimeConfig.objects.get_or_create(
-            identity=_config_identity(policy_code),
-            defaults={
-                **expected,
-                "bankroll_equity": Decimal("100"),
-                "reserved_exposure": ZERO,
-                "policy_state": json_decimal(policy.initial_state()),
-                "peak_equity": Decimal("100"),
-                "peak_reserved_exposure": ZERO,
-                "provenance": {
-                    "automatic_source": "DIXON_COLES+MODAL_ALL",
-                    "initial_bankroll_semantics": "one independent bankroll per config",
-                },
-            },
-        )
-        if not created:
-            for field, value in expected.items():
-                if getattr(config, field) != value:
-                    raise CapitalRuntimeInvariantError(
-                        f"AUTOMATIC_CONFIG_DRIFT:{policy_code}:{field}"
-                    )
-        configs.append(config)
-    return tuple(configs)
+    return provision()
 
 
 def _probability(prediction):
@@ -325,13 +282,33 @@ def _basis_values(config, candidate):
         "expected_value": candidate.expected_value,
         "capture_work_item": work,
         "capture_run": work.run,
-        "execution_at": work.completed_at or work.run.completed_at,
+        "execution_at": (
+            decision.decision_time
+            if decision and config.identity.startswith("fs022:")
+            else work.completed_at or work.run.completed_at
+        ),
         "evidence_not_before": work.executed_at,
         "evidence_cutoff": work.run.completed_at,
         "provenance": {
             "window": "market-t30m",
             "actual_event_time": True,
             "price_frozen": True,
+            **(
+                {
+                    "prospective_config_identity": decision.prediction.model_config.get(
+                        "prospective_config_identity"
+                    ),
+                    "scientific_selection_config_identity": decision.prediction.model_config.get(
+                        "scientific_selection_config_identity"
+                    ),
+                    "quote_ids": decision.prediction.diagnostics.get("quote_ids", []),
+                    "source_id": work.source_id,
+                    "market_id": work.market_id,
+                    "selected_observation_id": candidate.selected_observation_id,
+                }
+                if decision and config.identity.startswith("fs022:")
+                else {}
+            ),
         },
     }
 
@@ -473,8 +450,14 @@ def _terminalize_pending(state, reason, at, *, diagnostics=None):
 def place_candidate(config_id, candidate, *, at=None):
     """Place from frozen T-30 evidence, or retain it while capacity is unavailable."""
 
+    from football.strategy.clock import effective_now
+    from football.strategy.deployment import admission_reason, locked_deployment
+    from football.strategy.prospective import validate_candidate
+
+    deployment = locked_deployment()
     config = CapitalRuntimeConfig.objects.select_for_update().get(pk=config_id)
-    match = candidate.match
+    match = Match.objects.select_for_update().get(pk=candidate.match.pk)
+    candidate.work_item.match = match
     state = (
         CapitalExecutionState.objects.select_for_update()
         .filter(config=config, match=match)
@@ -488,7 +471,23 @@ def place_candidate(config_id, candidate, *, at=None):
     if state is not None:
         candidate = _candidate_from_basis(state.execution_basis)
     event_at = candidate.work_item.completed_at or candidate.work_item.run.completed_at
-    placement_at = at or event_at
+    placement_at = (
+        effective_now(planning_at=at)
+        if config.identity.startswith("fs022:")
+        else at or event_at
+    )
+    if placement_at >= match.kickoff and state is not None:
+        return _terminalize_pending(state, "EXPIRED_CAPACITY", placement_at)
+    blocked = admission_reason(deployment, config)
+    if not blocked and deployment.config_id == config.pk:
+        blocked = validate_candidate(
+            candidate, deployment, basis=state.execution_basis if state else None
+        )
+    if blocked:
+        if state is not None:
+            return _terminalize_pending(state, blocked, placement_at)
+        _, created = _terminal_state(config, match, blocked, placement_at)
+        return "NOT_PLACED" if created else "NO_WORK"
     expired_new = state is None and placement_at >= match.kickoff
     if placement_at >= match.kickoff and state is not None:
         return _terminalize_pending(state, "EXPIRED_CAPACITY", placement_at)
@@ -611,6 +610,15 @@ def place_candidate(config_id, candidate, *, at=None):
                 state.save(update_fields=["diagnostics", "modified"])
             return "NO_WORK"
         return "PENDING_CAPACITY"
+    if config.identity.startswith("fs022:"):
+        placement_at = effective_now(planning_at=at)
+        if placement_at >= match.kickoff:
+            if state is not None:
+                return _terminalize_pending(state, "EXPIRED_CAPACITY", placement_at)
+            _terminal_state(
+                config, match, "MISSED_EXECUTION_WINDOW", placement_at, basis=basis
+            )
+            return "NOT_PLACED"
     equity_before = config.bankroll_equity
     reserved_before = config.reserved_exposure
     config.reserved_exposure += request.applied
@@ -663,6 +671,10 @@ def reconcile_execution_events(capture_run_id, *, at=None):
     """Consume current or partially processed durable final T-30 evidence."""
 
     configs = provision_automatic_configs()
+    if not configs or configs[0].identity.startswith("fs022:"):
+        from football.strategy.prospective import reconcile_global
+
+        return reconcile_global(capture_run_id, at=at or timezone.now())
     work_items = []
     if capture_run_id:
         work_items = list(
@@ -800,6 +812,9 @@ def observe_terminal_result(match, *, known_at=None, provenance=None):
 def settle_position(position_id, observation_id, *, settled_at=None):
     """Release exposure and apply realized P&L exactly once."""
 
+    from football.strategy.deployment import locked_deployment
+
+    locked_deployment()
     position = (
         CapitalPosition.objects.select_for_update()
         .select_related("execution_basis")
@@ -849,7 +864,7 @@ def settle_position(position_id, observation_id, *, settled_at=None):
     if config.peak_equity > ZERO:
         drawdown = (config.peak_equity - config.bankroll_equity) / config.peak_equity
         config.maximum_drawdown = max(config.maximum_drawdown, drawdown)
-    if config.bankroll_equity <= ZERO:
+    if config.bankroll_equity <= ZERO and not config.identity.startswith("fs022:"):
         config.status = CapitalRuntimeConfig.Status.TERMINATED
         config.practical_ruin = True
         config.termination_reason = "BANKROLL_DEPLETED"
@@ -1009,9 +1024,10 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             CapitalRuntimeInvariantError("MISSING_API_FOOTBALL_MATCH_REF"),
         )
     due_with_ref = set(due_by_match) & set(refs)
+    missing_ref_errors = ["MISSING_API_FOOTBALL_MATCH_REF"] if missing else []
     if not due_with_ref:
         return RuntimeResult(
-            "DEGRADED", open_debt=len(due), errors=("MISSING_API_FOOTBALL_MATCH_REF",)
+            "DEGRADED", open_debt=len(due), errors=tuple(missing_ref_errors)
         )
     dates = sorted(
         {date_by_match[match_id] for match_id in due_with_ref},
@@ -1045,7 +1061,7 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
         ).select_related("competition")
     }
     settled = 0
-    errors = []
+    errors = missing_ref_errors.copy()
     client = None
     active_mode = "date_sweep"
     active_match_ids = {
@@ -1067,7 +1083,11 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
         )
     admitted_dates = dates[: min(capture_config.max_provider_attempts, available_work)]
     if not admitted_dates:
-        return RuntimeResult("NO_WORK", open_debt=len(due))
+        return RuntimeResult(
+            "DEGRADED" if errors else "NO_WORK",
+            open_debt=len(due),
+            errors=tuple(errors),
+        )
 
     def due_position_ids(match_ids):
         return [
@@ -1089,7 +1109,13 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             result_refresh_error=error,
         )
 
+    @transaction.atomic
     def consume_payloads(payloads, expected, due_match_ids, *, mode, day):
+        from football.strategy.deployment import locked_deployment, update_depletion
+
+        # The request has already returned; admission is locked only while its
+        # complete result batch is applied, never while HTTP is in progress.
+        locked_deployment()
         nonlocal settled
         selected = relevant_fixture_payloads(payloads, expected)
         accepted = {}
@@ -1130,6 +1156,10 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                 else:
                     retry_minutes = 60 if match.status_short == "SUSP" else 30
                     schedule_due(match.pk, at + timedelta(minutes=retry_minutes))
+        try:
+            update_depletion(at=at)
+        except (RuntimeError, ValueError) as error:
+            errors.append(f"{type(error).__name__}:{error}"[:500])
         return usable, terminal_without_outcome
 
     try:
@@ -1277,7 +1307,7 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                     at + timedelta(minutes=30),
                     error=DIRECTED_RESULT_FALLBACK,
                 )
-    except APIFootballError as error:
+    except (APIFootballError, OSError) as error:
         errors.append(f"{type(error).__name__}:{error}"[:500])
         # The current due work remains unresolved; never infer terminal truth
         # from a blocked attempt or a provider error.
@@ -1298,15 +1328,46 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             CapitalPosition.objects.filter(
                 pk__in=affected, status=CapitalPosition.Status.OPEN
             ).update(next_result_check_at=at + timedelta(minutes=30))
-    open_debt = CapitalPosition.objects.filter(
+    remaining = CapitalPosition.objects.filter(
         pk__in=position_ids, status=CapitalPosition.Status.OPEN
-    ).count()
-    status = "DEGRADED" if errors or open_debt else "PRODUCED"
+    )
+    open_debt = remaining.count()
+    # Only debt successfully scheduled into the future by a valid nonterminal
+    # poll is OPEN_RESULT_NOT_DUE. Unattempted due dates are deferred.
+    all_checked_and_not_due = (
+        open_debt
+        and not remaining.filter(
+            Q(next_result_check_at__lte=at) | Q(next_result_check_at__isnull=True)
+        ).exists()
+    )
+    unresolved = list(
+        remaining.exclude(result_refresh_error="")
+        .order_by("result_refresh_error")
+        .values_list("result_refresh_error", flat=True)
+        .distinct()
+    )
+    errors = list(dict.fromkeys([*errors, *unresolved]))
+    status = (
+        "DEGRADED"
+        if errors
+        else (
+            "OPEN_RESULT_NOT_DUE"
+            if all_checked_and_not_due
+            else (
+                "PRODUCED"
+                if settled or (client is not None and client.calls)
+                else "NO_WORK"
+            )
+        )
+    )
     return RuntimeResult(
         status,
         settled=settled,
         provider_calls=(client.calls if client is not None else 0),
         open_debt=open_debt,
+        result_debt_state=(
+            "OPEN_RESULT_NOT_DUE" if status == "OPEN_RESULT_NOT_DUE" else ""
+        ),
         errors=tuple(errors),
     )
 
@@ -1314,31 +1375,98 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
 def run_automatic_runtime(
     *, capture_run_id=None, at=None, client_factory=APIFootballClient
 ):
-    """Pipeline-owned automatic placement, catch-up, and settlement boundary."""
+    """Admit expiring T-30 work before lower-priority result HTTP."""
 
-    at = at or timezone.now()
-    configs = provision_automatic_configs()
-    local_settled = settle_locally_known_open_positions()
-    refresh = refresh_open_result_debt(at=at, client_factory=client_factory)
-    execution = reconcile_execution_events(capture_run_id, at=at)
+    from football.strategy.clock import effective_now
+    from football.strategy.deployment import locked_deployment, update_depletion
+    from football.strategy.recovery import record_authority_failure
+
+    planning_at = at or timezone.now()
+    # Historical FS-016 replay keeps its event-time contract. The governed
+    # successor uses wall time for every admission and result-debt check.
+    active_identity = (
+        CapitalRuntimeConfig.objects.filter(automatic=True, entry_enabled=True)
+        .order_by("pk")
+        .values_list("identity", flat=True)
+        .first()
+    )
+    legacy_mode = bool(active_identity and not active_identity.startswith("fs022:"))
+
+    def operation_now():
+        return planning_at if legacy_mode else effective_now(planning_at=planning_at)
+
+    errors = []
+    local_settled = 0
+    executions = []
+    configs = ()
+
+    def local_batch(run_id):
+        nonlocal local_settled, configs
+        with transaction.atomic():
+            locked_deployment()
+            local_settled += settle_locally_known_open_positions()
+            now = operation_now()
+            try:
+                update_depletion(at=now)
+                configs = provision_automatic_configs()
+                return reconcile_execution_events(run_id, at=now)
+            except (RuntimeError, ValueError) as error:
+                errors.append(f"{type(error).__name__}:{error}"[:500])
+                evaluations = record_authority_failure(run_id, at=now, error=error)
+                return RuntimeResult("DEGRADED", evaluations=tuple(evaluations))
+
+    # The admission lock is held only for local database work. Capture has
+    # already run; a slow results provider cannot consume a valid T-30 window.
+    executions.append(local_batch(capture_run_id))
+    try:
+        refresh = refresh_open_result_debt(
+            at=operation_now(), client_factory=client_factory
+        )
+    except Exception as error:
+        refresh = RuntimeResult(
+            "DEGRADED",
+            errors=(f"{type(error).__name__}:{error}"[:500],),
+            open_debt=CapitalPosition.objects.filter(
+                status=CapitalPosition.Status.OPEN
+            ).count(),
+        )
+    # A result may release capacity or complete the old-bank drain. Retry any
+    # still-valid work with a fresh wall clock, never the old planning time.
+    if not errors:
+        executions.append(local_batch(None))
+    evaluations = {
+        row["work_id"]: row for execution in executions for row in execution.evaluations
+    }
+    errors.extend(refresh.errors)
+    errors.extend(error for execution in executions for error in execution.errors)
+    placed = sum(row.placed for row in executions)
+    not_placed = sum(row.not_placed for row in executions)
+    pending = sum(row.pending_capacity for row in executions)
+    settled = local_settled + refresh.settled
     status = (
         "DEGRADED"
-        if refresh.status == "DEGRADED"
+        if errors or refresh.status == "DEGRADED"
         else (
             "PRODUCED"
-            if execution.status == "PRODUCED" or local_settled or refresh.settled
-            else "NO_WORK"
+            if placed or not_placed or pending or settled
+            else (
+                "OPEN_RESULT_NOT_DUE"
+                if refresh.status == "OPEN_RESULT_NOT_DUE"
+                else "NO_WORK"
+            )
         )
     )
     return RuntimeResult(
         status,
         configs=len(configs),
         config_ids=tuple(config.pk for config in configs),
-        placed=execution.placed,
-        not_placed=execution.not_placed,
-        pending_capacity=execution.pending_capacity,
-        settled=local_settled + refresh.settled,
+        placed=placed,
+        not_placed=not_placed,
+        pending_capacity=pending,
+        settled=settled,
         provider_calls=refresh.provider_calls,
         open_debt=refresh.open_debt,
-        errors=refresh.errors,
+        result_debt_state=refresh.result_debt_state,
+        errors=tuple(errors),
+        evaluations=tuple(evaluations.values()),
     )

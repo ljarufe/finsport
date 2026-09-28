@@ -64,6 +64,10 @@ def cleanup_cancelled_matches(*, match_ids=None, dry_run=False):
         matches = matches.select_for_update()
     matches = list(matches.order_by("id"))
     cancelled_ids = tuple(match.pk for match in matches)
+    if not cancelled_ids:
+        return CancellationHygieneResult(
+            status="NO_WORK", reason="ALREADY_CLEAN", dry_run=dry_run
+        )
 
     decisions = Decision.objects.filter(match_id__in=cancelled_ids)
     predictions = Prediction.objects.filter(match_id__in=cancelled_ids)

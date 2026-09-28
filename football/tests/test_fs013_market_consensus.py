@@ -29,7 +29,6 @@ from football.models import (
     Source,
     Team,
 )
-from football.pipeline import run_pipeline
 from football.prediction.contracts import ProbabilityResult, UnavailablePrediction
 from football.prediction.market import MarketConsensusAdapter
 from football.prediction.service import predict_competition_day
@@ -466,6 +465,27 @@ def completed_capture(match, *, target_at, cutoff, observations_created):
     )
 
 
+def evaluate_manual_market_capture(capture_result, at):
+    """Retained FS-013 service is still usable on demand in Lab, off routing."""
+    from football.pipeline.service import _market_consensus_prediction_candidates
+
+    for candidate in _market_consensus_prediction_candidates(capture_result, at):
+        predict_competition_day(
+            candidate["competition_id"],
+            candidate["day"],
+            candidate["cutoff"],
+            logical_identity=candidate["logical_identity"],
+            intended_window=candidate["intended_window"],
+            target_at=candidate["target_at"],
+            match_ids=candidate["match_ids"],
+            model_codes=candidate["model_codes"],
+            market_evidence_identity=candidate["market_evidence_identity"],
+            market_evidence_not_before_by_match=candidate[
+                "market_evidence_not_before_by_match"
+            ],
+        )
+
+
 def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempotent(
     monkeypatch,
 ):
@@ -545,8 +565,8 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
         "football.pipeline.service.run_capture", lambda **kwargs: first_capture
     )
 
-    run_pipeline(at=first_cutoff)
-    run_pipeline(at=first_cutoff)
+    evaluate_manual_market_capture(first_capture, first_cutoff)
+    evaluate_manual_market_capture(first_capture, first_cutoff)
 
     assert (
         PredictionExperiment.objects.filter(
@@ -601,7 +621,7 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
         "football.pipeline.service.run_capture", lambda **kwargs: later_capture
     )
 
-    run_pipeline(at=later_cutoff)
+    evaluate_manual_market_capture(later_capture, later_cutoff)
 
     predictions = list(
         Prediction.objects.filter(
@@ -677,7 +697,7 @@ def test_completed_empty_batch_persists_explicit_unavailable_evidence(monkeypatc
         "football.pipeline.service.run_capture", lambda **kwargs: capture
     )
 
-    run_pipeline(at=cutoff)
+    evaluate_manual_market_capture(capture, cutoff)
 
     experiment = PredictionExperiment.objects.get(
         intended_window="market-t60m",
@@ -693,35 +713,41 @@ def test_completed_empty_batch_persists_explicit_unavailable_evidence(monkeypatc
 
 @pytest.mark.django_db(transaction=True)
 def test_fs013_migration_reconciles_supported_existing_raw_rows():
-    executor = MigrationExecutor(connection)
-    executor.migrate([("football", "0011_shared_model_readiness")])
-    old_apps = executor.loader.project_state(
-        [("football", "0011_shared_model_readiness")]
-    ).apps
-    OldSource = old_apps.get_model("football", "Source")
-    OldBookmaker = old_apps.get_model("football", "Bookmaker")
-    OldMarket = old_apps.get_model("football", "OddsMarket")
-    source, _ = OldSource.objects.get_or_create(
-        code="api_football",
-        defaults={
-            "name": "API-Football",
-            "base_url": "https://v3.football.api-sports.io/",
-        },
-    )
-    OldBookmaker.objects.create(source=source, external_id="8", name="Bet365")
-    OldMarket.objects.create(source=source, external_id="1", name="Match Winner")
+    latest = MigrationExecutor(connection).loader.graph.leaf_nodes("football")
+    try:
+        executor = MigrationExecutor(connection)
+        executor.migrate([("football", "0011_shared_model_readiness")])
+        old_apps = executor.loader.project_state(
+            [("football", "0011_shared_model_readiness")]
+        ).apps
+        OldSource = old_apps.get_model("football", "Source")
+        OldBookmaker = old_apps.get_model("football", "Bookmaker")
+        OldMarket = old_apps.get_model("football", "OddsMarket")
+        source, _ = OldSource.objects.get_or_create(
+            code="api_football",
+            defaults={
+                "name": "API-Football",
+                "base_url": "https://v3.football.api-sports.io/",
+            },
+        )
+        OldBookmaker.objects.create(source=source, external_id="8", name="Bet365")
+        OldMarket.objects.create(source=source, external_id="1", name="Match Winner")
 
-    executor = MigrationExecutor(connection)
-    executor.migrate([("football", "0012_fs013_market_consensus_identity")])
-    new_apps = executor.loader.project_state(
-        [("football", "0012_fs013_market_consensus_identity")]
-    ).apps
-    bookmaker_ref = new_apps.get_model(
-        "football", "BookmakerCanonicalRef"
-    ).objects.get()
-    market_ref = new_apps.get_model("football", "OddsMarketCanonicalRef").objects.get()
+        executor = MigrationExecutor(connection)
+        executor.migrate([("football", "0012_fs013_market_consensus_identity")])
+        new_apps = executor.loader.project_state(
+            [("football", "0012_fs013_market_consensus_identity")]
+        ).apps
+        bookmaker_ref = new_apps.get_model(
+            "football", "BookmakerCanonicalRef"
+        ).objects.get()
+        market_ref = new_apps.get_model(
+            "football", "OddsMarketCanonicalRef"
+        ).objects.get()
 
-    assert bookmaker_ref.reconciliation_status == "RESOLVED"
-    assert bookmaker_ref.canonical_bookmaker.code == "bet365"
-    assert market_ref.reconciliation_status == "RESOLVED"
-    assert market_ref.canonical_market.code == "1x2"
+        assert bookmaker_ref.reconciliation_status == "RESOLVED"
+        assert bookmaker_ref.canonical_bookmaker.code == "bet365"
+        assert market_ref.reconciliation_status == "RESOLVED"
+        assert market_ref.canonical_market.code == "1x2"
+    finally:
+        MigrationExecutor(connection).migrate(latest)

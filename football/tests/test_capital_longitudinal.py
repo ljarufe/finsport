@@ -7,9 +7,7 @@ from unittest import mock
 
 import pytest
 from django.core.management import call_command
-from django.db import IntegrityError, close_old_connections, connection, transaction
-from django.test import Client
-from django.test.utils import CaptureQueriesContext
+from django.db import IntegrityError, close_old_connections, transaction
 
 from football.capital.longitudinal import (
     PRIMARY_EPOCH,
@@ -744,78 +742,3 @@ def test_pipeline_owns_one_automatic_v2_runtime_failure(monkeypatch):
             "error": "RuntimeError:capital v2 failed",
         }
     ]
-
-
-def test_reporting_separates_current_longitudinal_snapshot_and_queries_are_bounded():
-    shared_time = AFTER_EPOCH + timedelta(days=1)
-    source, _ = _stream(
-        [
-            {"decision_time": shared_time},
-            {"decision_time": shared_time, "outcome": "AWAY"},
-        ],
-        suffix="-report",
-    )
-    longitudinal = recompute_longitudinal_capital()
-    longitudinal_snapshot = CapitalExperiment.objects.get(
-        pk=longitudinal.capital_experiment_id
-    )
-    legacy = run_capital_experiment(
-        prediction_experiment=source,
-        source_model_code=Prediction.DIXON_COLES,
-        decision_policy_code="MODAL_ALL",
-        config={
-            "mode": "REPLAY",
-            "initial_bankroll": "100",
-            "policies": [{"code": "FLAT_UNIT", "config": {"unit": "1"}}],
-        },
-    )
-    with CaptureQueriesContext(connection) as before:
-        response = Client().get("/")
-    content = response.content.decode()
-    assert response.status_code == 200
-    assert "Capital longitudinal / evidencia simulada de investigación" in content
-    assert "no selecciona una política ganadora" in content
-    assert "DIXON_COLES + MODAL_ALL" in content
-    assert f"Snapshot #{longitudinal.capital_experiment_id}" in content
-    assert longitudinal_snapshot.input_hash in content
-    assert longitudinal_snapshot.engine_version in content
-    assert f"IDs {longitudinal_snapshot.input_manifest['decision_ids']}" not in content
-    assert "provenance temporal persistido" in content
-    assert f"CapitalExperiment #{legacy.pk}" in content
-    assert "UNAVAILABLE_CONCURRENT_RECOVERY_STEP" in content
-
-    # Superseded history is not rendered and does not add row-driven queries.
-    decision = source.decisions.order_by("id").first()
-    decision.match.outcome = Match.OUTCOME_AWAY
-    decision.match.save(update_fields=["outcome", "modified"])
-    replacement = recompute_longitudinal_capital()
-    with CaptureQueriesContext(connection) as after:
-        updated = Client().get("/")
-    updated_content = updated.content.decode()
-    assert f"Snapshot #{replacement.capital_experiment_id}" in updated_content
-    assert f"Snapshot #{longitudinal.capital_experiment_id}" not in updated_content
-    assert len(after) == len(before)
-
-
-def test_reporting_failed_longitudinal_run_shows_reason_and_neutral_metrics():
-    _stream([{}], suffix="-report-failed")
-    longitudinal = recompute_longitudinal_capital()
-    failed = CapitalPolicyRun.objects.get(
-        experiment_id=longitudinal.capital_experiment_id,
-        policy_code="FLAT_UNIT",
-    )
-    failed.ledger_entries.all().delete()
-    failed.status = CapitalPolicyRun.STATUS_FAILED
-    failed.reason = "CONTROLLED_DIAGNOSTIC"
-    failed.metrics = {}
-    failed.save(update_fields=["status", "reason", "metrics", "modified"])
-
-    response = Client().get("/")
-    content = response.content.decode()
-    failed_row = content.split("FLAT_UNIT", 1)[1].split("</tr>", 1)[0]
-
-    assert response.status_code == 200
-    assert "Fallido" in failed_row
-    assert "FAILED" in failed_row
-    assert "CONTROLLED_DIAGNOSTIC" in failed_row
-    assert failed_row.count("—") >= 10

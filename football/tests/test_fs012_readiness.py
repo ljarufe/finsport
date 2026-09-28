@@ -24,11 +24,11 @@ from football.prediction.contracts import (
 from football.prediction.elo import EloMultinomialAdapter, sequential_elo_features
 from football.prediction.goal_models import DixonColesAdapter, IndependentPoissonAdapter
 from football.prediction.readiness import active_profile
-from football.prediction.service import predict_competition_day
-from football.reporting.presentation import (
+from football.prediction.reason_labels import (
     DECISION_REASONS,
     decision_reason_presentations,
 )
+from football.prediction.service import predict_competition_day
 
 from .prediction_helpers import create_synthetic_league, create_synthetic_odds
 from .test_fs011_dixon_coles import complete_coverage, future_target
@@ -509,23 +509,6 @@ def test_unknown_future_reason_has_deliberate_fallback():
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("model", [POISSON, ELO])
-def test_daily_renders_readiness_for_both_models(model, client):
-    competition, _, history = create_synthetic_league()
-    complete_coverage(competition)
-    target = future_target(competition, [history[0].home_team, history[0].away_team])
-    profile_fixture(competition, model)
-    day = calibration.local_day(target.kickoff)
-    predict_competition_day(competition, day, timezone.now(), model_codes=[model])
-    response = client.get("/daily/", {"date": day.isoformat()})
-    assert response.status_code == 200
-    content = response.content.decode()
-    assert "Perfil de preparación aprobado y satisfecho" in content
-    assert "APPROVED_READINESS_PROFILE_PASSED" in content
-    assert "bet_eligible=true" in content
-
-
-@pytest.mark.django_db
 def test_budget_defers_full_calibration_without_hiding_due_work(monkeypatch):
     competition, _, _ = create_synthetic_league()
     complete_coverage(competition)
@@ -669,35 +652,27 @@ def test_new_completed_season_automatically_revalidates():
 
 
 @pytest.mark.django_db
-def test_normal_pipeline_consumes_profiles_without_market_or_provider(monkeypatch):
-    from football.capture.contracts import CaptureResult
-    from football.pipeline import run_pipeline
-
+def test_manual_lab_consumes_profiles_without_market_or_provider():
     competition, _, history = create_synthetic_league()
     complete_coverage(competition)
     target = future_target(competition, [history[0].home_team, history[0].away_team])
     for model in (POISSON, ELO):
         profile_fixture(competition, model)
-    monkeypatch.setattr(
-        "football.pipeline.service.run_capture",
-        lambda **kw: CaptureResult(
-            run_id=None,
-            status="NO_WORK",
-            planning_at=kw["at"],
-            quota_before={},
-            quota_after={},
-            plan={"items": []},
-        ),
-    )
     at = timezone.now()
-    run_pipeline(at=at)
+    candidates = [
+        _sporting_candidates(at, model_code=model)[0] for model in (POISSON, ELO)
+    ]
+    for candidate in candidates:
+        kwargs = {
+            k: v for k, v in candidate.items() if k not in {"competition_id", "day"}
+        }
+        first = predict_competition_day(competition, candidate["day"], **kwargs)
+        second = predict_competition_day(competition, candidate["day"], **kwargs)
+        assert first.created and not second.created
     predictions = Prediction.objects.filter(match=target, model_code__in=(POISSON, ELO))
     assert predictions.count() == 2
     assert all(p.bet_eligible for p in predictions)
-    identities = set(predictions.values_list("evidence_identity", flat=True))
-    run_pipeline(at=at + timedelta(minutes=1))
-    assert predictions.count() == 2
-    assert set(predictions.values_list("evidence_identity", flat=True)) == identities
+    assert predictions.exclude(evidence_identity="").count() == 2
 
 
 @pytest.mark.django_db
