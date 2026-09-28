@@ -24,6 +24,7 @@ from football.market_identity import (
 from football.models import (
     Bookmaker,
     CapitalDeployment,
+    CapitalEvaluation,
     CapitalExecutionState,
     CapitalPosition,
     CapitalRuntimeConfig,
@@ -877,3 +878,93 @@ def test_new_activation_uses_effective_time_but_never_resets_it(monkeypatch):
     deployment.refresh_from_db()
     assert deployment.activated_at == effective
     assert CapitalRuntimeConfig.objects.count() == 1
+
+
+@pytest.mark.parametrize(
+    "skip_status",
+    [
+        CaptureWorkItem.Status.QUOTA_RESERVE,
+        CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET,
+        CaptureWorkItem.Status.PROVIDER_BACKOFF,
+    ],
+)
+def test_no_attempt_t30_skip_remains_retryable_for_global_evaluation(
+    graph, skip_status
+):
+    provision(at=AT)
+    skipped = capture(graph)
+
+    # These states represent a logical T-30 opportunity that made no physical
+    # provider attempt. Capture deliberately permits the same logical identity
+    # to run again while its window remains usable.
+    skipped.status = skip_status
+    skipped.executed_at = None
+    skipped.actual_attempts = 0
+    skipped.save(
+        update_fields=[
+            "status",
+            "executed_at",
+            "actual_attempts",
+        ]
+    )
+
+    first = reconcile_global(skipped.run_id, at=skipped.run.completed_at)
+
+    # A retryable capture skip must not terminally classify the Match.
+    assert first.placed == 0
+    assert not CapitalEvaluation.objects.exists()
+    assert not CapitalExecutionState.objects.exists()
+    assert not PredictionExperiment.objects.exists()
+    assert not CapitalPosition.objects.exists()
+
+    retry_at = skipped.run.completed_at + timedelta(seconds=1)
+    retry_run = CaptureRun.objects.create(
+        trigger=CaptureRun.Trigger.SCHEDULER,
+        status=CaptureRun.Status.SUCCESS,
+        planning_at=retry_at,
+        started_at=retry_at,
+        completed_at=retry_at + timedelta(seconds=3),
+    )
+    retry = CaptureWorkItem.objects.create(
+        run=retry_run,
+        purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
+        status=CaptureWorkItem.Status.SUCCESS,
+        source=skipped.source,
+        market=skipped.market,
+        match=skipped.match,
+        logical_identity=skipped.logical_identity,
+        intended_window=skipped.intended_window,
+        target_at=skipped.target_at,
+        not_before=skipped.not_before,
+        not_after=skipped.not_after,
+        executed_at=retry_at,
+        completed_at=retry_at + timedelta(seconds=2),
+        actual_attempts=1,
+    )
+
+    # Persist the successful retry's own physical quote observations.
+    original_quotes = list(
+        OddsObservation.objects.filter(match=skipped.match).order_by("pk")
+    )
+    for quote in original_quotes:
+        OddsObservation.objects.create(
+            match=quote.match,
+            source=quote.source,
+            bookmaker=quote.bookmaker,
+            market=quote.market,
+            home=quote.home,
+            draw=quote.draw,
+            away=quote.away,
+            observed_at=retry_at + timedelta(seconds=1),
+            provider_updated_at=retry_at,
+        )
+
+    second = reconcile_global(retry.run_id, at=retry.run.completed_at)
+
+    assert second.placed == 1
+    assert PredictionExperiment.objects.count() == 1
+    assert CapitalPosition.objects.count() == 1
+
+    evaluation = CapitalEvaluation.objects.get()
+    assert evaluation.work_id == retry.pk
+    assert evaluation.status == "COMPLETED"

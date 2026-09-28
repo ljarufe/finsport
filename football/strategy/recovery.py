@@ -7,16 +7,25 @@ from football.observability.events import emit_event, sanitize_text
 
 RECOVERY_LIMIT = 100
 IGNORED = ("NOT_DUE", "PLANNED", "ALREADY_FULFILLED", "CONCURRENT_EXECUTOR")
+RETRYABLE_NO_ATTEMPT = (
+    "QUOTA_RESERVE",
+    "INSUFFICIENT_WORST_CASE_BUDGET",
+    "PROVIDER_BACKOFF",
+)
 
 
 def evaluation_work(deployment, *, capture_run_id=None, at):
-    works = CaptureWorkItem.objects.filter(
-        purpose="ODDS_CAPTURE",
-        intended_window="market-t30m",
-        match__isnull=False,
-        completed_at__isnull=False,
-        run__completed_at__isnull=False,
-    ).exclude(status__in=IGNORED)
+    works = (
+        CaptureWorkItem.objects.filter(
+            purpose="ODDS_CAPTURE",
+            intended_window="market-t30m",
+            match__isnull=False,
+            completed_at__isnull=False,
+            run__completed_at__isnull=False,
+        )
+        .exclude(status__in=IGNORED)
+        .exclude(Q(status__in=RETRYABLE_NO_ATTEMPT) & Q(actual_attempts=0))
+    )
     current = Q(run_id=capture_run_id) if capture_run_id else Q(pk__in=[])
     if deployment is not None and deployment.activated_at is not None:
         done = CapitalEvaluation.objects.filter(
