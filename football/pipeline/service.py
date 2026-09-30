@@ -688,6 +688,18 @@ def run_pipeline(
                     }
                 )
 
+    if not dry_run:
+        # BSD has its own budget. Run after protected API-F capture and
+        # Capital settlement so BSD latency never delays API-F fallback.
+        from football.providers.bsd_continuity import run_bsd_continuity
+
+        try:
+            capture_data["bsd_continuity"] = run_bsd_continuity(at=at)
+            if capture_data["bsd_continuity"]["errors"]:
+                warnings.extend(capture_data["bsd_continuity"]["errors"])
+        except Exception as error:
+            warnings.append(f"BSD_CONTINUITY:{type(error).__name__}:{error}"[:500])
+
     if dry_run:
         from football.strategy.recovery import plan_global_evaluations
 

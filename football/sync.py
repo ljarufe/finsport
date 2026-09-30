@@ -482,6 +482,55 @@ def sync_fixture_payloads(payloads, competitions_by_external_id, expected_year=N
                 accepted[external_id] = match
                 continue
 
+        if match.status_short in {
+            "FT",
+            "ET",
+            "P",
+            "AET",
+            "PEN",
+            "CANC",
+            "ABD",
+            "AWD",
+            "WO",
+        } and defaults["status_short"] in {
+            "FT",
+            "ET",
+            "P",
+            "AET",
+            "PEN",
+            "CANC",
+            "ABD",
+            "AWD",
+            "WO",
+        }:
+            from types import SimpleNamespace
+
+            from football.result_provider import api_football_result, record
+
+            prior_result = api_football_result(match, external_id)
+            incoming_result = api_football_result(
+                SimpleNamespace(**defaults),
+                external_id,
+                provenance={"fixture_id": external_id},
+            )
+            prior = (prior_result.outcome, prior_result.home, prior_result.away)
+            incoming = (
+                incoming_result.outcome,
+                incoming_result.home,
+                incoming_result.away,
+            )
+            if prior != incoming:
+                record(match, incoming_result, authoritative=False)
+                stats.skipped += 1
+                continue
+            # A matching terminal read is evidence, not authority to replace the
+            # first canonical terminal score or its source-specific timestamps.
+            stats.unchanged += 1
+            ref.external_label = f"{home_team.name} - {away_team.name}"
+            ref.last_seen_at = observed_at
+            ref.save(update_fields=["external_label", "last_seen_at"])
+            accepted[external_id] = match
+            continue
         business_fields = [field for field in defaults if field != "observed_at"]
         changed = [
             field

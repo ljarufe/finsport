@@ -163,6 +163,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # Read-only API-Football boundary. The key is never logged or persisted.
 API_FOOTBALL_KEY = env("API_FOOTBALL_KEY", default="")
+BSD_API_TOKEN = env("BSD_API_TOKEN", default="")
+BSD_API_BASE_URL = env("BSD_API_BASE_URL", default="https://sports.bzzoiro.com/api/v2/")
 API_FOOTBALL_BASE_URL = env(
     "API_FOOTBALL_BASE_URL", default="https://v3.football.api-sports.io/"
 )
@@ -182,7 +184,7 @@ FOOTBALL_MODERNIZED_R45_ENABLED = env.bool(
 FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED = env.bool(
     "FOOTBALL_MODERNIZED_R45_CAPITAL_ENABLED", default=False
 )
-FOOTBALL_CAPTURE_WAKE_SECONDS = 300
+FOOTBALL_CAPTURE_WAKE_SECONDS = 180
 OBSERVABILITY_EVENTS_ENABLED = env.bool("OBSERVABILITY_EVENTS_ENABLED", default=True)
 OBSERVABILITY_SERVICE_NAME = env("OBSERVABILITY_SERVICE_NAME", default="django-web")
 OBSERVABILITY_EVENT_DIR = env(
@@ -205,25 +207,11 @@ FOOTBALL_MARKET_CONSENSUS_WINDOWS = env.json(
     "FOOTBALL_MARKET_CONSENSUS_WINDOWS",
     default=[
         {
-            "name": "market-t6h",
-            "offset_minutes": 360,
+            "name": "market-t10m",
+            "offset_minutes": 10,
             "before_tolerance_minutes": 0,
-            "normal_tolerance_minutes": 10,
-            "late_tolerance_minutes": 15,
-        },
-        {
-            "name": "market-t60m",
-            "offset_minutes": 60,
-            "before_tolerance_minutes": 0,
-            "normal_tolerance_minutes": 10,
-            "late_tolerance_minutes": 15,
-        },
-        {
-            "name": "market-t30m",
-            "offset_minutes": 30,
-            "before_tolerance_minutes": 0,
-            "normal_tolerance_minutes": 10,
-            "late_tolerance_minutes": 15,
+            "normal_tolerance_minutes": 3,
+            "late_tolerance_minutes": 8,
         },
     ],
 )

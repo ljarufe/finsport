@@ -502,7 +502,14 @@ def test_slow_provider_does_not_hold_admission_lock_or_lose_settlement(
             return [{"fixture": {"id": external_id}}]
 
     def sync_stub(items, competitions):
-        Match.objects.filter(pk=old.match_id).update(status_short="FT", outcome="HOME")
+        Match.objects.filter(pk=old.match_id).update(
+            status_short="FT",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
+        )
         return None, {external_id: old.match}
 
     monkeypatch.setattr("football.capital.runtime.sync_fixture_payloads", sync_stub)
@@ -681,7 +688,7 @@ def test_expiring_t30_admitted_before_slow_result_http(graph, monkeypatch, setti
     )
     monkeypatch.setattr(
         "football.capital.runtime.dynamic_reserve",
-        lambda *args: {"fixture": 0, "t30": 0, "execution_quote": 0},
+        lambda *args: {"fixture": 0, "t10": 0, "execution_quote": 0},
     )
     provision(at=AT)
     old = capture(graph)
@@ -709,7 +716,14 @@ def test_expiring_t30_admitted_before_slow_result_http(graph, monkeypatch, setti
             return [{"fixture": {"id": external_id}}]
 
     def sync_stub(items, competitions):
-        Match.objects.filter(pk=old.match_id).update(status_short="FT", outcome="HOME")
+        Match.objects.filter(pk=old.match_id).update(
+            status_short="FT",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
+        )
         return None, {external_id: old.match}
 
     monkeypatch.setattr("football.capital.runtime.sync_fixture_payloads", sync_stub)

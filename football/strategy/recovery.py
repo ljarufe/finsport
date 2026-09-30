@@ -15,10 +15,15 @@ RETRYABLE_NO_ATTEMPT = (
 
 
 def evaluation_work(deployment, *, capture_run_id=None, at):
+    window = (
+        deployment.active_epoch.binding.contract["capture_window"]
+        if deployment and deployment.active_epoch_id
+        else "market-t30m"
+    )
     works = (
         CaptureWorkItem.objects.filter(
             purpose="ODDS_CAPTURE",
-            intended_window="market-t30m",
+            intended_window=window,
             match__isnull=False,
             completed_at__isnull=False,
             run__completed_at__isnull=False,
@@ -198,7 +203,7 @@ def plan_global_evaluations(*, at, capture_plan=None):
         item
         for item in (capture_plan or {}).get("items", [])
         if item.get("purpose") == "ODDS_CAPTURE"
-        and item.get("intended_window") == "market-t30m"
+        and item.get("intended_window") in {"market-t10m", "market-t30m"}
     ]
     return {
         "planned": rows,

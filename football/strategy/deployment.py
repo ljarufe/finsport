@@ -86,8 +86,12 @@ def drain_complete(deployment):
 @transaction.atomic
 def provision(*, at=None):
     at = at or timezone.now()
-    authority = resolve_authority()
     deployment = locked_deployment()
+    if deployment.active_epoch_id:
+        from .epochs import advance
+
+        return advance(at=at)
+    authority = resolve_authority()
     if deployment.selection and deployment.selection != authority:
         raise RuntimeError("FS022_DEPLOYMENT_AUTHORITY_DRIFT")
     if deployment.real_betting or deployment.mode != "SIMULATION_ONLY":
@@ -173,6 +177,28 @@ def provision(*, at=None):
 
 def verify_config(deployment):
     config = deployment.config
+    if deployment.active_epoch_id:
+        epoch = deployment.active_epoch
+        binding = epoch.binding
+        contract = binding.contract
+        if (
+            binding.digest != binding.digest_for(contract)
+            or not binding.approved
+            or contract.get("candidate_id") != binding.candidate_id
+            or contract.get("name") != binding.name
+        ):
+            raise RuntimeError("FS023_BINDING_DRIFT")
+        if (
+            config.strategy_epoch_id != epoch.pk
+            or config.initial_bankroll != epoch.initial_bankroll
+        ):
+            raise RuntimeError("FS023_EPOCH_CONFIG_DRIFT")
+        if (
+            config.policy_code != contract["capital"]["code"]
+            or config.max_lanes != contract["capital"]["max_lanes"]
+        ):
+            raise RuntimeError("FS023_CAPITAL_BINDING_DRIFT")
+        return
     pd = deployment.selection["winner_candidate"]["prediction_decision"]
     capital = deployment.selection["winner_candidate"]["capital"]
     expected = dict(
@@ -245,7 +271,7 @@ def admission_reason(deployment, config):
         )
     if config.status != CapitalRuntimeConfig.Status.ACTIVE or not config.current:
         return "STRATEGY_STOPPED"
-    if resolve_authority() != deployment.selection:
+    if not deployment.active_epoch_id and resolve_authority() != deployment.selection:
         raise RuntimeError("FS022_DEPLOYMENT_AUTHORITY_DRIFT")
     verify_config(deployment)
     if deployment.depletion_state != "ACTIVE":

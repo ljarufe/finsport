@@ -1,3 +1,5 @@
+import hashlib
+import json
 import math
 import uuid
 
@@ -972,6 +974,10 @@ class CaptureWorkItem(models.Model):
             "Insufficient worst-case budget",
         )
         MISSED_WINDOW = "MISSED_WINDOW", "Missed window"
+        MISSED_STRATEGY_WINDOW = (
+            "MISSED_STRATEGY_WINDOW",
+            "Missed T10 due only to quota",
+        )
         LATE_CAPTURE = "LATE_CAPTURE", "Late capture"
         PROVIDER_BACKOFF = "PROVIDER_BACKOFF", "Provider backoff"
         CONCURRENT_EXECUTOR = "CONCURRENT_EXECUTOR", "Concurrent executor"
@@ -1016,6 +1022,7 @@ class CaptureWorkItem(models.Model):
     actual_attempts = models.PositiveIntegerField(default=0)
     actual_pages = models.PositiveIntegerField(default=0)
     actual_retries = models.PositiveIntegerField(default=0)
+    olv_usable = models.BooleanField(null=True, blank=True)
     observations_created = models.PositiveIntegerField(default=0)
     snapshots_changed = models.PositiveIntegerField(default=0)
     fixtures_changed = models.PositiveIntegerField(default=0)
@@ -1506,6 +1513,13 @@ class CapitalRuntimeConfig(TimeStampedModel):
         DEGRADED = "DEGRADED", "Degraded"
 
     identity = models.CharField(max_length=180, unique=True)
+    strategy_epoch = models.OneToOneField(
+        "StrategyEpoch",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="runtime_config",
+    )
     runtime_version = models.CharField(max_length=50)
     execution_version = models.CharField(max_length=50)
     mode = models.CharField(max_length=20, choices=Mode.choices)
@@ -1581,6 +1595,13 @@ class CapitalDeployment(TimeStampedModel):
         CapitalRuntimeConfig, on_delete=models.PROTECT, null=True, blank=True
     )
     selection = models.JSONField(default=dict)
+    active_epoch = models.ForeignKey(
+        "StrategyEpoch",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="deployments",
+    )
     mode = models.CharField(max_length=50, default="SIMULATION_ONLY")
     real_betting = models.BooleanField(default=False)
     state = models.CharField(max_length=40, default="OLD_ACTIVE")
@@ -1805,6 +1826,13 @@ class CapitalExecutionState(TimeStampedModel):
 class CapitalResultObservation(models.Model):
     """The first time Finsport recognizes a canonical terminal Match result."""
 
+    provider_result = models.ForeignKey(
+        "ResultProviderObservation",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="capital_observations",
+    )
     match = models.OneToOneField(
         Match, on_delete=models.PROTECT, related_name="capital_result_observation"
     )
@@ -1996,9 +2024,12 @@ class ProviderCallAudit(models.Model):
             "DAILY_FIXTURE_DISCOVERY",
             "Daily fixture discovery",
         )
+        ODDS_T10 = "ODDS_T10", "Odds T-10"
         ODDS_T30 = "ODDS_T30", "Odds T-30"
         ODDS_T60 = "ODDS_T60", "Odds T-60"
         ODDS_T6H = "ODDS_T6H", "Odds T-6h"
+        BSD_RESULT = "BSD_RESULT", "BSD result detail"
+        BSD_BOOTSTRAP = "BSD_BOOTSTRAP", "BSD identity bootstrap"
         OPEN_RESULT_BATCH = "OPEN_RESULT_BATCH", "Open result batch"
         NONBET_RESULT_BATCH = "NONBET_RESULT_BATCH", "Non-bet result batch"
         CATALOGUE_OR_SEASON_MAINTENANCE = (
@@ -2065,5 +2096,216 @@ class ProviderCallAudit(models.Model):
             models.Index(
                 fields=["capability", "started_at"],
                 name="football_provider_cap_idx",
+            ),
+        ]
+
+
+class StrategyBinding(models.Model):
+    """Approved, immutable operational contract; a candidate is only its composition."""
+
+    name = models.CharField(max_length=100, unique=True)
+    candidate_id = models.PositiveSmallIntegerField()
+    contract = models.JSONField()
+    digest = models.CharField(max_length=64, unique=True, editable=False)
+    approved = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    @staticmethod
+    def digest_for(contract):
+        return hashlib.sha256(
+            json.dumps(
+                contract, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+
+    def validate_identity(self):
+        if self.contract.get("candidate_id") != self.candidate_id:
+            raise ValidationError(
+                "StrategyBinding candidate_id disagrees with contract"
+            )
+        if self.contract.get("name") != self.name:
+            raise ValidationError("StrategyBinding name disagrees with contract")
+
+    def save(self, *args, **kwargs):
+        if self.contract.get("real_betting") is not False:
+            raise ValidationError("StrategyBinding must remain simulation-only")
+        self.validate_identity()
+        expected = self.digest_for(self.contract)
+        if self.digest and self.digest != expected:
+            raise ValidationError("StrategyBinding digest mismatch")
+        self.digest = expected
+        if self.pk:
+            old = type(self).objects.get(pk=self.pk)
+            if (old.name, old.candidate_id, old.contract, old.digest) != (
+                self.name,
+                self.candidate_id,
+                self.contract,
+                self.digest,
+            ):
+                raise ValidationError("StrategyBinding is immutable")
+        super().save(*args, **kwargs)
+
+
+class StrategyEpoch(models.Model):
+    class State(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        DRAINING = "DRAINING", "Draining"
+        DRAINED = "DRAINED", "Drained"
+
+    binding = models.ForeignKey(
+        StrategyBinding, on_delete=models.PROTECT, related_name="epochs"
+    )
+    state = models.CharField(max_length=12, choices=State.choices)
+    initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
+    activated_at = models.DateTimeField()
+    drained_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            old = type(self).objects.get(pk=self.pk)
+            if (old.binding_id, old.initial_bankroll, old.activated_at) != (
+                self.binding_id,
+                self.initial_bankroll,
+                self.activated_at,
+            ):
+                raise ValidationError(
+                    "StrategyEpoch identity and opening capital are immutable"
+                )
+            permitted = {
+                self.State.ACTIVE: {self.State.ACTIVE, self.State.DRAINING},
+                self.State.DRAINING: {self.State.DRAINING, self.State.DRAINED},
+                self.State.DRAINED: {self.State.DRAINED},
+            }
+            if self.state not in permitted[old.state]:
+                raise ValidationError("StrategyEpoch state transition is invalid")
+        super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(initial_bankroll__gt=0),
+                name="strategy_epoch_positive_bankroll",
+            ),
+        ]
+
+
+class StrategySwitch(models.Model):
+    """Durable restart key for one drained source and one fresh target."""
+
+    source_epoch = models.ForeignKey(
+        StrategyEpoch, on_delete=models.PROTECT, related_name="switches"
+    )
+    target_binding = models.ForeignKey(StrategyBinding, on_delete=models.PROTECT)
+    initial_bankroll = models.DecimalField(max_digits=24, decimal_places=8)
+    target_epoch = models.OneToOneField(
+        StrategyEpoch,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="originating_switch",
+    )
+    requested_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            old = type(self).objects.get(pk=self.pk)
+            if (
+                old.source_epoch_id,
+                old.target_binding_id,
+                old.initial_bankroll,
+                old.requested_at,
+            ) != (
+                self.source_epoch_id,
+                self.target_binding_id,
+                self.initial_bankroll,
+                self.requested_at,
+            ):
+                raise ValidationError("StrategySwitch restart identity is immutable")
+            if old.target_epoch_id and old.target_epoch_id != self.target_epoch_id:
+                raise ValidationError("Completed StrategySwitch target is immutable")
+        super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_epoch", "target_binding", "initial_bankroll"],
+                name="strategy_switch_restart_key_unique",
+            ),
+        ]
+
+
+class CompetitionResultRoute(models.Model):
+    competition = models.OneToOneField(
+        Competition, on_delete=models.PROTECT, related_name="result_route"
+    )
+    api_football_league_id = models.PositiveIntegerField()
+    bsd_league_ids = models.JSONField(default=list)
+    bsd_state = models.CharField(max_length=40, default="BSD_BOOTSTRAP_PENDING")
+    season_state = models.CharField(max_length=40, default="TEMPORARILY_UNAVAILABLE")
+    season_id = models.PositiveIntegerField(null=True, blank=True)
+    season_checked_at = models.DateTimeField(null=True, blank=True)
+    bsd_backoff_until = models.DateTimeField(null=True, blank=True)
+    bsd_failures = models.PositiveSmallIntegerField(default=0)
+    bsd_failure_window_started_at = models.DateTimeField(null=True, blank=True)
+    provenance = models.JSONField(default=dict)
+
+
+class BSDTeamMapping(models.Model):
+    route = models.ForeignKey(
+        CompetitionResultRoute, on_delete=models.PROTECT, related_name="teams"
+    )
+    canonical_team = models.ForeignKey(Team, on_delete=models.PROTECT)
+    bsd_team_id = models.PositiveIntegerField()
+    bsd_league_id = models.PositiveIntegerField()
+    approval = models.CharField(max_length=30)
+    provenance = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["route", "canonical_team", "bsd_league_id"],
+                name="bsd_canonical_team_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["bsd_league_id", "bsd_team_id"], name="bsd_provider_team_unique"
+            ),
+        ]
+
+
+class BSDEventBinding(models.Model):
+    match = models.OneToOneField(
+        Match, on_delete=models.PROTECT, related_name="bsd_event"
+    )
+    bsd_league_id = models.PositiveIntegerField()
+    bsd_event_id = models.PositiveIntegerField(unique=True)
+    bound_at = models.DateTimeField(default=timezone.now)
+    provenance = models.JSONField(default=dict)
+
+
+class ResultProviderObservation(models.Model):
+    """Every terminal candidate remains auditable, including a conflicting later source."""
+
+    match = models.ForeignKey(
+        Match, on_delete=models.PROTECT, related_name="provider_results"
+    )
+    provider = models.CharField(max_length=30)
+    external_ref = models.CharField(max_length=100)
+    provider_observed_at = models.DateTimeField()
+    result_known_at = models.DateTimeField()
+    status_short = models.CharField(max_length=20)
+    home_regulation = models.SmallIntegerField(null=True, blank=True)
+    away_regulation = models.SmallIntegerField(null=True, blank=True)
+    outcome = models.CharField(max_length=4, blank=True)
+    authoritative = models.BooleanField(default=False)
+    conflict = models.BooleanField(default=False)
+    fallback_reason = models.CharField(max_length=100, blank=True)
+    provenance = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["match", "provider", "external_ref", "provider_observed_at"],
+                name="result_provider_observation_unique",
             ),
         ]

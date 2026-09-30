@@ -290,7 +290,7 @@ def _basis_values(config, candidate):
         "evidence_not_before": work.executed_at,
         "evidence_cutoff": work.run.completed_at,
         "provenance": {
-            "window": "market-t30m",
+            "window": work.intended_window,
             "actual_event_time": True,
             "price_frozen": True,
             **(
@@ -323,7 +323,12 @@ def _candidate_from_basis(basis):
         work is None
         or work.status not in ACCEPTED_CAPTURE_STATUSES
         or work.purpose != CaptureWorkItem.Purpose.ODDS_CAPTURE
-        or work.intended_window != "market-t30m"
+        or work.intended_window
+        != (
+            basis.config.strategy_epoch.binding.contract["capture_window"]
+            if basis.config.strategy_epoch_id
+            else "market-t30m"
+        )
         or work.match_id != basis.match_id
         or work.run_id != basis.capture_run_id
     ):
@@ -473,7 +478,7 @@ def place_candidate(config_id, candidate, *, at=None):
     event_at = candidate.work_item.completed_at or candidate.work_item.run.completed_at
     placement_at = (
         effective_now(planning_at=at)
-        if config.identity.startswith("fs022:")
+        if config.identity.startswith(("fs022:", "fs023:"))
         else at or event_at
     )
     if placement_at >= match.kickoff and state is not None:
@@ -610,7 +615,7 @@ def place_candidate(config_id, candidate, *, at=None):
                 state.save(update_fields=["diagnostics", "modified"])
             return "NO_WORK"
         return "PENDING_CAPACITY"
-    if config.identity.startswith("fs022:"):
+    if config.identity.startswith(("fs022:", "fs023:")):
         placement_at = effective_now(planning_at=at)
         if placement_at >= match.kickoff:
             if state is not None:
@@ -671,7 +676,7 @@ def reconcile_execution_events(capture_run_id, *, at=None):
     """Consume current or partially processed durable final T-30 evidence."""
 
     configs = provision_automatic_configs()
-    if not configs or configs[0].identity.startswith("fs022:"):
+    if not configs or configs[0].identity.startswith(("fs022:", "fs023:")):
         from football.strategy.prospective import reconcile_global
 
         return reconcile_global(capture_run_id, at=at or timezone.now())
@@ -767,7 +772,9 @@ def reconcile_execution_events(capture_run_id, *, at=None):
 
 
 @transaction.atomic
-def observe_terminal_result(match, *, known_at=None, provenance=None):
+def observe_terminal_result(
+    match, *, known_at=None, provenance=None, provider_result=None
+):
     """Persist canonical terminal knowledge without backdating it."""
 
     if not isinstance(match, Match):
@@ -785,19 +792,31 @@ def observe_terminal_result(match, *, known_at=None, provenance=None):
         .select_related("source")
         .first()
     )
-    if ref is None:
+    if ref is None and provider_result is None:
         return None, False
     known_at = known_at or timezone.now()
     observation, created = CapitalResultObservation.objects.get_or_create(
         match=match,
         defaults={
-            "source": ref.source,
+            "source": ref.source if ref is not None else None,
             "match_source_ref": ref,
+            "provider_result": provider_result,
             "status_short": match.status_short,
             "outcome": match.outcome,
             "result_known_at": known_at,
-            "provider_observed_at": match.observed_at,
-            "provenance": provenance or {"authority": "API_FOOTBALL_CANONICAL"},
+            "provider_observed_at": (
+                provider_result.provider_observed_at
+                if provider_result
+                else match.observed_at
+            ),
+            "provenance": provenance
+            or {
+                "authority": (
+                    provider_result.provider
+                    if provider_result
+                    else "API_FOOTBALL_CANONICAL"
+                )
+            },
         },
     )
     if not created and (
@@ -864,7 +883,9 @@ def settle_position(position_id, observation_id, *, settled_at=None):
     if config.peak_equity > ZERO:
         drawdown = (config.peak_equity - config.bankroll_equity) / config.peak_equity
         config.maximum_drawdown = max(config.maximum_drawdown, drawdown)
-    if config.bankroll_equity <= ZERO and not config.identity.startswith("fs022:"):
+    if config.bankroll_equity <= ZERO and not config.identity.startswith(
+        ("fs022:", "fs023:")
+    ):
         config.status = CapitalRuntimeConfig.Status.TERMINATED
         config.practical_ruin = True
         config.termination_reason = "BANKROLL_DEPLETED"
@@ -913,6 +934,17 @@ def settle_locally_known_open_positions(*, known_at=None):
     )
     settled = 0
     for match in Match.objects.filter(pk__in=match_ids):
+        if match.provider_results.filter(conflict=True).exists():
+            _mark_provider_degraded(
+                list(
+                    CapitalPosition.objects.filter(
+                        match=match, status=CapitalPosition.Status.OPEN
+                    ).values_list("id", flat=True)
+                ),
+                knowledge_at,
+                CapitalRuntimeInvariantError("RESULT_CONFLICT"),
+            )
+            continue
         observation, _ = observe_terminal_result(match, known_at=knowledge_at)
         if observation:
             settled += settle_observation(observation, settled_at=knowledge_at)
@@ -949,7 +981,9 @@ def _mark_provider_degraded(position_ids, at, error):
     )
 
 
-def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
+def refresh_open_result_debt(
+    *, at=None, client_factory=APIFootballClient, bsd_client_factory=None
+):
     """Coalesce due OPEN debt into Lima-date sweeps and narrow directed recovery."""
 
     at = at or timezone.now()
@@ -960,6 +994,7 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             status=CapitalPosition.Status.OPEN,
         )
         .exclude(match__status_short="PST")
+        .exclude(result_refresh_error="RESULT_CONFLICT")
         .filter(
             Q(next_result_check_at__lte=at)
             | Q(
@@ -970,12 +1005,46 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
         .select_related("match__season__competition")
         .order_by("match__kickoff", "match_id", "id")
     )
+    from football.providers.bsd import BSDClient
+    from football.result_routing import recheck_pending_conflicts
+
+    conflict_calls, conflict_errors = recheck_pending_conflicts(
+        at=at, client_factory=bsd_client_factory or BSDClient
+    )
+    due = [
+        position
+        for position in due
+        if not position.match.provider_results.filter(conflict=True).exists()
+    ]
     if not due:
-        return RuntimeResult("NO_WORK")
+        return RuntimeResult(
+            (
+                "DEGRADED"
+                if conflict_errors
+                else "PRODUCED" if conflict_calls else "NO_WORK"
+            ),
+            provider_calls=conflict_calls,
+            errors=tuple(conflict_errors),
+        )
     position_ids = [row.pk for row in due]
     CapitalPosition.objects.filter(pk__in=position_ids).update(
         debt_status=CapitalPosition.DebtStatus.OVERDUE
     )
+    from football.providers.bsd import BSDClient
+    from football.result_routing import process_due_bsd
+
+    handled, bsd_settled, bsd_errors = process_due_bsd(
+        due, at=at, client_factory=bsd_client_factory or BSDClient
+    )
+    due = [row for row in due if row.match_id not in handled]
+    if not due:
+        return RuntimeResult(
+            "DEGRADED" if bsd_errors else "PRODUCED",
+            settled=bsd_settled,
+            open_debt=0,
+            errors=tuple(bsd_errors),
+        )
+    position_ids = [row.pk for row in due]
     due_by_match = {}
     for position in due:
         due_by_match.setdefault(position.match_id, []).append(position)
@@ -1060,8 +1129,8 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
             reconciliation_status=ReconciliationStatus.RESOLVED,
         ).select_related("competition")
     }
-    settled = 0
-    errors = missing_ref_errors.copy()
+    settled = bsd_settled
+    errors = [*missing_ref_errors, *bsd_errors]
     client = None
     active_mode = "date_sweep"
     active_match_ids = {
@@ -1071,7 +1140,7 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
     current_quota = quota_state(at, capture_config)
     reserve = dynamic_reserve(at, capture_config)
     higher_priority_reserve = (
-        reserve["fixture"] + reserve["t30"] + reserve["execution_quote"]
+        reserve["fixture"] + reserve["t10"] + reserve["execution_quote"]
     )
     available_work = max(0, current_quota["remaining"] - higher_priority_reserve)
     if current_quota["basis"] == "BOUNDED_BOOTSTRAP":
@@ -1130,9 +1199,31 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                 continue
             match = Match.objects.get(pk=expected_match.pk)
             usable.add(match.pk)
+            from football.result_provider import api_football_result, record
+            from football.result_routing import maybe_promote_shadow
+
+            provider_result = None
+            if match.status_short in TERMINAL_RESULT_STATUSES:
+                provider_result, disposition = record(
+                    match,
+                    api_football_result(
+                        match,
+                        external_id,
+                        provenance={
+                            "acquisition": mode,
+                            "kickoff_date_lima": day.isoformat(),
+                        },
+                    ),
+                    authoritative=True,
+                )
+                if disposition == "RESULT_CONFLICT":
+                    errors.append(f"RESULT_CONFLICT:{match.pk}")
+                    continue
+                maybe_promote_shadow()
             observation, _ = observe_terminal_result(
                 match,
                 known_at=knowledge_at,
+                provider_result=provider_result,
                 provenance={
                     "authority": "API_FOOTBALL_CANONICAL",
                     "acquisition": mode,
@@ -1174,34 +1265,35 @@ def refresh_open_result_debt(*, at=None, client_factory=APIFootballClient):
                 raise APIFootballOperationBudgetError(
                     "Capital result refresh reached its provider-attempt bound."
                 )
+            request_at = timezone.now()
+            fresh_quota = quota_state(request_at, capture_config)
             observed_remaining = getattr(active_client, "daily_remaining", None)
-            if observed_remaining is None:
-                if current_quota["basis"] == "HEADER_STALE_EPOCH":
-                    live_reserve = dynamic_reserve(timezone.now(), capture_config)
-                    higher_priority = (
-                        live_reserve["fixture"]
-                        + live_reserve["t30"]
-                        + live_reserve["execution_quote"]
-                    )
-                    if active_client.calls == 0 and higher_priority == 0:
-                        return
-                    raise APIFootballOperationBudgetError(
-                        "A stale quota epoch permits only one critical establishing attempt."
-                    )
-                live_remaining = current_quota["remaining"] - active_client.calls
-            else:
-                attempts_after_header = max(
-                    0,
-                    active_client.calls
-                    - getattr(
-                        active_client, "quota_observed_calls", active_client.calls
-                    ),
+            if (
+                observed_remaining is None
+                and fresh_quota["basis"] == "HEADER_STALE_EPOCH"
+            ):
+                live_reserve = dynamic_reserve(request_at, capture_config)
+                higher_priority = (
+                    live_reserve["fixture"]
+                    + live_reserve["t10"]
+                    + live_reserve["execution_quote"]
                 )
-                live_remaining = observed_remaining - attempts_after_header
-            live_reserve = dynamic_reserve(timezone.now(), capture_config)
+                if (
+                    active_client.calls == 0
+                    and higher_priority == 0
+                    and fresh_quota["stale_establishing_attempt_available"]
+                ):
+                    return
+                raise APIFootballOperationBudgetError(
+                    "A stale quota epoch permits only one critical establishing attempt."
+                )
+            live_remaining = fresh_quota["remaining"]
+            if observed_remaining is not None:
+                live_remaining = min(live_remaining, observed_remaining)
+            live_reserve = dynamic_reserve(request_at, capture_config)
             higher_priority = (
                 live_reserve["fixture"]
-                + live_reserve["t30"]
+                + live_reserve["t10"]
                 + live_reserve["execution_quote"]
             )
             if live_remaining - 1 < higher_priority:
@@ -1390,7 +1482,9 @@ def run_automatic_runtime(
         .values_list("identity", flat=True)
         .first()
     )
-    legacy_mode = bool(active_identity and not active_identity.startswith("fs022:"))
+    legacy_mode = bool(
+        active_identity and not active_identity.startswith(("fs022:", "fs023:"))
+    )
 
     def operation_now():
         return planning_at if legacy_mode else effective_now(planning_at=planning_at)

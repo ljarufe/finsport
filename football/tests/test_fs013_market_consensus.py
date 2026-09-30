@@ -37,25 +37,11 @@ pytestmark = pytest.mark.django_db
 
 FS013_WINDOWS = [
     {
-        "name": "market-t6h",
-        "offset_minutes": 360,
+        "name": "market-t10m",
+        "offset_minutes": 10,
         "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t60m",
-        "offset_minutes": 60,
-        "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t30m",
-        "offset_minutes": 30,
-        "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
+        "normal_tolerance_minutes": 3,
+        "late_tolerance_minutes": 8,
     },
 ]
 
@@ -343,73 +329,18 @@ def test_three_capture_windows_are_independent_and_non_polling():
             target_at=item.target_at,
         )
 
-    t6_at = kickoff - timedelta(hours=6)
-    t6 = planner.plan(at=t6_at, allow_bootstrap=True)
-    assert statuses(t6) == {
-        "market-t6h": CaptureWorkItem.Status.PLANNED,
-        "market-t60m": CaptureWorkItem.Status.NOT_DUE,
-        "market-t30m": CaptureWorkItem.Status.NOT_DUE,
-    }
-    t6_due = next(item for item in t6.items if item.intended_window == "market-t6h")
-    fulfill(t6_due, t6_at + timedelta(minutes=1))
-
-    t60_at = kickoff - timedelta(hours=1)
-    t60 = planner.plan(at=t60_at, allow_bootstrap=True)
-    assert statuses(t60) == {
-        "market-t6h": CaptureWorkItem.Status.ALREADY_FULFILLED,
-        "market-t60m": CaptureWorkItem.Status.PLANNED,
-        "market-t30m": CaptureWorkItem.Status.NOT_DUE,
-    }
-    t60_due = next(item for item in t60.items if item.intended_window == "market-t60m")
-    fulfill(t60_due, t60_at + timedelta(minutes=1))
-
-    t30_at = kickoff - timedelta(minutes=30)
-    t30 = planner.plan(at=t30_at, allow_bootstrap=True)
-    assert statuses(t30) == {
-        "market-t6h": CaptureWorkItem.Status.ALREADY_FULFILLED,
-        "market-t60m": CaptureWorkItem.Status.ALREADY_FULFILLED,
-        "market-t30m": CaptureWorkItem.Status.PLANNED,
-    }
-    t30_due = next(item for item in t30.items if item.intended_window == "market-t30m")
-    fulfill(t30_due, t30_at + timedelta(minutes=1))
-
-    repeated = planner.plan(at=t30_at + timedelta(minutes=5), allow_bootstrap=True)
+    target = kickoff - timedelta(minutes=10)
+    due = planner.plan(at=target, allow_bootstrap=True)
+    assert statuses(due) == {"market-t10m": CaptureWorkItem.Status.PLANNED}
+    item = due.items[0]
+    fulfill(item, target + timedelta(minutes=1))
+    repeated = planner.plan(at=target + timedelta(minutes=3), allow_bootstrap=True)
     assert statuses(repeated) == {
-        "market-t6h": CaptureWorkItem.Status.ALREADY_FULFILLED,
-        "market-t60m": CaptureWorkItem.Status.ALREADY_FULFILLED,
-        "market-t30m": CaptureWorkItem.Status.ALREADY_FULFILLED,
+        "market-t10m": CaptureWorkItem.Status.ALREADY_FULFILLED
     }
-    assert not any(
-        item.status == CaptureWorkItem.Status.PLANNED for item in repeated.items
-    )
-
-    assert (
-        len(
-            {
-                t6_due.logical_identity,
-                t60_due.logical_identity,
-                t30_due.logical_identity,
-            }
-        )
-        == 3
-    )
-    chronological = [t6_due, t60_due, t30_due]
-    assert all(
-        previous.not_after < current.not_before
-        for previous, current in zip(chronological, chronological[1:])
-    )
-    assert {window.name for window in config.windows} == {
-        "market-t6h",
-        "market-t60m",
-        "market-t30m",
-    }
-    assert {item.intended_window for item in t6.items} == {
-        "market-t6h",
-        "market-t60m",
-        "market-t30m",
-    }
-    assert not {item.intended_window for item in t6.items} & {"early", "middle"}
-    assert settings.FOOTBALL_CAPTURE_WAKE_SECONDS == 300
+    assert {window.name for window in config.windows} == {"market-t10m"}
+    assert not {item.intended_window for item in due.items} & {"early", "middle"}
+    assert settings.FOOTBALL_CAPTURE_WAKE_SECONDS == 180
 
 
 def completed_capture(match, *, target_at, cutoff, observations_created):
@@ -430,14 +361,10 @@ def completed_capture(match, *, target_at, cutoff, observations_created):
         match=match,
         market=market,
         logical_identity=identity,
-        intended_window=(
-            "market-t60m"
-            if target_at == match.kickoff - timedelta(hours=1)
-            else "market-t30m"
-        ),
+        intended_window="market-t10m",
         target_at=target_at,
         not_before=target_at,
-        not_after=target_at + timedelta(minutes=15),
+        not_after=target_at + timedelta(minutes=8),
         observations_created=observations_created,
         executed_at=target_at,
         completed_at=cutoff,
@@ -526,7 +453,7 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
         historical.model_version,
         historical.modified,
     )
-    first_target = match.kickoff - timedelta(hours=1)
+    first_target = match.kickoff - timedelta(minutes=10)
     first_cutoff = first_target + timedelta(minutes=1)
     stale_observation = observation(
         match,
@@ -570,7 +497,7 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
 
     assert (
         PredictionExperiment.objects.filter(
-            intended_window="market-t60m",
+            intended_window="market-t10m",
             logical_identity__startswith="fs013:market-consensus:",
         ).count()
         == 1
@@ -597,49 +524,19 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
     )
     assert modal.selected_odds_observation_id != stale_observation.pk
     assert modal.selected_odds_observation.observed_at >= first_target
-    assert not first_experiment.predictions.exclude(
-        model_code=Prediction.MARKET_CONSENSUS
-    ).exists()
-
-    later_target = match.kickoff - timedelta(minutes=30)
-    later_cutoff = later_target + timedelta(minutes=1)
-    observation(
-        match,
-        source,
-        first,
-        market,
-        later_target + timedelta(seconds=10),
-        ("4", "3", "2"),
-    )
-    later_capture = completed_capture(
-        match,
-        target_at=later_target,
-        cutoff=later_cutoff,
-        observations_created=1,
-    )
-    monkeypatch.setattr(
-        "football.pipeline.service.run_capture", lambda **kwargs: later_capture
-    )
-
-    evaluate_manual_market_capture(later_capture, later_cutoff)
-
-    predictions = list(
-        Prediction.objects.filter(
-            model_code=Prediction.MARKET_CONSENSUS,
-            model_version="fs013-market-consensus-v2",
-        ).order_by("cutoff")
-    )
+    assert first_observation.observed_at < first_cutoff
+    evaluate_manual_market_capture(first_capture, first_cutoff)
     first_prediction.refresh_from_db()
-    assert len(predictions) == 2
     assert (
         first_prediction.cutoff,
         first_prediction.p_home,
         first_prediction.evidence_identity,
         first_prediction.created,
     ) == original
-    assert predictions[1].cutoff == later_cutoff
-    assert predictions[1].evidence_identity != first_prediction.evidence_identity
-    assert first_observation.observed_at < first_prediction.cutoff
+    assert not first_experiment.predictions.exclude(
+        model_code=Prediction.MARKET_CONSENSUS
+    ).exists()
+
     historical.refresh_from_db()
     assert (
         historical.cutoff,
@@ -647,6 +544,13 @@ def test_completed_batch_creates_one_versioned_prediction_and_retry_is_idempoten
         historical.model_version,
         historical.modified,
     ) == historical_original
+    assert (
+        Prediction.objects.filter(
+            model_code=Prediction.MARKET_CONSENSUS,
+            model_version="fs013-market-consensus-v2",
+        ).count()
+        == 1
+    )
 
 
 def test_market_consensus_v2_requires_completed_capture_evidence():
@@ -676,7 +580,7 @@ def test_completed_empty_batch_persists_explicit_unavailable_evidence(monkeypatc
         match=match,
         reconciliation_status=ReconciliationStatus.RESOLVED,
     )
-    target = match.kickoff - timedelta(hours=1)
+    target = match.kickoff - timedelta(minutes=10)
     cutoff = target + timedelta(minutes=1)
     observation(
         match,
@@ -700,7 +604,7 @@ def test_completed_empty_batch_persists_explicit_unavailable_evidence(monkeypatc
     evaluate_manual_market_capture(capture, cutoff)
 
     experiment = PredictionExperiment.objects.get(
-        intended_window="market-t60m",
+        intended_window="market-t10m",
         logical_identity__startswith="fs013:market-consensus:",
     )
     unavailable = experiment.summary["unavailable"][f"MARKET_CONSENSUS:{match.pk}"]

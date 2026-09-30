@@ -230,10 +230,10 @@ def test_dynamic_reserve_protects_due_t30_from_optional_t60(runtime_graph):
     )
 
     plan = CapturePlanner(config=CaptureConfig.from_settings()).plan(at=at)
-    assert match.pk in plan.reserve["t30_match_ids"]
-    assert plan.reserve["t30"] == 1
+    assert match.pk in plan.reserve["t10_match_ids"]
+    assert plan.reserve["t10"] == 1
     assert any(
-        item.intended_window != "market-t30m"
+        item.intended_window != "market-t10m"
         and item.status == CaptureWorkItem.Status.QUOTA_RESERVE
         for item in plan.items
     )
@@ -246,7 +246,7 @@ def test_dynamic_reserve_protects_due_t30_from_optional_t60(runtime_graph):
         ("no_ref", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
         ("unresolved_ref", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
         ("no_market", CaptureWorkItem.Status.UNRESOLVED_IDENTITY),
-        ("eligible", CaptureWorkItem.Status.PLANNED),
+        ("eligible", CaptureWorkItem.Status.NOT_DUE),
     ],
 )
 @override_settings(FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False)
@@ -273,12 +273,12 @@ def test_t30_reserve_and_planner_share_provider_prerequisites(
         at=at,
         match_id=match.pk,
         purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
-        window="market-t30m",
+        window="market-t10m",
         allow_bootstrap=True,
     )
 
-    assert reserve["t30"] == int(case == "eligible")
-    assert plan.reserve["t30"] == reserve["t30"]
+    assert reserve["t10"] == int(case == "eligible")
+    assert plan.reserve["t10"] == reserve["t10"]
     assert len(plan.items) == 1
     assert plan.items[0].status == expected_status
 
@@ -292,12 +292,13 @@ def test_t30_reserve_keeps_fulfilled_and_expired_temporal_rules(runtime_graph):
     add_api_football_ref(runtime_graph, match)
     config = CaptureConfig.from_settings()
 
-    assert dynamic_reserve(at, config)["t30"] == 1
-    assert dynamic_reserve(at + timedelta(minutes=14), config)["t30"] == 1
-    assert dynamic_reserve(at + timedelta(minutes=16), config)["t30"] == 0
+    assert dynamic_reserve(at, config)["t10"] == 1
+    assert dynamic_reserve(at + timedelta(minutes=14), config)["t10"] == 1
+    assert dynamic_reserve(at + timedelta(minutes=29), config)["t10"] == 0
 
-    make_capture(runtime_graph, [match], at=at)
-    assert dynamic_reserve(at, config)["t30"] == 0
+    run, _ = make_capture(runtime_graph, [match], at=at)
+    CaptureWorkItem.objects.filter(run=run).update(intended_window="market-t10m")
+    assert dynamic_reserve(at, config)["t10"] == 0
 
 
 @override_settings(FOOTBALL_CAPTURE_DISCOVERY_ENABLED=False)
@@ -326,7 +327,7 @@ def test_open_reserve_counts_effective_wake_opportunities_not_only_dates(
     same_wake = dynamic_reserve(at, config_snapshot)
     assert same_wake["open_result"] == 1
     assert same_wake["open_result_sweep_opportunities"] == [
-        {"date": "2026-09-14", "wake_at": "2026-09-14T18:15:00+00:00"}
+        {"date": "2026-09-14", "wake_at": "2026-09-14T18:12:00+00:00"}
     ]
 
     CapitalPosition.objects.filter(pk=positions[second.pk].pk).update(
@@ -599,7 +600,7 @@ def test_headerless_stale_capture_attempt_blocks_later_capture_and_open(
     headerless = ProviderCallAudit.objects.filter(
         capability=ProviderCallAudit.Capability.DAILY_FIXTURE_DISCOVERY
     ).get()
-    later_at = at + timedelta(minutes=5)
+    later_at = at + timedelta(minutes=20)
     state = quota_state(later_at, CaptureConfig.from_settings())
     later_fixture = CapturePlanner(config=CaptureConfig.from_settings()).plan(
         at=later_at, purpose=CaptureWorkItem.Purpose.FIXTURE_REFRESH
@@ -608,7 +609,7 @@ def test_headerless_stale_capture_attempt_blocks_later_capture_and_open(
         at=later_at,
         match_id=optional_match.pk,
         purpose=CaptureWorkItem.Purpose.ODDS_CAPTURE,
-        window="market-t60m",
+        window="market-t10m",
     )
     later_open = refresh_open_result_debt(
         at=later_at,
@@ -630,7 +631,7 @@ def test_headerless_stale_capture_attempt_blocks_later_capture_and_open(
     assert state["stale_establishing_attempt_available"] is False
     assert not later_fixture.executable
     assert any(
-        item.intended_window == "market-t60m"
+        item.intended_window == "market-t10m"
         and item.status == CaptureWorkItem.Status.QUOTA_RESERVE
         for item in later_optional.items
     ), [
@@ -893,7 +894,14 @@ def test_date_sweep_settlement_releases_pending_capacity_same_wake(
     def sync_stub(items, competitions):
         assert [item["fixture"]["id"] for item in items] == [8300]
         assert set(competitions) == {"99"}
-        Match.objects.filter(pk=first.pk).update(status_short="FT", outcome="HOME")
+        Match.objects.filter(pk=first.pk).update(
+            status_short="FT",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
+        )
         return None, {"8300": first}
 
     monkeypatch.setattr("football.capital.runtime.sync_fixture_payloads", sync_stub)
@@ -970,13 +978,13 @@ def test_open_result_t130_and_status_aware_retry(
     due = refresh_open_result_debt(at=due_at, client_factory=FakeClient)
 
     assert before.provider_calls == 0
-    assert due.provider_calls == 1
+    assert due.provider_calls == (2 if provider_status == "FT" else 1)
     position = CapitalPosition.objects.get(config=config, match=match)
     if retry_minutes is None:
         assert position.next_result_check_at is None
         assert position.result_refresh_error == "WAITING_FOR_FIXTURE_RECONCILIATION"
     elif provider_status == "FT":
-        assert position.next_result_check_at == due_at
+        assert position.next_result_check_at == due_at + timedelta(minutes=30)
         assert position.result_refresh_error.startswith(
             "DATE_SWEEP_EXPECTED_FIXTURE_MISSING"
         )
@@ -1040,10 +1048,21 @@ def test_date_sweep_filters_and_coalesces_incidental_open_debt(
     def sync_stub(items, competitions):
         assert set(competitions) == {"99"}
         assert {item["fixture"]["id"] for item in items} == {8100, 8101}
-        Match.objects.filter(pk=first.pk).update(status_short="FT", outcome="HOME")
+        Match.objects.filter(pk=first.pk).update(
+            status_short="FT",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
+        )
         Match.objects.filter(pk=second.pk).update(
             status_short=incidental_status,
             outcome="HOME" if incidental_status == "FT" else "",
+            home_score=2 if incidental_status == "FT" else None,
+            away_score=1 if incidental_status == "FT" else None,
+            fulltime_home_score=2 if incidental_status == "FT" else None,
+            fulltime_away_score=1 if incidental_status == "FT" else None,
         )
         return None, {"8100": first, "8101": second}
 
@@ -1128,11 +1147,19 @@ def test_missing_due_fixture_uses_one_audited_directed_id_fallback(
     def sync_stub(items, competitions):
         assert [item["fixture"]["id"] for item in items] == [8200]
         assert set(competitions) == {"99"}
-        Match.objects.filter(pk=match.pk).update(status_short="FT", outcome="HOME")
+        Match.objects.filter(pk=match.pk).update(
+            status_short="FT",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
+        )
         return None, {"8200": match}
 
     monkeypatch.setattr("football.capital.runtime.sync_fixture_payloads", sync_stub)
-    result = refresh_open_result_debt(at=at, client_factory=client_factory)
+    with mock.patch("football.capital.runtime.timezone.now", return_value=at):
+        result = refresh_open_result_debt(at=at, client_factory=client_factory)
     assert result.provider_calls == 2
     assert result.settled == 1
     assert result.open_debt == 0
@@ -1236,7 +1263,7 @@ def test_open_batch_consumes_its_full_reserve_after_higher_priority(
     )
     result = refresh_open_result_debt(at=due_at, client_factory=FakeClient)
 
-    assert reserve["fixture"] + reserve["t30"] == higher_priority
+    assert reserve["fixture"] + reserve["t10"] == higher_priority
     assert reserve["open_result"] == 2
     assert result.provider_calls == expected_batches
     assert len(requests) == expected_batches
@@ -1475,7 +1502,7 @@ def test_quota_summary_and_command_are_provider_free(capsys):
     assert summary["quota"]["remaining"] == 90
     assert set(summary["reserve"]) == {
         "fixture",
-        "t30",
+        "t10",
         "open_result",
         "execution_quote",
         "total",

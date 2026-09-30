@@ -671,7 +671,12 @@ def test_terminal_match_without_api_authority_stays_open_until_canonical_refresh
         assert payloads == [{"fixture": {"id": 3000}}]
         assert set(competitions) == {"399"}
         Match.objects.filter(pk=match.pk).update(
-            status_short="FT", outcome=Match.OUTCOME_HOME
+            status_short="FT",
+            outcome=Match.OUTCOME_HOME,
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
         )
         return None, {"3000": match}
 
@@ -964,7 +969,13 @@ def test_unique_open_matches_use_one_date_sweep_provider_request(
         assert len(payloads) == 2
         assert set(competitions) == {"99"}
         Match.objects.filter(pk__in=(first.pk, second.pk)).update(
-            status_short="FT", status_long="Match Finished", outcome="HOME"
+            status_short="FT",
+            status_long="Match Finished",
+            outcome="HOME",
+            home_score=2,
+            away_score=1,
+            fulltime_home_score=2,
+            fulltime_away_score=1,
         )
         return None, {"1000": first, "1001": second}
 
