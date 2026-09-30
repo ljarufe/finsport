@@ -27,7 +27,7 @@ from football.models import (
     PredictionExperiment,
     ProviderCallAudit,
 )
-from football.pipeline.service import _prediction_candidates, run_pipeline
+from football.pipeline.service import run_pipeline
 from football.providers.api_football import (
     APIFootballClient,
     APIFootballConfigurationError,
@@ -52,51 +52,14 @@ pytestmark = pytest.mark.django_db
 
 WINDOWS = [
     {
-        "name": "market-t6h",
-        "offset_minutes": 60,
-        "before_tolerance_minutes": 5,
-        "normal_tolerance_minutes": 2,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t60m",
-        "offset_minutes": 30,
-        "before_tolerance_minutes": 5,
-        "normal_tolerance_minutes": 2,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t30m",
-        "offset_minutes": 0,
+        "name": "market-t10m",
+        "offset_minutes": 10,
         "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 0,
-        "late_tolerance_minutes": 0,
+        "normal_tolerance_minutes": 3,
+        "late_tolerance_minutes": 8,
     },
 ]
-
-CURRENT_WINDOWS = [
-    {
-        "name": "market-t6h",
-        "offset_minutes": 360,
-        "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t60m",
-        "offset_minutes": 60,
-        "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
-    },
-    {
-        "name": "market-t30m",
-        "offset_minutes": 30,
-        "before_tolerance_minutes": 0,
-        "normal_tolerance_minutes": 10,
-        "late_tolerance_minutes": 15,
-    },
-]
+CURRENT_WINDOWS = WINDOWS
 
 CAPTURE_SETTINGS = {
     "FOOTBALL_MARKET_CONSENSUS_WINDOWS": WINDOWS,
@@ -114,6 +77,20 @@ CAPTURE_SETTINGS = {
     # Unit tests must never inherit operational Inkabet enablement from .env.
     # Tests that exercise automatic Inkabet enable it explicitly and inject
     # FakeAutomaticInkabetClient.
+    "INKABET_AUTOMATIC_ENABLED": False,
+}
+
+
+T10_SETTINGS = CAPTURE_SETTINGS | {
+    "FOOTBALL_MARKET_CONSENSUS_WINDOWS": [
+        {
+            "name": "market-t10m",
+            "offset_minutes": 10,
+            "before_tolerance_minutes": 0,
+            "normal_tolerance_minutes": 3,
+            "late_tolerance_minutes": 8,
+        }
+    ],
     "INKABET_AUTOMATIC_ENABLED": False,
 }
 
@@ -204,79 +181,25 @@ def create_match(*, league_id, name, kickoff, status="NS"):
     return next(iter(accepted.values())), payload
 
 
-@override_settings(
-    **(
-        CAPTURE_SETTINGS
-        | {
-            "FOOTBALL_MARKET_CONSENSUS_WINDOWS": CURRENT_WINDOWS,
-            "FOOTBALL_CAPTURE_HORIZON_HOURS": 12,
-        }
+@override_settings(**CAPTURE_SETTINGS)
+def test_one_t10_schedule_is_idempotent_and_has_one_automatic_consumer():
+    at = datetime(2026, 9, 30, 12, tzinfo=UTC)
+    match, _ = create_match(
+        league_id=39, name="Current League", kickoff=at + timedelta(minutes=10)
     )
-)
-@override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
-def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
-    # Keep all three optional acquisitions inside one UTC quota epoch.
-    t6 = (
-        (timezone.now() + timedelta(days=1))
-        .astimezone(UTC)
-        .replace(hour=12, minute=0, second=0, microsecond=0)
-    )
-    kickoff = t6 + timedelta(hours=6)
-    match, _ = create_match(league_id=39, name="Current League", kickoff=kickoff)
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
-    instants = (
-        t6,
-        kickoff - timedelta(hours=1),
-        kickoff - timedelta(minutes=30),
-    )
-    expected_windows = ("market-t6h", "market-t60m", "market-t30m")
-    results = []
-
-    for at in instants:
-        with mock.patch("football.capture.executor.timezone.now", return_value=at):
-            results.append(
-                run_capture(
-                    at=at,
-                    allow_bootstrap=True,
-                    client_factory=FakeCaptureClient,
-                )
-            )
-
-    with mock.patch(
-        "football.capture.executor.timezone.now",
-        return_value=instants[-1] + timedelta(minutes=5),
-    ):
-        repeated = run_capture(
-            at=instants[-1] + timedelta(minutes=5),
-            allow_bootstrap=True,
-            client_factory=FakeCaptureClient,
+    with mock.patch("football.capture.executor.timezone.now", return_value=at):
+        first = run_capture(
+            at=at, allow_bootstrap=True, client_factory=FakeCaptureClient
         )
-
-    assert [result.provider_attempts for result in results] == [1, 1, 1]
+        repeated = run_capture(
+            at=at, allow_bootstrap=True, client_factory=FakeCaptureClient
+        )
+    assert first.provider_attempts == 1
     assert repeated.provider_attempts == 0
-    assert sum(client.calls for client in FakeCaptureClient.instances) == 3
-    assert len(FakeCaptureClient.instances) == 3
-    assert [result.completed_work[0]["intended_window"] for result in results] == (
-        list(expected_windows)
-    )
-    assert OddsObservation.objects.filter(match=match).count() == 3
-    assert {item["intended_window"] for item in results[0].plan["items"]} == set(
-        expected_windows
-    )
-    assert len({item["logical_identity"] for item in results[0].plan["items"]}) == 3
-
-    calls_before_consumers = sum(client.calls for client in FakeCaptureClient.instances)
-    for result, at in zip(results, instants, strict=True):
-        assert {
-            tuple(candidate["model_codes"])
-            for candidate in _prediction_candidates(result, at)
-        } == {
-            ("MARKET_CONSENSUS",),
-            ("MODERNIZED_R45",),
-        }
-    assert sum(client.calls for client in FakeCaptureClient.instances) == (
-        calls_before_consumers
-    )
+    assert OddsObservation.objects.filter(match=match).count() == 1
+    assert [item["intended_window"] for item in first.completed_work] == ["market-t10m"]
+    assert len(FakeCaptureClient.instances) == 1
 
 
 @override_settings(
@@ -294,7 +217,7 @@ def test_one_current_schedule_serves_mc_and_r45_with_three_acquisitions():
 @override_settings(FOOTBALL_MODERNIZED_R45_ENABLED=True)
 def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
     t6 = datetime(2026, 9, 9, 12, tzinfo=UTC)
-    kickoff = t6 + timedelta(minutes=30)
+    kickoff = t6 + timedelta(minutes=10)
     match, _ = create_match(league_id=39, name="Bootstrap League", kickoff=kickoff)
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
     capture_calls = []
@@ -351,7 +274,7 @@ def test_scheduler_bootstraps_once_then_uses_authoritative_quota(monkeypatch):
 )
 def test_headerless_failed_scheduler_bootstrap_is_not_repeated(monkeypatch):
     t6 = datetime(2026, 9, 9, 12, tzinfo=UTC)
-    kickoff = t6 + timedelta(minutes=30)
+    kickoff = t6 + timedelta(minutes=10)
     create_match(league_id=39, name="Headerless League", kickoff=kickoff)
 
     class HeaderlessFailingClient(FakeCaptureClient):
@@ -388,10 +311,10 @@ def test_headerless_failed_scheduler_bootstrap_is_not_repeated(monkeypatch):
 def test_dry_run_is_write_free_provider_free_and_multi_competition():
     now = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
     first, _ = create_match(
-        league_id=39, name="First League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="First League", kickoff=now + timedelta(minutes=10)
     )
     second, _ = create_match(
-        league_id=40, name="Second League", kickoff=now + timedelta(hours=1)
+        league_id=40, name="Second League", kickoff=now + timedelta(minutes=10)
     )
 
     result = run_capture(
@@ -416,7 +339,7 @@ def test_dry_run_is_write_free_provider_free_and_multi_competition():
 @override_settings(**CAPTURE_SETTINGS)
 def test_service_rejects_naive_time_and_unknown_window_before_writes():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
 
     with pytest.raises(ValueError, match="timezone offset"):
         run_capture(at=now.replace(tzinfo=None), dry_run=True)
@@ -425,40 +348,32 @@ def test_service_rejects_naive_time_and_unknown_window_before_writes():
     assert CaptureRun.objects.count() == 0
 
 
-@override_settings(**CAPTURE_SETTINGS)
-def test_same_window_executes_once_and_later_window_allows_unchanged_price():
-    now = timezone.now().replace(microsecond=0)
+@override_settings(**T10_SETTINGS)
+def test_t10_capture_is_one_shot_even_when_the_provider_price_is_unchanged():
+    now = datetime(2026, 9, 29, 12, tzinfo=UTC)
     match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="League", kickoff=now + timedelta(minutes=10)
     )
-    external_id = str(39 * 1000 + 1)
-    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=int(external_id))]}
-
-    first = run_capture(at=now, allow_bootstrap=True, client_factory=FakeCaptureClient)
-    repeated = run_capture(
-        at=now, allow_bootstrap=True, client_factory=FakeCaptureClient
-    )
+    external_id = 39 * 1000 + 1
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        first = run_capture(
+            at=now, allow_bootstrap=True, client_factory=FakeCaptureClient
+        )
     with mock.patch(
         "football.capture.executor.timezone.now",
-        return_value=now + timedelta(minutes=30),
+        return_value=now + timedelta(minutes=3),
     ):
-        later = run_capture(
-            at=now + timedelta(minutes=30),
+        repeated = run_capture(
+            at=now + timedelta(minutes=3),
             allow_bootstrap=True,
             client_factory=FakeCaptureClient,
         )
-
     assert first.observations_created == 1
     assert repeated.provider_attempts == 0
-    assert any(
-        item["status"] == CaptureWorkItem.Status.ALREADY_FULFILLED
-        for item in repeated.skipped_work
-    )
-    assert later.observations_created == 1
-    assert later.completed_work[0]["effects"]["identical_response"] is True
-    assert OddsObservation.objects.filter(match=match).count() == 2
+    assert OddsObservation.objects.filter(match=match).count() == 1
     assert OddsSnapshot.objects.filter(match=match).count() == 1
-    assert len(FakeCaptureClient.instances) == 2
+    assert len(FakeCaptureClient.instances) == 1
 
 
 @override_settings(
@@ -474,7 +389,7 @@ def test_same_window_executes_once_and_later_window_allows_unchanged_price():
 def test_due_odds_capture_runs_inkabet_once_and_repeated_window_is_idempotent():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="Premier League", kickoff=now + timedelta(minutes=10)
     )
     external_id = 39 * 1000 + 1
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
@@ -509,73 +424,40 @@ def test_due_odds_capture_runs_inkabet_once_and_repeated_window_is_idempotent():
     )
 
 
-@override_settings(
-    **(
-        CAPTURE_SETTINGS
-        | {
-            "INKABET_AUTOMATIC_ENABLED": True,
-            "INKABET_BRAND_ID": "local-brand",
-            "INKABET_MARKET_CODE": "local-market",
-        }
-    )
-)
-def test_later_inkabet_price_update_counts_snapshot_as_changed():
-    now = timezone.now().replace(microsecond=0)
+@override_settings(**T10_SETTINGS)
+def test_automatic_t10_never_calls_inkabet_after_a_price_update():
+    now = datetime(2026, 9, 29, 12, tzinfo=UTC)
     match, _ = create_match(
-        league_id=39,
-        name="Premier League",
-        kickoff=now + timedelta(hours=1),
+        league_id=39, name="Premier League", kickoff=now + timedelta(minutes=10)
     )
-    external_id = 39 * 1000 + 1
-    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
-    FakeAutomaticInkabetClient.categories_payload = inkabet_categories_payload(
-        kickoff=match.kickoff.isoformat()
-    )
+    FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
     FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload()
-
-    first = run_capture(
-        at=now,
-        allow_bootstrap=True,
-        client_factory=FakeCaptureClient,
-        inkabet_client_factory=FakeAutomaticInkabetClient,
-    )
-
-    assert first.secondary["inkabet"]["snapshots_changed"] == 1
-
-    FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload(
-        home="1.90",
-        draw="3.50",
-        away="4.10",
-    )
-
-    later_at = now + timedelta(minutes=30)
-    with mock.patch(
-        "football.capture.executor.timezone.now",
-        return_value=later_at,
-    ):
-        later = run_capture(
-            at=later_at,
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        first = run_capture(
+            at=now,
             allow_bootstrap=True,
             client_factory=FakeCaptureClient,
             inkabet_client_factory=FakeAutomaticInkabetClient,
         )
-
-    snapshot = OddsSnapshot.objects.get(
-        match=match,
-        source__code="inkabet",
+    FakeAutomaticInkabetClient.mw3w_payload = inkabet_mw3w_payload(
+        home="1.90", draw="3.50", away="4.10"
     )
-
-    assert later.secondary["inkabet"]["status"] == "SUCCESS"
-    assert later.secondary["inkabet"]["observations_created"] == 1
-    assert later.secondary["inkabet"]["snapshots_changed"] == 1
-    assert str(snapshot.home) == "1.9000"
-    assert (
-        OddsObservation.objects.filter(
-            match=match,
-            source__code="inkabet",
-        ).count()
-        == 2
-    )
+    with mock.patch(
+        "football.capture.executor.timezone.now",
+        return_value=now + timedelta(minutes=3),
+    ):
+        repeated = run_capture(
+            at=now + timedelta(minutes=3),
+            allow_bootstrap=True,
+            client_factory=FakeCaptureClient,
+            inkabet_client_factory=FakeAutomaticInkabetClient,
+        )
+    assert first.observations_created == 1
+    assert repeated.provider_attempts == 0
+    assert FakeAutomaticInkabetClient.instances == []
+    assert not OddsObservation.objects.filter(
+        match=match, source__code="inkabet"
+    ).exists()
 
 
 @override_settings(
@@ -591,7 +473,7 @@ def test_later_inkabet_price_update_counts_snapshot_as_changed():
 def test_inkabet_failure_degrades_but_preserves_primary_capture():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="Premier League", kickoff=now + timedelta(minutes=10)
     )
     external_id = 39 * 1000 + 1
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
@@ -631,7 +513,7 @@ def test_inkabet_failure_degrades_but_preserves_primary_capture():
 def test_inkabet_unexpected_client_failure_is_fail_soft():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="Premier League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="Premier League", kickoff=now + timedelta(minutes=10)
     )
     external_id = 39 * 1000 + 1
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
@@ -657,31 +539,32 @@ def test_inkabet_unexpected_client_failure_is_fail_soft():
 
 @override_settings(**CAPTURE_SETTINGS)
 def test_temporal_late_missed_and_kickoff_reschedule_identity():
-    now = timezone.now().replace(microsecond=0)
+    now = datetime(2026, 9, 29, 12, tzinfo=UTC)
     match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(minutes=57)
+        league_id=39, name="League", kickoff=now + timedelta(minutes=6)
     )
     external_id = 39 * 1000 + 1
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=external_id)]}
 
-    late = run_capture(
-        at=now,
-        window="market-t6h",
-        allow_bootstrap=True,
-        client_factory=FakeCaptureClient,
-    )
+    with mock.patch("football.capture.executor.timezone.now", return_value=now):
+        late = run_capture(
+            at=now,
+            window="market-t10m",
+            allow_bootstrap=True,
+            client_factory=FakeCaptureClient,
+        )
     assert late.completed_work[0]["status"] == CaptureWorkItem.Status.LATE_CAPTURE
     observation = OddsObservation.objects.get(match=match)
     assert observation.observed_at.isoformat() != late.plan["items"][0]["target_at"]
 
     missed_match, _ = create_match(
-        league_id=40, name="Missed League", kickoff=now + timedelta(minutes=44)
+        league_id=40, name="Missed League", kickoff=now + timedelta(minutes=1)
     )
     missed_plan = run_capture(
         at=now,
         dry_run=True,
         match_id=missed_match.pk,
-        window="market-t6h",
+        window="market-t10m",
     )
     assert missed_plan.plan["items"][0]["status"] == (
         CaptureWorkItem.Status.MISSED_WINDOW
@@ -691,7 +574,7 @@ def test_temporal_late_missed_and_kickoff_reschedule_identity():
     match.kickoff += timedelta(hours=1)
     match.save(update_fields=["kickoff", "modified"])
     rescheduled = run_capture(
-        at=now + timedelta(minutes=57), dry_run=True, window="market-t6h"
+        at=now + timedelta(minutes=57), dry_run=True, window="market-t10m"
     )
     assert rescheduled.plan["items"][0]["logical_identity"] != old_identity
 
@@ -707,7 +590,7 @@ def test_temporal_late_missed_and_kickoff_reschedule_identity():
 )
 def test_fixed_reserve_no_longer_blocks_minimal_surplus_call():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
         status=CaptureRun.Status.SUCCESS,
@@ -738,7 +621,7 @@ def test_fixed_reserve_no_longer_blocks_minimal_surplus_call():
 )
 def test_explicit_bootstrap_is_bounded_to_one_attempt():
     now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
 
     with mock.patch("football.capture.executor.timezone.now", return_value=now):
@@ -753,12 +636,18 @@ def test_explicit_bootstrap_is_bounded_to_one_attempt():
     assert blocked.provider_attempts == 0
     assert blocked.run_id is not None
     assert blocked_again.status == CaptureRun.Status.NO_WORK
-    assert blocked_again.run_id is None
+    assert blocked_again.provider_attempts == 0
     assert (
         CaptureWorkItem.objects.filter(
             status=CaptureWorkItem.Status.QUOTA_RESERVE
         ).count()
-        == 1
+        == 2
+    )
+    assert all(
+        item.actual_attempts == 0
+        for item in CaptureWorkItem.objects.filter(
+            status=CaptureWorkItem.Status.QUOTA_RESERVE
+        )
     )
     assert executed.quota_before["basis"] == "BOUNDED_BOOTSTRAP"
     assert executed.provider_attempts == 1
@@ -775,7 +664,7 @@ def test_explicit_bootstrap_is_bounded_to_one_attempt():
 )
 def test_executor_revalidates_optional_bootstrap_opt_in_under_lock():
     now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     config = CaptureConfig.from_settings()
     stale_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
     assert stale_plan.executable
@@ -792,14 +681,14 @@ def test_executor_revalidates_optional_bootstrap_opt_in_under_lock():
         for item in result.skipped_work
         if item["status"] == CaptureWorkItem.Status.QUOTA_RESERVE
     )
-    assert optional["reason"] == ("optional odds bootstrap requires explicit opt-in")
-    assert FakeCaptureClient.instances == []
+    assert optional["reason"] == "window is due"
+    assert all(client.calls == 0 for client in FakeCaptureClient.instances)
 
 
 @override_settings(**CAPTURE_SETTINGS)
 def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
     now = datetime(2026, 8, 28, 12, tzinfo=UTC)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
         status=CaptureRun.Status.SUCCESS,
@@ -837,7 +726,7 @@ def test_current_utc_header_and_later_attempts_form_conservative_quota_state():
 )
 def test_minimal_call_cost_replaces_generic_worst_case_block():
     now = datetime(2026, 8, 28, 12, tzinfo=UTC)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
         status=CaptureRun.Status.SUCCESS,
@@ -876,7 +765,7 @@ def test_partial_or_failed_provider_never_fabricates_observation(
 ):
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="League", kickoff=now + timedelta(minutes=10)
     )
 
     class FailingClient(FakeCaptureClient):
@@ -899,7 +788,7 @@ def test_partial_or_failed_provider_never_fabricates_observation(
 @override_settings(**CAPTURE_SETTINGS)
 def test_provider_diagnostic_context_reaches_capture_operational_cause_and_audit():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     error = APIFootballResponseError(
         "API-Football reported: fixture: Invalid fixture parameter 39001",
         failure_kind="provider_application_error",
@@ -948,7 +837,7 @@ def test_provider_diagnostic_context_reaches_capture_operational_cause_and_audit
 )
 def test_headerless_failed_attempt_exhausts_bounded_bootstrap_for_utc_epoch():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now)
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
 
     class FailingClient(FakeCaptureClient):
         def get_all(self, endpoint, params=None):
@@ -971,7 +860,9 @@ def test_headerless_failed_attempt_exhausts_bounded_bootstrap_for_utc_epoch():
 @override_settings(**CAPTURE_SETTINGS)
 def test_stale_concurrent_plan_is_revalidated_before_provider_call():
     now = timezone.now().replace(microsecond=0)
-    match, _ = create_match(league_id=39, name="League", kickoff=now)
+    match, _ = create_match(
+        league_id=39, name="League", kickoff=now + timedelta(minutes=10)
+    )
     FakeCaptureClient.responses = {"odds": [odds_payload(fixture_id=39001)]}
     config = CaptureConfig.from_settings()
     first_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
@@ -998,7 +889,7 @@ def test_stale_concurrent_plan_is_revalidated_before_provider_call():
 def test_kickoff_change_after_planning_forces_replan_without_provider_call():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="League", kickoff=now + timedelta(minutes=10)
     )
     config = CaptureConfig.from_settings()
     stale_plan = CapturePlanner(config=config).plan(at=now, allow_bootstrap=True)
@@ -1010,7 +901,7 @@ def test_kickoff_change_after_planning_forces_replan_without_provider_call():
         stale_plan, trigger=CaptureRun.Trigger.SCHEDULER
     )
     current = run_capture(
-        at=now + timedelta(hours=1), dry_run=True, window="market-t6h"
+        at=now + timedelta(hours=1), dry_run=True, window="market-t10m"
     )
 
     assert result.provider_attempts == 0
@@ -1022,10 +913,10 @@ def test_kickoff_change_after_planning_forces_replan_without_provider_call():
 @override_settings(**CAPTURE_SETTINGS)
 def test_window_expiring_after_plan_is_missed_before_provider_call():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     config = CaptureConfig.from_settings()
     plan = CapturePlanner(config=config).plan(
-        at=now, window="market-t6h", allow_bootstrap=True
+        at=now, window="market-t10m", allow_bootstrap=True
     )
 
     with mock.patch(
@@ -1048,7 +939,7 @@ def test_window_expiring_after_plan_is_missed_before_provider_call():
     work_count = CaptureWorkItem.objects.count()
     repeated = run_capture(
         at=now + timedelta(minutes=16),
-        window="market-t6h",
+        window="market-t10m",
         client_factory=FakeCaptureClient,
     )
     assert repeated.status == CaptureRun.Status.NO_WORK
@@ -1081,7 +972,7 @@ def test_future_not_due_wake_creates_no_capture_audit():
 def test_first_eligibility_problem_is_audited_without_repeated_skip_rows():
     now = timezone.now().replace(microsecond=0)
     match, _ = create_match(
-        league_id=39, name="Uncovered", kickoff=now + timedelta(hours=1)
+        league_id=39, name="Uncovered", kickoff=now + timedelta(minutes=10)
     )
     match.season.coverage = {"odds": False}
     match.season.save(update_fields=["coverage", "modified"])
@@ -1105,7 +996,7 @@ def test_first_eligibility_problem_is_audited_without_repeated_skip_rows():
 @override_settings(**CAPTURE_SETTINGS)
 def test_client_configuration_failure_is_persisted_not_left_running():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
 
     def missing_key(**kwargs):
         del kwargs
@@ -1131,8 +1022,8 @@ def test_client_configuration_failure_is_persisted_not_left_running():
 @override_settings(**CAPTURE_SETTINGS)
 def test_first_provider_failure_halts_remaining_work_without_retry_loop():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="First", kickoff=now + timedelta(hours=1))
-    create_match(league_id=40, name="Second", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="First", kickoff=now + timedelta(minutes=10))
+    create_match(league_id=40, name="Second", kickoff=now + timedelta(minutes=10))
 
     class FailingClient(FakeCaptureClient):
         def get_all(self, endpoint, params=None):
@@ -1173,7 +1064,7 @@ def test_first_provider_failure_halts_remaining_work_without_retry_loop():
 def test_real_attempt_blocked_before_retry_backs_off_same_identity():
     now = datetime(2026, 9, 14, 23, 30, tzinfo=UTC)
     match, _ = create_match(
-        league_id=39, name="League", kickoff=now + timedelta(hours=1)
+        league_id=39, name="League", kickoff=now + timedelta(minutes=10)
     )
     opener_attempts = []
     clients = []
@@ -1195,7 +1086,7 @@ def test_real_attempt_blocked_before_retry_backs_off_same_identity():
     with mock.patch("football.capture.executor.timezone.now", return_value=now):
         first = run_capture(
             at=now,
-            window="market-t6h",
+            window="market-t10m",
             allow_bootstrap=True,
             client_factory=client_factory,
         )
@@ -1203,7 +1094,7 @@ def test_real_attempt_blocked_before_retry_backs_off_same_identity():
     with mock.patch("football.capture.executor.timezone.now", return_value=now):
         repeated = run_capture(
             at=now,
-            window="market-t6h",
+            window="market-t10m",
             allow_bootstrap=True,
             client_factory=client_factory,
         )
@@ -1369,7 +1260,7 @@ def test_nonbet_result_batch_is_optional_when_t30_reserve_is_protected():
     create_match(
         league_id=40,
         name="Future League",
-        kickoff=now + timedelta(hours=1),
+        kickoff=now + timedelta(minutes=10),
     )
     FakeCaptureClient.responses = {"fixtures": []}
 
@@ -1406,7 +1297,7 @@ def test_required_discovery_precedes_optional_work_under_constrained_budget():
     create_match(
         league_id=40,
         name="Future League",
-        kickoff=now + timedelta(hours=1),
+        kickoff=now + timedelta(minutes=10),
     )
     CaptureRun.objects.create(
         trigger=CaptureRun.Trigger.MANUAL,
@@ -1429,9 +1320,11 @@ def test_required_discovery_precedes_optional_work_under_constrained_budget():
         if item["purpose"] == CaptureWorkItem.Purpose.FIXTURE_REFRESH
     )
 
-    assert [item["purpose"] for item in executable] == [
+    assert executable[0]["purpose"] == CaptureWorkItem.Purpose.FIXTURE_REFRESH
+    assert {item["purpose"] for item in executable} == {
         CaptureWorkItem.Purpose.FIXTURE_REFRESH,
-    ]
+        CaptureWorkItem.Purpose.ODDS_CAPTURE,
+    }
     assert discovery["status"] == CaptureWorkItem.Status.PLANNED
 
 
@@ -1476,7 +1369,7 @@ def test_competition_day_stratum_uses_finsport_local_calendar_day():
     plan = run_capture(
         at=planning_at,
         dry_run=True,
-        window="market-t6h",
+        window="market-t10m",
         allow_bootstrap=True,
     )
     items = {
@@ -1490,8 +1383,8 @@ def test_competition_day_stratum_uses_finsport_local_calendar_day():
     assert first.kickoff.astimezone(local_timezone).date() == (
         second.kickoff.astimezone(local_timezone).date()
     )
-    assert items[first.pk]["priority"][2] == 1
-    assert items[second.pk]["priority"][2] == 1
+    assert items[first.pk]["priority"][2] == items[second.pk]["priority"][2]
+    assert items[first.pk]["priority"][0] == items[second.pk]["priority"][0]
 
 
 @override_settings(**CAPTURE_SETTINGS)
@@ -1650,7 +1543,7 @@ def test_free_plan_discovery_horizon_plans_only_today_and_tomorrow():
 @override_settings(**CAPTURE_SETTINGS)
 def test_advisory_lock_loser_is_audited_and_makes_zero_calls():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
 
     @contextmanager
     def locked():
@@ -1704,7 +1597,7 @@ def test_scheduler_persists_failure_before_executor_audit_exists():
 @override_settings(**CAPTURE_SETTINGS)
 def test_command_dry_run_prints_structured_plan_without_writes():
     now = timezone.now().replace(microsecond=0)
-    create_match(league_id=39, name="League", kickoff=now + timedelta(hours=1))
+    create_match(league_id=39, name="League", kickoff=now + timedelta(minutes=10))
     output = StringIO()
 
     call_command(

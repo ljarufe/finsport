@@ -138,13 +138,6 @@ def request_historical_bootstrap(
             "modified",
         ]
     )
-    operationally_complete = historical_coverage_is_current(competition, coverage)
-    if activate and operationally_complete:
-        competition.enabled = True
-        competition.save(update_fields=["enabled", "modified"])
-    if competition.enabled and not operationally_complete:
-        competition.enabled = False
-        competition.save(update_fields=["enabled", "modified"])
     event_code = (
         "HISTORICAL_BOOTSTRAP_MANUAL_RETRY_REQUESTED"
         if reason == "MANUAL_RETRY_REQUESTED"
@@ -160,21 +153,6 @@ def request_historical_bootstrap(
         competition_id=competition.pk,
         context={"activation_requested": coverage.activation_requested},
     )
-    if activate and not operationally_complete:
-        emit_event(
-            event_code="HISTORICAL_ACTIVATION_BLOCKED",
-            severity="WARNING",
-            component="historical_ingestion",
-            operation="activation",
-            outcome="BLOCKED",
-            human_summary="Competition activation remains blocked by incomplete historical coverage.",
-            competition_id=competition.pk,
-            context={
-                "status": coverage.status,
-                "reason": coverage.reason,
-                "automatic_retry": False,
-            },
-        )
     return coverage
 
 
@@ -213,14 +191,6 @@ def _finish(
         "issues": (issues or [])[:100],
     }
     coverage.save()
-    competition = coverage.competition
-    should_enable = (
-        historical_coverage_is_current(coverage.competition, coverage)
-        and coverage.activation_requested
-    )
-    if competition.enabled != should_enable:
-        competition.enabled = should_enable
-        competition.save(update_fields=["enabled", "modified"])
     severity = "INFO" if status == HistoricalCoverage.Status.COMPLETE else "WARNING"
     if status == HistoricalCoverage.Status.FAILED:
         severity = "ERROR"
@@ -233,7 +203,7 @@ def _finish(
         failure_kind="historical_ingestion" if error else "",
         human_summary="One-shot completed-season historical ingestion reached a terminal state.",
         exception=error if status == HistoricalCoverage.Status.FAILED else None,
-        competition_id=competition.pk,
+        competition_id=coverage.competition_id,
         context={
             "source": coverage.source.code if coverage.source_id else "",
             "required_seasons": coverage.required_seasons,
@@ -247,7 +217,7 @@ def _finish(
             "ambiguity_count": coverage.ambiguity_count,
             "conflict_count": coverage.conflict_count,
             "reason": coverage.reason,
-            "activated": competition.enabled,
+            "live_enabled": coverage.competition.enabled,
             "automatic_retry": False,
         },
     )

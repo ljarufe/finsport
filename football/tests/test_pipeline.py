@@ -555,7 +555,7 @@ def test_beat_enabled_pipeline_is_the_only_automatic_capture_owner(monkeypatch):
     configured = runpy.run_path("finsport/settings.py")
 
     assert configured["FOOTBALL_PIPELINE_ENABLED"] is True
-    assert configured["FOOTBALL_CAPTURE_WAKE_SECONDS"] == 300
+    assert configured["FOOTBALL_CAPTURE_WAKE_SECONDS"] == 180
     assert configured["CELERY_BEAT_SCHEDULE"] == {
         "football-pipeline-wake": {
             "task": "football.pipeline.wake",

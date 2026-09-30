@@ -138,11 +138,11 @@ def competition_with_catalogue():
 
 
 @pytest.mark.django_db
-def test_activation_is_blocked_until_every_completed_season_is_covered():
+def test_historical_readiness_does_not_change_live_participation():
     competition, completed, current = competition_with_catalogue()
     coverage = request_historical_bootstrap(competition)
     competition.refresh_from_db()
-    assert competition.enabled is False
+    assert competition.enabled is True
     assert coverage.status == HistoricalCoverage.Status.NOT_ATTEMPTED
 
     coverage = process_historical_bootstrap(
@@ -194,7 +194,7 @@ def test_complete_basis_becomes_stale_and_explicit_retry_restores_it():
     assert _dixon_coles_candidates(at) == []
     request_historical_bootstrap(competition, activate=True)
     competition.refresh_from_db()
-    assert competition.enabled is False
+    assert competition.enabled is True
 
     request_historical_bootstrap(
         competition, activate=True, reason="MANUAL_RETRY_REQUESTED"
@@ -230,7 +230,7 @@ def test_missing_season_and_source_failure_are_terminal_without_daily_retry():
     competition.refresh_from_db()
     assert partial.status == HistoricalCoverage.Status.PARTIAL
     assert partial.unresolved_seasons == [completed.year]
-    assert competition.enabled is False
+    assert competition.enabled is True
     assert partial.diagnostics["automatic_retry"] is False
 
     partial.status = HistoricalCoverage.Status.NOT_ATTEMPTED
@@ -252,7 +252,7 @@ def test_missing_season_and_source_failure_are_terminal_without_daily_retry():
 
 
 @pytest.mark.django_db
-def test_unexpected_adapter_failure_is_failed_and_disables_competition():
+def test_unexpected_adapter_failure_is_failed_without_disabling_live_competition():
     competition, completed, _ = competition_with_catalogue()
     request_historical_bootstrap(competition)
     failed = process_historical_bootstrap(
@@ -262,7 +262,7 @@ def test_unexpected_adapter_failure_is_failed_and_disables_competition():
     assert failed.status == HistoricalCoverage.Status.FAILED
     assert failed.reason == "UNEXPECTED_HISTORICAL_INGESTION_FAILURE"
     assert failed.diagnostics["error_class"] == "RuntimeError"
-    assert competition.enabled is False
+    assert competition.enabled is True
 
 
 @pytest.mark.django_db
@@ -911,7 +911,7 @@ def test_admin_has_no_direct_enabled_edit_and_command_request_does_not_fetch():
         )
     assert network.call_count == 0
     competition.refresh_from_db()
-    assert competition.enabled is False
+    assert competition.enabled is True
     assert '"automatic_retry": false' in output.getvalue()
 
 
@@ -1206,7 +1206,7 @@ def test_brazil_leading_source_gap_does_not_block_complete_supported_window():
     assert coverage.required_seasons == [2012]
     assert coverage.covered_seasons == [2012]
     assert coverage.unresolved_seasons == []
-    assert competition.enabled is True
+    assert competition.enabled is False
     assert coverage.reason == "ALL_SOURCE_SUPPORTED_COMPLETED_SEASONS_COVERED"
 
     outside = [
@@ -1298,4 +1298,4 @@ def test_mls_complete_direct_source_can_pass_the_data_driven_gate():
     competition.refresh_from_db()
     assert coverage.status == HistoricalCoverage.Status.COMPLETE
     assert coverage.covered_seasons == [2012, 2013]
-    assert competition.enabled is True
+    assert competition.enabled is False

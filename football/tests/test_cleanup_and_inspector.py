@@ -34,6 +34,9 @@ def test_only_supported_custom_football_commands_and_legacy_paths_are_absent():
         "run_decision_experiment",
         "run_capital_experiment",
         "run_integrated_experiment",
+        "run_fs023_experiment",
+        "bootstrap_bsd_results",
+        "verify_fs023_runtime",
     }
     for name in (
         "get_leagues",

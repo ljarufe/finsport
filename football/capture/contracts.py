@@ -4,11 +4,7 @@ from typing import Any
 
 from django.conf import settings
 
-MARKET_CONSENSUS_WINDOW_NAMES = (
-    "market-t6h",
-    "market-t60m",
-    "market-t30m",
-)
+MARKET_CONSENSUS_WINDOW_NAMES = ("market-t10m",)
 
 
 @dataclass(frozen=True)
@@ -69,10 +65,16 @@ class CaptureConfig:
         if len(names) != len(set(names)) or set(names) != set(
             MARKET_CONSENSUS_WINDOW_NAMES
         ):
-            raise ValueError(
-                "Market Consensus windows require exactly market-t6h, "
-                "market-t60m, and market-t30m."
-            )
+            raise ValueError("Automatic Market Consensus requires only market-t10m.")
+        expected_t10 = {
+            "name": "market-t10m",
+            "offset_minutes": 10,
+            "before_tolerance_minutes": 0,
+            "normal_tolerance_minutes": 3,
+            "late_tolerance_minutes": 8,
+        }
+        if windows[0].snapshot() != expected_t10:
+            raise ValueError("T10 timing must match the frozen FS-023 contract.")
         if any(
             window.offset.total_seconds() < 0
             or window.before_tolerance.total_seconds() < 0

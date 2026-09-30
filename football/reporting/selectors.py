@@ -86,12 +86,22 @@ def _deployment():
     if not deployment or not deployment.config_id:
         return None, None
     config = deployment.config
-    if not (
-        deployment.selection.get("winner") == 209
-        and not deployment.real_betting
-        and config.identity == CONFIG_IDENTITY
-        and config.automatic
+    if (
+        deployment.selection.get("winner") != 209
+        or deployment.real_betting
+        or not config.automatic
     ):
+        return None, None
+    if deployment.active_epoch_id:
+        from football.strategy.deployment import verify_config
+
+        if config.strategy_epoch_id != deployment.active_epoch_id:
+            return None, None
+        try:
+            verify_config(deployment)
+        except RuntimeError:
+            return None, None
+    elif config.identity != CONFIG_IDENTITY:
         return None, None
     return deployment, config
 
@@ -707,7 +717,12 @@ def match_detail(match_id):
             status__in=CAPTURE_STATUSES,
             source__code="api_football",
             executed_at__gte=deployment.activated_at,
-            intended_window__in=("market-t6h", "market-t60m", "market-t30m"),
+            intended_window__in=(
+                "market-t6h",
+                "market-t60m",
+                "market-t30m",
+                "market-t10m",
+            ),
             executed_at__isnull=False,
             completed_at__isnull=False,
             run__completed_at__isnull=False,
@@ -729,6 +744,7 @@ def match_detail(match_id):
                     "market-t6h": "T−6 h",
                     "market-t60m": "T−60 min",
                     "market-t30m": "T−30 min",
+                    "market-t10m": "T−10 min",
                 }[work.intended_window],
                 "at": work.executed_at,
                 "quotes": [

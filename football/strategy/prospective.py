@@ -44,11 +44,19 @@ def evidence_identity(work):
 def capture_reason(work, deployment):
     if not work.match.competition.enabled:
         return "INELIGIBLE"
+    if work.status == CaptureWorkItem.Status.MISSED_STRATEGY_WINDOW:
+        return "MISSED_STRATEGY_WINDOW"
     if work.status == CaptureWorkItem.Status.MISSED_WINDOW:
         return "MISSED_EXECUTION_WINDOW"
+    window = (
+        deployment.active_epoch.binding.contract["capture_window"]
+        if deployment.active_epoch_id
+        else "market-t30m"
+    )
+    offset = timedelta(minutes=10 if window == "market-t10m" else 30)
     if (
         work.purpose != CaptureWorkItem.Purpose.ODDS_CAPTURE
-        or work.intended_window != "market-t30m"
+        or work.intended_window != window
         or work.status not in ACCEPTED_CAPTURE_STATUSES
         or not work.executed_at
         or not work.completed_at
@@ -59,7 +67,7 @@ def capture_reason(work, deployment):
         work.not_before
         and work.not_after
         and work.target_at
-        and work.target_at == work.match.kickoff - timedelta(minutes=30)
+        and work.target_at == work.match.kickoff - offset
         and work.not_before <= work.executed_at <= work.not_after
         and work.executed_at
         <= work.completed_at
@@ -116,7 +124,12 @@ def evaluate_work(work, *, at):
     if at >= work.match.kickoff:
         return None, "MISSED_EXECUTION_WINDOW"
     identity = evidence_identity(work)
-    logical = f"fs022:{deployment.cutover_id}:{work.logical_identity}"
+    era = (
+        f"fs023:{deployment.active_epoch_id}"
+        if deployment.active_epoch_id
+        else f"fs022:{deployment.cutover_id}"
+    )
+    logical = f"{era}:{work.logical_identity}"
     experiment, created = PredictionExperiment.objects.get_or_create(
         competition=work.match.competition,
         mode=PredictionExperiment.MODE_PROSPECTIVE,
@@ -397,12 +410,19 @@ def reconcile_global(capture_run_id, *, at):
             continue
         try:
             with transaction.atomic():
+                era = (
+                    f"fs023:{deployment.active_epoch_id}"
+                    if deployment.active_epoch_id
+                    else f"fs022:{deployment.cutover_id}"
+                )
                 already_evaluated = PredictionExperiment.objects.filter(
-                    logical_identity=f"fs022:{deployment.cutover_id}:{work.logical_identity}"
+                    logical_identity=f"{era}:{work.logical_identity}"
                 ).exists()
                 decision, reason = evaluate_work(work, at=evaluation_at)
                 if reason:
-                    if reason == "MISSED_EXECUTION_WINDOW":
+                    if reason == "MISSED_STRATEGY_WINDOW":
+                        status = "MISSED_STRATEGY_WINDOW"
+                    elif reason == "MISSED_EXECUTION_WINDOW":
                         status = "MISSED_WINDOW"
                     elif reason in {
                         "STRATEGY_DRAINING",

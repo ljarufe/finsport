@@ -14,6 +14,7 @@ from football.models import (
     Match,
     MatchSourceRef,
     ReconciliationStatus,
+    ResultProviderObservation,
     Source,
 )
 from football.providers.api_football import (
@@ -26,6 +27,7 @@ from football.quota import quota_state as shared_quota_state
 from football.sync import API_FOOTBALL_CODE, FINISHED_STATUSES
 
 from .contracts import CapturePlan, PlannedWork, QuotaState
+from .olv import competition_score
 
 PRE_MATCH_STATUSES = {"NS", "TBD"}
 TERMINAL_NO_OUTCOME_STATUSES = {"CANC", "ABD"}
@@ -146,7 +148,7 @@ class CapturePlanner:
                     intended_window="nonbet-result-date",
                     target_at=slot,
                     not_before=slot,
-                    priority=(3, batch[0].kickoff, -1, batch[0].pk),
+                    priority=(4, batch[0].kickoff, -1, batch[0].pk),
                     priority_reason="surplus-only recent-date non-bet result completion",
                     reason=reason,
                     estimated_min_cost=1 if status == "PLANNED" else 0,
@@ -155,7 +157,124 @@ class CapturePlanner:
                     target_external_ids=external_ids,
                 )
             )
+        items.extend(self._shadow_items(at, source, match_id))
+        items.extend(self._sentinel_items(at, source, match_id))
         return items
+
+    def _shadow_items(self, at, source, match_id):
+        """One surplus date sweep per Lima day for terminal BSD shadow samples."""
+        if not settings.BSD_API_TOKEN or match_id is not None:
+            return []
+        day = at.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+        identity = f"{source.code}:bsd-shadow:{day.isoformat()}"
+        rows = ResultProviderObservation.objects.filter(
+            provider="BSD",
+            status_short="FT",
+            match__season__competition__result_route__bsd_state="BSD_SHADOW_VALIDATION",
+            result_known_at__lte=at,
+        ).select_related("match__season")
+        groups = {}
+        seen = set()
+        for row in rows:
+            if (
+                row.match_id in seen
+                or ResultProviderObservation.objects.filter(
+                    match_id=row.match_id, provider="API_FOOTBALL", status_short="FT"
+                ).exists()
+            ):
+                continue
+            seen.add(row.match_id)
+            match_day = row.match.kickoff.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+            if match_day <= day:
+                groups.setdefault(match_day, []).append(row.match)
+        if not groups:
+            return []
+        selected_day = min(groups, key=lambda value: (-len(groups[value]), value))
+        refs = self._refs(source, groups[selected_day])
+        batch = [match for match in groups[selected_day] if match.pk in refs]
+        if not batch:
+            return []
+        status, reason = self._identity_status(identity)
+        return [
+            PlannedWork(
+                purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+                status=status,
+                source=source,
+                logical_identity=identity,
+                intended_window="bsd-shadow-sample",
+                target_at=at,
+                not_before=at,
+                priority=(5, -len(batch), selected_day.toordinal()),
+                priority_reason="surplus-only BSD shadow date comparison",
+                reason=reason,
+                estimated_min_cost=1 if status == "PLANNED" else 0,
+                estimated_max_cost=1 if status == "PLANNED" else 0,
+                params=fixture_date_params(selected_day, FIXTURE_TIMEZONE),
+                target_external_ids=tuple(
+                    dict.fromkeys(refs[match.pk].external_id for match in batch)
+                ),
+            )
+        ]
+
+    def _sentinel_items(self, at, source, match_id):
+        """At most one surplus BSD cross-check date sweep per frozen period."""
+        if not settings.BSD_API_TOKEN or match_id is not None:
+            return []
+        from football.result_provider import sentinel_phase
+
+        local = at.astimezone(ZoneInfo(FIXTURE_TIMEZONE))
+        phase = sentinel_phase()
+        if phase == "PROBATION":
+            iso = local.isocalendar()
+            period = f"{iso.year}-W{iso.week:02d}"
+            period_start = local.date() - timedelta(days=iso.weekday - 1)
+        else:
+            period = local.strftime("%Y-%m")
+            period_start = local.date().replace(day=1)
+        identity = f"{source.code}:bsd-sentinel:{phase}:{period}"
+        rows = ResultProviderObservation.objects.filter(
+            provider="BSD",
+            authoritative=True,
+            status_short="FT",
+            match__season__competition__result_route__bsd_state="BSD_PRIMARY_VALIDATED",
+            result_known_at__lte=at,
+        ).select_related("match__season")
+        groups = {}
+        match_ids = set()
+        for row in rows:
+            day = row.match.kickoff.astimezone(ZoneInfo(FIXTURE_TIMEZONE)).date()
+            if day < period_start or day > local.date() or row.match_id in match_ids:
+                continue
+            match_ids.add(row.match_id)
+            groups.setdefault(day, []).append(row.match)
+        if not groups:
+            return []
+        day = min(groups, key=lambda value: (-len(groups[value]), value))
+        refs = self._refs(source, groups[day])
+        batch = [match for match in groups[day] if match.pk in refs]
+        if not batch:
+            return []
+        status, reason = self._identity_status(identity)
+        return [
+            PlannedWork(
+                purpose=CaptureWorkItem.Purpose.RESULT_REFRESH,
+                status=status,
+                source=source,
+                logical_identity=identity,
+                intended_window=f"bsd-sentinel-{phase.lower()}",
+                target_at=at,
+                not_before=at,
+                priority=(5, -len(batch), day.toordinal()),
+                priority_reason="surplus-only BSD weekly/monthly date cross-check",
+                reason=reason,
+                estimated_min_cost=1 if status == "PLANNED" else 0,
+                estimated_max_cost=1 if status == "PLANNED" else 0,
+                params=fixture_date_params(day, FIXTURE_TIMEZONE),
+                target_external_ids=tuple(
+                    dict.fromkeys(refs[match.pk].external_id for match in batch)
+                ),
+            )
+        ]
 
     def _discovery_items(self, at, source):
         if not self.config.discovery_enabled:
@@ -175,7 +294,7 @@ class CapturePlanner:
                     intended_window="fixture-discovery",
                     target_at=at,
                     not_before=at,
-                    priority=(0, days_ahead),
+                    priority=(1, days_ahead),
                     priority_reason="protected persisted fixture discovery horizon",
                     reason=reason,
                     estimated_min_cost=1 if status == "PLANNED" else 0,
@@ -214,7 +333,7 @@ class CapturePlanner:
                     intended_window="pst-fixture-reconciliation",
                     target_at=recovery_slot,
                     not_before=recovery_slot,
-                    priority=(0, -1, match.kickoff, match.pk),
+                    priority=(1, -1, match.kickoff, match.pk),
                     priority_reason="explicit postponed OPEN fixture reconciliation",
                     reason=reason,
                     estimated_min_cost=1 if status == "PLANNED" else 0,
@@ -227,7 +346,7 @@ class CapturePlanner:
     def _odds_items(self, at, source, market, match_id, selected_window):
         queryset = Match.objects.filter(
             season__competition__enabled=True,
-            kickoff__gte=at,
+            kickoff__gt=at,
             kickoff__lte=at + self.config.horizon,
         ).select_related("season__competition")
         if match_id is not None:
@@ -253,6 +372,7 @@ class CapturePlanner:
                 match.fulfilled_count > 0
             )
         items = []
+        score_by_competition = {}
         for match in matches:
             local_day = match.kickoff.astimezone(local_timezone).date()
             base_priority = (
@@ -287,6 +407,10 @@ class CapturePlanner:
                     )
                 )
                 continue
+            if match.season.competition_id not in score_by_competition:
+                score_by_competition[match.season.competition_id] = competition_score(
+                    match.season.competition_id, at
+                )
             for index, candidate in enumerate(self.config.windows):
                 if selected_window and candidate.name != selected_window:
                     continue
@@ -316,15 +440,14 @@ class CapturePlanner:
                         normal_until=normal_until,
                         not_after=not_after,
                         priority=(
-                            1 if candidate.name == "market-t30m" else 3,
+                            2,
+                            int(max(0, (not_after - at).total_seconds()) // 180),
+                            -score_by_competition[match.season.competition_id],
                             not_after,
-                            *base_priority,
-                            index,
+                            match.kickoff,
+                            match.pk,
                         ),
-                        priority_reason=(
-                            "expiring due window; broad competition/day stratum; "
-                            "fewer fulfilled windows; freshness; kickoff; stable id"
-                        ),
+                        priority_reason="T10 urgency, OLV, hard deadline, kickoff, identity",
                         reason=reason,
                         estimated_min_cost=1 if status == "PLANNED" else 0,
                         estimated_max_cost=1 if status == "PLANNED" else 0,
@@ -368,6 +491,21 @@ class CapturePlanner:
         if at < not_before:
             return CaptureWorkItem.Status.NOT_DUE, "window has not opened"
         if at > not_after:
+            previous = CaptureWorkItem.objects.filter(logical_identity=identity)
+            quota_only = (
+                previous.filter(
+                    status__in=(
+                        CaptureWorkItem.Status.QUOTA_RESERVE,
+                        CaptureWorkItem.Status.INSUFFICIENT_WORST_CASE_BUDGET,
+                    )
+                ).exists()
+                and not previous.filter(actual_attempts__gt=0).exists()
+            )
+            if quota_only:
+                return (
+                    CaptureWorkItem.Status.MISSED_STRATEGY_WINDOW,
+                    "T10 hard deadline passed without an admitted physical request",
+                )
             return CaptureWorkItem.Status.MISSED_WINDOW, "window tolerance expired"
         return CaptureWorkItem.Status.PLANNED, "window is due"
 
@@ -403,9 +541,9 @@ class CapturePlanner:
                 critical_component = "fixture"
             elif (
                 item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
-                and item.intended_window == "market-t30m"
+                and item.intended_window == "market-t10m"
             ):
-                critical_component = "t30"
+                critical_component = "t10"
             mandatory = critical_component is not None
             if (
                 quota.basis == "BOUNDED_BOOTSTRAP"
@@ -428,7 +566,7 @@ class CapturePlanner:
                 continue
             if (
                 quota.basis == "HEADER_STALE_EPOCH"
-                and critical_component == "t30"
+                and critical_component == "t10"
                 and reserve["fixture"] > 0
             ):
                 item.status = CaptureWorkItem.Status.QUOTA_RESERVE

@@ -237,9 +237,13 @@ class CaptureExecutor:
                     .first()
                 )
                 if previous == (item.status, reason) or (
-                    item.status == CaptureWorkItem.Status.MISSED_WINDOW
+                    item.status
+                    in {
+                        CaptureWorkItem.Status.MISSED_WINDOW,
+                        CaptureWorkItem.Status.MISSED_STRATEGY_WINDOW,
+                    }
                     and previous is not None
-                    and previous[0] == CaptureWorkItem.Status.MISSED_WINDOW
+                    and previous[0] == item.status
                 ):
                     continue
             auditable.append((rank, item))
@@ -395,9 +399,7 @@ class CaptureExecutor:
         }.get(item.purpose)
         if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE:
             capability = {
-                "market-t30m": "ODDS_T30",
-                "market-t60m": "ODDS_T60",
-                "market-t6h": "ODDS_T6H",
+                "market-t10m": "ODDS_T10",
             }.get(item.intended_window, "OTHER_EXPLICIT_MAINTENANCE")
         directed = (
             item.match is not None
@@ -464,28 +466,22 @@ class CaptureExecutor:
                 raise APIFootballOperationBudgetError(
                     "Capture run reached its configured provider-attempt bound."
                 )
-            remaining = active_client.daily_remaining
-            if remaining is None:
-                remaining = max(0, plan.quota.remaining - active_client.calls)
-            else:
-                remaining -= max(
-                    0,
-                    active_client.calls
-                    - getattr(
-                        active_client, "quota_observed_calls", active_client.calls
-                    ),
-                )
-            reserve_state = dynamic_reserve(timezone.now(), plan.config)
+            request_at = timezone.now()
+            fresh_quota = quota_state(request_at, plan.config)
+            remaining = fresh_quota.remaining
+            if active_client.daily_remaining is not None:
+                remaining = min(remaining, active_client.daily_remaining)
+            reserve_state = dynamic_reserve(request_at, plan.config)
             reserve = reserve_state["total"]
             is_critical = item.purpose == CaptureWorkItem.Purpose.FIXTURE_REFRESH or (
                 item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
-                and item.intended_window == "market-t30m"
+                and item.intended_window == "market-t10m"
             )
-            if plan.quota.basis == "HEADER_STALE_EPOCH":
+            if fresh_quota.basis == "HEADER_STALE_EPOCH":
                 if active_client.daily_remaining is None:
                     if (
                         is_critical
-                        and plan.quota.stale_establishing_attempt_available
+                        and fresh_quota.stale_establishing_attempt_available
                         and active_client.calls == calls_before
                     ):
                         return
@@ -504,12 +500,20 @@ class CaptureExecutor:
             effects, empty = self._perform(client, item)
             is_late = item.normal_until and row.executed_at > item.normal_until
             row.status = (
-                CaptureWorkItem.Status.LATE_CAPTURE
-                if is_late
+                CaptureWorkItem.Status.MISSED_WINDOW
+                if item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
+                and (
+                    timezone.now() > item.not_after
+                    or timezone.now() >= item.match.kickoff
+                )
                 else (
-                    CaptureWorkItem.Status.SUCCESS_EMPTY
-                    if empty
-                    else CaptureWorkItem.Status.SUCCESS
+                    CaptureWorkItem.Status.LATE_CAPTURE
+                    if is_late
+                    else (
+                        CaptureWorkItem.Status.SUCCESS_EMPTY
+                        if empty
+                        else CaptureWorkItem.Status.SUCCESS
+                    )
                 )
             )
             row.reason = "bounded provider execution completed"
@@ -590,6 +594,36 @@ class CaptureExecutor:
                     (row.executed_at - item.target_at).total_seconds()
                 )
             row.save()
+            if (
+                item.purpose == CaptureWorkItem.Purpose.ODDS_CAPTURE
+                and row.actual_attempts
+            ):
+                from football.models import CompetitionResultRoute
+
+                from .olv import _usable
+
+                route = CompetitionResultRoute.objects.filter(
+                    competition_id=item.match.season.competition_id
+                ).first()
+                if route is not None:
+                    route.season_id = item.match.season_id
+                    route.season_checked_at = row.completed_at
+                    try:
+                        usable = _usable(row)
+                    except (ValueError, TypeError):
+                        usable = False
+                    fixture_smoke = (
+                        route.provenance.get("season_fixture_smoke_season_id")
+                        == item.match.season_id
+                    )
+                    route.season_state = (
+                        "VERIFIED_CURRENT_SEASON"
+                        if usable and fixture_smoke
+                        else "TEMPORARILY_UNAVAILABLE"
+                    )
+                    route.save(
+                        update_fields=["season_id", "season_checked_at", "season_state"]
+                    )
 
     @staticmethod
     def _fail_row(row, status, error):
@@ -630,6 +664,18 @@ class CaptureExecutor:
                 )
             }
             payloads = client.get_all("odds", item.params)
+            # A response arriving after the hard T10 boundary is never admitted
+            # into canonical prospective odds evidence.
+            if timezone.now() > item.not_after or timezone.now() >= item.match.kickoff:
+                return (
+                    {
+                        "observations_created": 0,
+                        "snapshots_changed": 0,
+                        "fixtures_changed": 0,
+                        "matches_resolved": 0,
+                    },
+                    True,
+                )
             sync_odds_payloads(payloads, {item.external_id: item.match}, item.market)
             observations_after = OddsObservation.objects.filter(
                 match=item.match, source=item.source, market=item.market
@@ -731,8 +777,56 @@ class CaptureExecutor:
                     match__isnull=False,
                 ).select_related("match")
             }
-        stats, _ = sync_fixture_payloads(payloads, competitions)
+        stats, accepted = sync_fixture_payloads(payloads, competitions)
+        if item.purpose == CaptureWorkItem.Purpose.FIXTURE_REFRESH:
+            from football.models import CompetitionResultRoute
+
+            for match in accepted.values():
+                route = CompetitionResultRoute.objects.filter(
+                    competition_id=match.season.competition_id
+                ).first()
+                if route is None:
+                    continue
+                if route.season_id != match.season_id:
+                    route.season_state = "TEMPORARILY_UNAVAILABLE"
+                route.season_id = match.season_id
+                route.season_checked_at = timezone.now()
+                route.provenance = {
+                    **route.provenance,
+                    "season_fixture_smoke_season_id": match.season_id,
+                    "season_fixture_smoke_at": route.season_checked_at.isoformat(),
+                }
+                route.save(
+                    update_fields=[
+                        "season_id",
+                        "season_checked_at",
+                        "season_state",
+                        "provenance",
+                    ]
+                )
         if item.purpose == CaptureWorkItem.Purpose.RESULT_REFRESH:
+            from football.result_provider import TERMINAL, api_football_result, record
+            from football.result_routing import maybe_promote_shadow
+
+            observed = False
+            for external_id, match in accepted.items():
+                if (
+                    str(external_id) not in target_ids
+                    or match.status_short not in TERMINAL
+                ):
+                    continue
+                record(
+                    match,
+                    api_football_result(
+                        match,
+                        external_id,
+                        provenance={"acquisition": item.intended_window},
+                    ),
+                    authoritative=True,
+                )
+                observed = True
+            if observed:
+                maybe_promote_shadow()
             after_states = {
                 match.pk: (
                     match.kickoff,

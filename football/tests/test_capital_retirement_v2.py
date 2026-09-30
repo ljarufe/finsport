@@ -11,6 +11,7 @@ from football.capital.retirement import (
 from football.capital.runtime import provision_automatic_configs
 from football.capital.service import run_capital_experiment
 from football.models import (
+    CapitalDeployment,
     CapitalExperiment,
     CapitalLedgerEntry,
     CapitalLongitudinalSeries,
@@ -21,6 +22,7 @@ from football.models import (
     Prediction,
     PredictionExperiment,
 )
+from football.strategy.authority import resolve_authority
 
 from .capital_helpers import create_capital_stream
 
@@ -28,6 +30,8 @@ pytestmark = pytest.mark.django_db
 
 
 def test_v1_retirement_dry_run_apply_and_second_run_preserve_upstream():
+    # Historical FS-022 provisioning requires its persisted selection authority.
+    CapitalDeployment.objects.create(pk=1, selection=resolve_authority())
     prediction_experiment, decisions = create_capital_stream(
         [{"outcome": Match.OUTCOME_HOME}],
         decision_policy="MODAL_ALL",

@@ -74,9 +74,24 @@ def select_economic_baseline(payload):
         payload["candidates"],
     )
     n = len(candidates)
+    candidate_ids = payload.get("candidate_ids", list(range(n)))
     require(
-        n > 0 and [c["integrated_index"] for c in candidates] == list(range(n)),
+        n > 0
+        and len(candidate_ids) == len(set(candidate_ids)) == n
+        and all(isinstance(i, int) and 0 <= i < 231 for i in candidate_ids)
+        and [c["integrated_index"] for c in candidates] == candidate_ids,
         "ECONOMIC_IDENTITIES",
+    )
+    activity = payload.get(
+        "activity", {"placements": 38, "competitions": 3, "weeks": 4}
+    )
+    require(
+        activity
+        in (
+            {"placements": 38, "competitions": 3, "weeks": 4},
+            {"placements": 53, "competitions": 5, "weeks": 5},
+        ),
+        "ECONOMIC_ACTIVITY_CONTRACT",
     )
     require(
         set(observed) == {str(lag) for lag in LAGS}
@@ -96,7 +111,16 @@ def select_economic_baseline(payload):
         )
         matrices[block] = matrix
     require(len({matrices[b].shape[0] for b in BLOCKS}) == 1, "ECONOMIC_REPLICATES")
-    benchmark = Decimal("1.07") ** (Decimal(36) / Decimal(52)) - 1
+    benchmark_input = payload.get("benchmark")
+    if benchmark_input is None:
+        benchmark = Decimal("1.07") ** (Decimal(36) / Decimal(52)) - 1
+    elif benchmark_input.get("status") == "UNAVAILABLE":
+        benchmark = None
+    else:
+        require(
+            benchmark_input.get("status") == "AVAILABLE", "ECONOMIC_BENCHMARK_STATUS"
+        )
+        benchmark = Decimal(str(benchmark_input["horizon_return"]))
     rows = []
     for i in range(n):
         paths = [observed[str(lag)][i] for lag in LAGS]
@@ -129,17 +153,20 @@ def select_economic_baseline(payload):
                     clean_reasons.append(f"{lag}:{key}")
             if path.get("hard_risk") != "PASS":
                 clean_reasons.append(f"{lag}:hard_risk")
-            if path["placements"] < 38:
-                activity_reasons.append(f"{lag}:PLACEMENTS_LT_38")
-            if len(path["placed_competitions"]) < 3:
-                activity_reasons.append(f"{lag}:COMPETITIONS_LT_3")
-            if len(path["placed_weeks"]) < 4:
-                activity_reasons.append(f"{lag}:WEEKS_LT_4")
+            if path["placements"] < activity["placements"]:
+                activity_reasons.append(f"{lag}:PLACEMENTS_LT_{activity['placements']}")
+            if len(path["placed_competitions"]) < activity["competitions"]:
+                activity_reasons.append(
+                    f"{lag}:COMPETITIONS_LT_{activity['competitions']}"
+                )
+            if len(path["placed_weeks"]) < activity["weeks"]:
+                activity_reasons.append(f"{lag}:WEEKS_LT_{activity['weeks']}")
         r, d, loss = min(returns), max(drawdowns), -min(tails.values())
         boot_positive = all(v > 0 for v in medians.values())
         tier = (
             1
-            if r > benchmark
+            if benchmark is not None
+            and r > benchmark
             and not clean_reasons
             and not activity_reasons
             and boot_positive
@@ -158,7 +185,7 @@ def select_economic_baseline(payload):
         )
         rows.append(
             dict(
-                integrated_index=i,
+                integrated_index=candidate_ids[i],
                 R=str(r),
                 D=str(d),
                 L=loss,
@@ -303,7 +330,7 @@ def select_economic_baseline(payload):
         schema="ECONOMIC_SELECTOR_RESULT_V1",
         mode=mode,
         winner=winner["integrated_index"],
-        winner_candidate=candidates[winner["integrated_index"]],
+        winner_candidate=candidates[candidate_ids.index(winner["integrated_index"])],
         tier=tier,
         frontier=[r["integrated_index"] for r in frontier],
         survivors=[r["integrated_index"] for r in survivors],
@@ -311,7 +338,14 @@ def select_economic_baseline(payload):
         fallback=fallback,
         risk_warnings=warnings,
         rows=rows,
-        benchmark_7pct_36_weeks=str(benchmark),
+        benchmark_7pct_36_weeks=str(benchmark) if benchmark_input is None else None,
+        benchmark_primary=(
+            str(benchmark)
+            if benchmark_input is not None and benchmark is not None
+            else None
+        ),
+        activity=activity,
+        candidate_ids=candidate_ids,
         scientific_disposition=payload["scientific_disposition"],
         selection_warning="POST_HOC_SAME_HISTORY_NOT_PROSPECTIVE_VALIDATION",
         activation=dict(automatic_operational_routing=False, real_betting=False),

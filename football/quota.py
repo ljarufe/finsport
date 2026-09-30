@@ -35,7 +35,7 @@ FULFILLED = {
 }
 OPEN_RESULT_TIMEZONE = FIXTURE_TIMEZONE
 DIRECTED_RESULT_FALLBACK = "DATE_SWEEP_EXPECTED_FIXTURE_MISSING"
-RESULT_WAKE_SECONDS = 300
+RESULT_WAKE_SECONDS = 180
 
 
 def epoch_bounds(at):
@@ -214,8 +214,8 @@ def _fixture_reserve(at, config):
     return len(missing) + recovery_count, missing
 
 
-def _t30_obligations(at, config, epoch_end):
-    window = next(item for item in config.windows if item.name == "market-t30m")
+def _t10_obligations(at, config, epoch_end):
+    window = next(item for item in config.windows if item.name == "market-t10m")
     matches = list(
         Match.objects.filter(
             season__competition__enabled=True,
@@ -260,7 +260,7 @@ def _t30_obligations(at, config, epoch_end):
 
 
 def result_check_opportunity(deadline, at):
-    """First five-minute UTC wake for future debt; overdue debt uses this wake."""
+    """First three-minute UTC wake for future debt; overdue debt uses this wake."""
 
     if deadline <= at:
         return at.astimezone(UTC)
@@ -313,25 +313,25 @@ def _open_result_matches(at, epoch_end):
 def dynamic_reserve(at, config):
     _, epoch_end = epoch_bounds(at)
     fixture, missing_dates = _fixture_reserve(at, config)
-    t30 = _t30_obligations(at, config, epoch_end)
+    t10 = _t10_obligations(at, config, epoch_end)
     open_ids, sweep_opportunities, fallback_ids, open_deadlines = _open_result_matches(
         at, epoch_end
     )
     sweep_dates = {day for day, _ in sweep_opportunities}
     components = {
         "fixture": fixture,
-        "t30": len(t30),
+        "t10": len(t10),
         "open_result": len(sweep_opportunities) + len(fallback_ids),
         "execution_quote": 0,
     }
     components["total"] = sum(components.values())
-    deadlines = [target for _, target in t30] + open_deadlines
+    deadlines = [target for _, target in t10] + open_deadlines
     return {
         **components,
         "epoch_end": epoch_end,
         "next_critical_deadline": min(deadlines) if deadlines else None,
         "missing_fixture_dates": missing_dates,
-        "t30_match_ids": [match_id for match_id, _ in t30],
+        "t10_match_ids": [match_id for match_id, _ in t10],
         "open_result_match_ids": sorted(open_ids),
         "open_result_sweep_dates": sorted(sweep_dates),
         "open_result_sweep_opportunities": [
@@ -391,7 +391,7 @@ def quota_summary(*, at=None, config=None):
         },
         "reserve": {
             key: reserve[key]
-            for key in ("fixture", "t30", "open_result", "execution_quote", "total")
+            for key in ("fixture", "t10", "open_result", "execution_quote", "total")
         },
         "surplus": surplus,
         "next_critical_deadline": (
@@ -404,7 +404,7 @@ def quota_summary(*, at=None, config=None):
             "fixture_dates_missing": [
                 value.isoformat() for value in reserve["missing_fixture_dates"]
             ],
-            "t30_obligations": len(reserve["t30_match_ids"]),
+            "t10_obligations": len(reserve["t10_match_ids"]),
             "open_positions": CapitalPosition.objects.filter(
                 status=CapitalPosition.Status.OPEN
             ).count(),

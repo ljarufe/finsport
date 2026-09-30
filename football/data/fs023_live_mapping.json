@@ -1,0 +1,494 @@
+{
+  "schema": "FS023_BSD_LEAGUE_MAPPING_V1",
+  "selected_count": 28,
+  "bsd_primary_candidates": 23,
+  "api_f_primary": 5,
+  "rows": [
+    {
+      "local_competition_id": 1273,
+      "country": "EN",
+      "local_name": "Premier League",
+      "api_football_league_id": 39,
+      "api_football_name": "Premier League",
+      "bsd_league_ids": [
+        1
+      ],
+      "bsd_names": [
+        "Premier League"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-21",
+      "latest_season_end": "2027-05-30"
+    },
+    {
+      "local_competition_id": 1270,
+      "country": "FR",
+      "local_name": "Ligue 1",
+      "api_football_league_id": 61,
+      "api_football_name": "Ligue 1",
+      "bsd_league_ids": [
+        6
+      ],
+      "bsd_names": [
+        "Ligue 1"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-21",
+      "latest_season_end": "2027-05-29"
+    },
+    {
+      "local_competition_id": 1272,
+      "country": "BR",
+      "local_name": "Serie A",
+      "api_football_league_id": 71,
+      "api_football_name": "Serie A",
+      "bsd_league_ids": [
+        9
+      ],
+      "bsd_names": [
+        "Brasileirão Serie A"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-01-28",
+      "latest_season_end": "2026-12-02"
+    },
+    {
+      "local_competition_id": 1274,
+      "country": "DE",
+      "local_name": "Bundesliga",
+      "api_football_league_id": 78,
+      "api_football_name": "Bundesliga",
+      "bsd_league_ids": [
+        5
+      ],
+      "bsd_names": [
+        "Bundesliga"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-28",
+      "latest_season_end": "2027-05-22"
+    },
+    {
+      "local_competition_id": 1276,
+      "country": "NL",
+      "local_name": "Eredivisie",
+      "api_football_league_id": 88,
+      "api_football_name": "Eredivisie",
+      "bsd_league_ids": [
+        10
+      ],
+      "bsd_names": [
+        "Eredivisie"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-07",
+      "latest_season_end": "2027-05-23"
+    },
+    {
+      "local_competition_id": 1277,
+      "country": "PT",
+      "local_name": "Primeira Liga",
+      "api_football_league_id": 94,
+      "api_football_name": "Primeira Liga",
+      "bsd_league_ids": [
+        2
+      ],
+      "bsd_names": [
+        "Liga Portugal Betclic"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-07",
+      "latest_season_end": "2027-05-16"
+    },
+    {
+      "local_competition_id": 1400,
+      "country": "JP",
+      "local_name": "J1 League",
+      "api_football_league_id": 98,
+      "api_football_name": "J1 League",
+      "bsd_league_ids": [
+        49
+      ],
+      "bsd_names": [
+        "J1 League"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-07",
+      "latest_season_end": "2027-06-06"
+    },
+    {
+      "local_competition_id": 1480,
+      "country": "NO",
+      "local_name": "Eliteserien",
+      "api_football_league_id": 103,
+      "api_football_name": "Eliteserien",
+      "bsd_league_ids": [
+        54
+      ],
+      "bsd_names": [
+        "Eliteserien"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-03-14",
+      "latest_season_end": "2026-12-13"
+    },
+    {
+      "local_competition_id": 1667,
+      "country": "PL",
+      "local_name": "Ekstraklasa",
+      "api_football_league_id": 106,
+      "api_football_name": "Ekstraklasa",
+      "bsd_league_ids": [
+        25
+      ],
+      "bsd_names": [
+        "Ekstraklasa"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-07-24",
+      "latest_season_end": "2027-05-22"
+    },
+    {
+      "local_competition_id": 1483,
+      "country": "SE",
+      "local_name": "Allsvenskan",
+      "api_football_league_id": 113,
+      "api_football_name": "Allsvenskan",
+      "bsd_league_ids": [
+        26
+      ],
+      "bsd_names": [
+        "Allsvenskan"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-04-04",
+      "latest_season_end": "2026-11-29"
+    },
+    {
+      "local_competition_id": 1288,
+      "country": "DK",
+      "local_name": "Superliga",
+      "api_football_league_id": 119,
+      "api_football_name": "Superliga",
+      "bsd_league_ids": [
+        84
+      ],
+      "bsd_names": [
+        "Danish Superliga"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-07-24",
+      "latest_season_end": "2027-03-21"
+    },
+    {
+      "local_competition_id": 1459,
+      "country": "AR",
+      "local_name": "Liga Profesional Argentina",
+      "api_football_league_id": 128,
+      "api_football_name": "Liga Profesional Argentina",
+      "bsd_league_ids": [
+        85
+      ],
+      "bsd_names": [
+        "Liga Profesional de Fútbol"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-01-22",
+      "latest_season_end": "2026-11-08"
+    },
+    {
+      "local_competition_id": 1275,
+      "country": "IT",
+      "local_name": "Serie A",
+      "api_football_league_id": 135,
+      "api_football_name": "Serie A",
+      "bsd_league_ids": [
+        4
+      ],
+      "bsd_names": [
+        "Serie A"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-22",
+      "latest_season_end": "2027-05-30"
+    },
+    {
+      "local_competition_id": 1278,
+      "country": "ES",
+      "local_name": "La Liga",
+      "api_football_league_id": 140,
+      "api_football_name": "La Liga",
+      "bsd_league_ids": [
+        3
+      ],
+      "bsd_names": [
+        "La Liga"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-15",
+      "latest_season_end": "2027-05-30"
+    },
+    {
+      "local_competition_id": 1271,
+      "country": "BE",
+      "local_name": "Jupiler Pro League",
+      "api_football_league_id": 144,
+      "api_football_name": "Jupiler Pro League",
+      "bsd_league_ids": [
+        14
+      ],
+      "bsd_names": [
+        "Pro League"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-07",
+      "latest_season_end": "2027-05-22"
+    },
+    {
+      "local_competition_id": 1350,
+      "country": "GR",
+      "local_name": "Super League 1",
+      "api_football_league_id": 197,
+      "api_football_name": "Super League 1",
+      "bsd_league_ids": [
+        24
+      ],
+      "bsd_names": [
+        "Stoiximan Super League"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-22",
+      "latest_season_end": "2027-03-20"
+    },
+    {
+      "local_competition_id": 1325,
+      "country": "TR",
+      "local_name": "Süper Lig",
+      "api_football_league_id": 203,
+      "api_football_name": "Süper Lig",
+      "bsd_league_ids": [
+        11
+      ],
+      "bsd_names": [
+        "Trendyol Super Lig"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-08-14",
+      "latest_season_end": "2027-05-23"
+    },
+    {
+      "local_competition_id": 1489,
+      "country": "CH",
+      "local_name": "Super League",
+      "api_football_league_id": 207,
+      "api_football_name": "Super League",
+      "bsd_league_ids": [
+        15
+      ],
+      "bsd_names": [
+        "Super League"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-07-25",
+      "latest_season_end": "2027-02-07"
+    },
+    {
+      "local_competition_id": 1374,
+      "country": "AT",
+      "local_name": "Bundesliga",
+      "api_football_league_id": 218,
+      "api_football_name": "Bundesliga",
+      "bsd_league_ids": [
+        96
+      ],
+      "bsd_names": [
+        "Austrian Bundesliga"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-07-31",
+      "latest_season_end": "2027-02-27"
+    },
+    {
+      "local_competition_id": 1492,
+      "country": "CO",
+      "local_name": "Primera A",
+      "api_football_league_id": 239,
+      "api_football_name": "Primera A",
+      "bsd_league_ids": [
+        80
+      ],
+      "bsd_names": [
+        "Categoría Primera A"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-01-16",
+      "latest_season_end": "2026-11-12"
+    },
+    {
+      "local_competition_id": 1432,
+      "country": "US",
+      "local_name": "Major League Soccer",
+      "api_football_league_id": 253,
+      "api_football_name": "Major League Soccer",
+      "bsd_league_ids": [
+        18
+      ],
+      "bsd_names": [
+        "MLS"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-02-21",
+      "latest_season_end": "2026-11-08"
+    },
+    {
+      "local_competition_id": 1518,
+      "country": "MX",
+      "local_name": "Liga MX",
+      "api_football_league_id": 262,
+      "api_football_name": "Liga MX",
+      "bsd_league_ids": [
+        19,
+        20
+      ],
+      "bsd_names": [
+        "Liga MX Apertura",
+        "Liga MX Clausura"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "Apertura/Clausura set; event must resolve to exactly one BSD league/event identity",
+      "latest_season_start": "2026-07-17",
+      "latest_season_end": "2026-11-23"
+    },
+    {
+      "local_competition_id": 1672,
+      "country": "CL",
+      "local_name": "Primera División",
+      "api_football_league_id": 265,
+      "api_football_name": "Primera División",
+      "bsd_league_ids": [],
+      "bsd_names": [],
+      "result_route": "API_FOOTBALL_PRIMARY",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-01-30",
+      "latest_season_end": "2026-12-06"
+    },
+    {
+      "local_competition_id": 1434,
+      "country": "UY",
+      "local_name": "Primera División",
+      "api_football_league_id": 268,
+      "api_football_name": "Primera División",
+      "bsd_league_ids": [],
+      "bsd_names": [],
+      "result_route": "API_FOOTBALL_PRIMARY",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-02-06",
+      "latest_season_end": "2026-10-05"
+    },
+    {
+      "local_competition_id": 1524,
+      "country": "PE",
+      "local_name": "Primera División",
+      "api_football_league_id": 281,
+      "api_football_name": "Primera División",
+      "bsd_league_ids": [],
+      "bsd_names": [],
+      "result_route": "API_FOOTBALL_PRIMARY",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-01-30",
+      "latest_season_end": "2026-11-14"
+    },
+    {
+      "local_competition_id": 1534,
+      "country": "KR",
+      "local_name": "K League 1",
+      "api_football_league_id": 292,
+      "api_football_name": "K League 1",
+      "bsd_league_ids": [
+        50
+      ],
+      "bsd_names": [
+        "K League 1"
+      ],
+      "result_route": "BSD_PRIMARY_AFTER_VALIDATION",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY_SHADOW_BSD",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-02-28",
+      "latest_season_end": "2026-10-24"
+    },
+    {
+      "local_competition_id": 1652,
+      "country": "CZ",
+      "local_name": "Czech Liga",
+      "api_football_league_id": 345,
+      "api_football_name": "Czech Liga",
+      "bsd_league_ids": [],
+      "bsd_names": [],
+      "result_route": "API_FOOTBALL_PRIMARY",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-07-25",
+      "latest_season_end": "2027-04-24"
+    },
+    {
+      "local_competition_id": 1860,
+      "country": "IE",
+      "local_name": "Premier Division",
+      "api_football_league_id": 357,
+      "api_football_name": "Premier Division",
+      "bsd_league_ids": [],
+      "bsd_names": [],
+      "result_route": "API_FOOTBALL_PRIMARY",
+      "bsd_pre_validation_route": "API_FOOTBALL_PRIMARY",
+      "season_rule": "single mapped league id",
+      "latest_season_start": "2026-02-06",
+      "latest_season_end": "2026-10-30"
+    }
+  ]
+}

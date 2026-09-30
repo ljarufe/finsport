@@ -64,8 +64,17 @@ def simulated_clock(monkeypatch):
     )
 
 
+def legacy_authority_deployment():
+    """Historical FS-022 regressions explicitly start with persisted authority."""
+    return CapitalDeployment.objects.get_or_create(
+        pk=1, defaults={"selection": resolve_authority()}
+    )
+
+
 @pytest.fixture
 def graph(monkeypatch):
+    legacy_authority_deployment()
+
     # An accidental provider read is a test failure, not a physical HTTP call.
     def forbidden(*args, **kwargs):
         raise AssertionError("EXTERNAL_PROVIDER_FORBIDDEN")
@@ -211,6 +220,7 @@ def test_material_authority_exact_and_original_preserved(tmp_path):
 
 
 def test_one_bank_ten_lanes_restart_retains_money_date_and_identity():
+    legacy_authority_deployment()
     (config,) = provision(at=AT)
     deployment = CapitalDeployment.objects.get()
     assert config.initial_bankroll == config.bankroll_equity == 100
@@ -587,6 +597,8 @@ def test_stopped_diagnostic_authority_does_not_reactivate_or_destroy_history(gra
 
 @pytest.mark.django_db(transaction=True)
 def test_two_first_wakes_create_one_deployment_and_one_bank():
+    legacy_authority_deployment()
+
     def wake():
         close_old_connections()
         try:
@@ -863,6 +875,7 @@ def test_prospective_period_uses_lima_kickoff_day(graph):
 
 
 def test_new_activation_uses_effective_time_but_never_resets_it(monkeypatch):
+    legacy_authority_deployment()
     effective = AT + timedelta(hours=2)
     monkeypatch.setattr(
         "football.strategy.clock.effective_now", lambda *, planning_at=None: effective
