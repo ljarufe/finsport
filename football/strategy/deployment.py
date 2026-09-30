@@ -91,6 +91,12 @@ def provision(*, at=None):
         from .epochs import advance
 
         return advance(at=at)
+    if not deployment.selection:
+        if deployment.config_id:
+            raise RuntimeError("FS023_LEGACY_EPOCH_MISSING")
+        from .fs023_bootstrap import converge_fresh
+
+        return converge_fresh(deployment, at=at)
     authority = resolve_authority()
     if deployment.selection and deployment.selection != authority:
         raise RuntimeError("FS022_DEPLOYMENT_AUTHORITY_DRIFT")

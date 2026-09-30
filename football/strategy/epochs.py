@@ -21,7 +21,7 @@ TARGET_NAME = "FS023_BINDING_209_T10_V1"
 
 
 def target_contract(source):
-    contract = dict(source.contract)
+    contract = dict(getattr(source, "contract", source))
     contract.update(
         name=TARGET_NAME,
         capture_window="market-t10m",
@@ -34,13 +34,16 @@ def target_contract(source):
 
 
 def target_binding(source):
-    contract = target_contract(source)
+    return approved_target_binding(target_contract(source))
+
+
+def approved_target_binding(contract):
     digest = StrategyBinding.digest_for(contract)
     binding, _ = StrategyBinding.objects.get_or_create(
         digest=digest,
         defaults=dict(
             name=TARGET_NAME,
-            candidate_id=source.candidate_id,
+            candidate_id=contract["candidate_id"],
             contract=contract,
             approved=True,
         ),
@@ -49,10 +52,53 @@ def target_binding(source):
         binding.contract != contract
         or not binding.approved
         or binding.name != TARGET_NAME
-        or binding.candidate_id != source.candidate_id
+        or binding.candidate_id != contract["candidate_id"]
     ):
         raise RuntimeError("FS023_TARGET_BINDING_DRIFT")
     return binding
+
+
+def create_epoch_config(binding, epoch, bankroll, at):
+    """The same T10 config construction serves fresh activation and drained switches."""
+    capital = binding.contract["capital"]
+    decision = binding.contract["decision"]
+    prediction = binding.contract["prediction"]
+    policy = make_policy(capital["code"], capital["config"])
+    return CapitalRuntimeConfig.objects.create(
+        identity=f"fs023:epoch:{epoch.pk}:{binding.digest}",
+        strategy_epoch=epoch,
+        runtime_version="fs023-epoch-simulation-v1",
+        execution_version=f"fs023-{binding.contract['capture_window']}-v1",
+        mode=CapitalRuntimeConfig.Mode.CURRENT,
+        automatic=True,
+        current=True,
+        entry_enabled=True,
+        source_model_code=prediction["code"],
+        decision_policy_code=decision["code"],
+        decision_policy_variant=decision["variant"],
+        policy_code=capital["code"],
+        policy_version=capital["version"],
+        policy_config=capital["config"],
+        max_lanes=capital["max_lanes"],
+        initial_bankroll=bankroll,
+        bankroll_equity=bankroll,
+        reserved_exposure=0,
+        peak_equity=bankroll,
+        policy_state=policy.initial_state(),
+        started_at=at,
+        provenance={"binding_digest": binding.digest, "real_betting": False},
+    )
+
+
+def selection_for_binding(selection, binding):
+    selection = dict(selection)
+    prospective = dict(selection["prospective_prediction_effective_config"])
+    prospective["capture_window"] = binding.contract["capture_window"]
+    selection["prospective_prediction_effective_config"] = prospective
+    selection["prospective_prediction_config_identity"] = hashlib.sha256(
+        json.dumps(prospective, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return selection
 
 
 def _source_config(epoch):
@@ -123,9 +169,6 @@ def _activate(deployment, switch, at):
         or binding.contract.get("name") != binding.name
     ):
         raise RuntimeError("FS023_UNAPPROVED_OR_MUTATED_BINDING")
-    capital = binding.contract["capital"]
-    decision = binding.contract["decision"]
-    prediction = binding.contract["prediction"]
     bankroll = switch.initial_bankroll
     epoch = StrategyEpoch.objects.create(
         binding=binding,
@@ -133,42 +176,11 @@ def _activate(deployment, switch, at):
         initial_bankroll=bankroll,
         activated_at=at,
     )
-    policy = make_policy(capital["code"], capital["config"])
-    config = CapitalRuntimeConfig.objects.create(
-        identity=f"fs023:epoch:{epoch.pk}:{binding.digest}",
-        strategy_epoch=epoch,
-        runtime_version="fs023-epoch-simulation-v1",
-        execution_version=f"fs023-{binding.contract['capture_window']}-v1",
-        mode=CapitalRuntimeConfig.Mode.CURRENT,
-        automatic=True,
-        current=True,
-        entry_enabled=True,
-        source_model_code=prediction["code"],
-        decision_policy_code=decision["code"],
-        decision_policy_variant=decision["variant"],
-        policy_code=capital["code"],
-        policy_version=capital["version"],
-        policy_config=capital["config"],
-        max_lanes=capital["max_lanes"],
-        initial_bankroll=bankroll,
-        bankroll_equity=bankroll,
-        reserved_exposure=0,
-        peak_equity=bankroll,
-        policy_state=policy.initial_state(),
-        started_at=at,
-        provenance={"binding_digest": binding.digest, "real_betting": False},
-    )
+    config = create_epoch_config(binding, epoch, bankroll, at)
     switch.target_epoch = epoch
     switch.completed_at = at
     switch.save(update_fields=["target_epoch", "completed_at"])
-    selection = dict(deployment.selection)
-    prospective = dict(selection["prospective_prediction_effective_config"])
-    prospective["capture_window"] = binding.contract["capture_window"]
-    selection["prospective_prediction_effective_config"] = prospective
-    selection["prospective_prediction_config_identity"] = hashlib.sha256(
-        json.dumps(prospective, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    deployment.selection = selection
+    deployment.selection = selection_for_binding(deployment.selection, binding)
     deployment.active_epoch = epoch
     deployment.config = config
     deployment.activated_at = at

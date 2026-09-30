@@ -150,15 +150,16 @@ def rebind_stale_event(match, route, binding, *, client, at):
         away = mapped.get((match.away_team_id, league_id))
         if season_id is None or home is None or away is None:
             continue
-        day = match.kickoff.astimezone(UTC).date()
+        earliest = (match.kickoff - timedelta(minutes=15)).astimezone(UTC).date()
+        latest = (match.kickoff + timedelta(minutes=15)).astimezone(UTC).date()
         events = _page(
             client,
             "events/",
             {
                 "league_id": league_id,
                 "season_id": season_id,
-                "date_from": day.isoformat(),
-                "date_to": (day + timedelta(days=1)).isoformat(),
+                "date_from": earliest.isoformat(),
+                "date_to": (latest + timedelta(days=1)).isoformat(),
                 "limit": 200,
                 "offset": 0,
             },
